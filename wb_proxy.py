@@ -1809,6 +1809,97 @@ def _flatten_content(content):
     return chr(10).join(t for t in texts if t)
 
 
+# ---------------------------------------------------------------------------
+# Responses API "custom" (freeform) tools
+#
+# Some clients - most notably Codex 0.15x - declare their file-editing tool as a
+# *custom* (freeform) tool rather than a JSON-schema function:
+#
+#     {"type": "custom", "name": "apply_patch", "format": {...grammar...}}
+#
+# and expect the model to answer with a custom_tool_call item carrying the raw
+# payload in "input", then feed the result back as custom_tool_call_output.
+#
+# The upstream chat endpoint has no notion of custom tools, so we downgrade them
+# to ordinary function tools with a single "input" string parameter on the way
+# out, and re-inflate them to custom_tool_call on the way back. Without this the
+# tool is silently ignored: the model emits the payload as ordinary prose and the
+# client never sees a tool call (measured: 52 text deltas, 0 tool items).
+# ---------------------------------------------------------------------------
+
+CUSTOM_TOOL_HINT = (
+    "This is a freeform tool. Put the COMPLETE raw payload into the single "
+    "'input' string parameter, verbatim. Do not wrap it in JSON, do not wrap "
+    "it in markdown code fences, do not add commentary."
+)
+
+
+def _is_custom_tool(tool):
+    return isinstance(tool, dict) and str(tool.get("type") or "").lower() == "custom"
+
+
+def custom_tool_names(tools):
+    """Names of tools declared as freeform/custom in a Responses request."""
+    names = set()
+    for t in tools or []:
+        if _is_custom_tool(t) and t.get("name"):
+            names.add(str(t["name"]))
+    return names
+
+
+def _downgrade_custom_tool(tool):
+    """Rewrite a Responses custom tool into a Chat function tool."""
+    desc = tool.get("description") or ""
+    fmt = tool.get("format") or {}
+    extra = ""
+    if isinstance(fmt, dict) and fmt.get("definition"):
+        extra = chr(10) + chr(10) + "Grammar:" + chr(10) + str(fmt["definition"])
+    return {
+        "type": "function",
+        "name": tool.get("name") or "",
+        "description": (desc + chr(10) + chr(10) + CUSTOM_TOOL_HINT + extra).strip(),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "Complete raw payload for this tool, verbatim.",
+                }
+            },
+            "required": ["input"],
+        },
+    }
+
+
+def _tools_for_chat(tools):
+    """Downgrade custom tools; leave everything else untouched."""
+    out = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        out.append(_downgrade_custom_tool(t) if _is_custom_tool(t) else t)
+    return out
+
+
+def _unwrap_custom_input(args):
+    """Pull the freeform string back out of an {"input": "..."} argument blob."""
+    if not isinstance(args, str):
+        return json.dumps(args or "", ensure_ascii=False)
+    try:
+        parsed = json.loads(args)
+    except Exception:
+        return args
+    if isinstance(parsed, dict):
+        val = parsed.get("input")
+        if isinstance(val, str):
+            return val
+        if val is not None:
+            return json.dumps(val, ensure_ascii=False)
+    if isinstance(parsed, str):
+        return parsed
+    return args
+
+
 def responses_to_chat(payload):
     """Translate a Responses API request body into a Chat Completions body."""
     messages = []
@@ -1885,6 +1976,55 @@ def responses_to_chat(payload):
                         "content": "",
                         "tool_calls": [tc_item],
                     })
+            elif itype == "custom_tool_call":
+                # Freeform tool call coming back as conversation history.
+                raw_input = item.get("input")
+                if isinstance(raw_input, (dict, list)):
+                    raw_input = json.dumps(raw_input, ensure_ascii=False)
+                if not isinstance(raw_input, str):
+                    raw_input = "" if raw_input is None else str(raw_input)
+                tc_item = {
+                    "id": item.get("call_id") or item.get("id") or "",
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name") or "",
+                        "arguments": json.dumps({"input": raw_input}, ensure_ascii=False),
+                    },
+                }
+                # Merge into previous assistant message if adjacent
+                if messages and messages[-1].get("role") == "assistant":
+                    prev = messages[-1]
+                    if "tool_calls" in prev:
+                        prev["tool_calls"].append(tc_item)
+                    else:
+                        prev["tool_calls"] = [tc_item]
+                else:
+                    messages.append({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [tc_item],
+                    })
+            elif itype == "custom_tool_call_output":
+                # Result of a freeform tool call (e.g. apply_patch output).
+                raw_out = item.get("output")
+                if isinstance(raw_out, list):
+                    content = _flatten_content(raw_out)
+                elif isinstance(raw_out, dict):
+                    content = json.dumps(raw_out, ensure_ascii=False)
+                elif isinstance(raw_out, str):
+                    content = raw_out
+                else:
+                    content = str(raw_out)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id") or "",
+                    "content": content,
+                })
+            else:
+                # Never silently drop an unknown item: a dropped tool call or
+                # tool result leaves the transcript inconsistent upstream.
+                log("responses: WARNING unhandled input item type=%r keys=%s"
+                    % (itype, sorted(item.keys())[:8]))
 
     chat = {"model": payload.get("model"), "messages": messages}
 
@@ -1904,7 +2044,7 @@ def responses_to_chat(payload):
         chat["reasoning_effort"] = effort
 
     if payload.get("tools"):
-        chat["tools"] = payload["tools"]
+        chat["tools"] = _tools_for_chat(payload["tools"])
     if payload.get("tool_choice"):
         chat["tool_choice"] = payload["tool_choice"]
     if payload.get("parallel_tool_calls") is not None:
@@ -1929,8 +2069,14 @@ def _responses_usage(u):
     }
 
 
-def chat_to_response(chat_obj, model):
-    """Fold a Chat Completions object into a Responses API response object."""
+def chat_to_response(chat_obj, model, custom_names=None):
+    """Fold a Chat Completions object into a Responses API response object.
+
+    custom_names is the set of tool names the client declared as freeform
+    ("custom"). Calls to those tools are re-inflated into custom_tool_call
+    items so clients such as Codex recognise them.
+    """
+    custom_names = custom_names or set()
     choice = (chat_obj.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     text = msg.get("content") or ""
@@ -1946,14 +2092,26 @@ def chat_to_response(chat_obj, model):
         })
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function") or {}
-        output.append({
-            "id": _new_id("fc_"),
-            "type": "function_call",
-            "status": "completed",
-            "call_id": tc.get("id") or _new_id("call_"),
-            "name": fn.get("name") or "",
-            "arguments": fn.get("arguments") or "{}",
-        })
+        call_id = tc.get("id") or _new_id("call_")
+        name = fn.get("name") or ""
+        if name and name in custom_names:
+            output.append({
+                "id": _new_id("ctc_"),
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": name,
+                "input": _unwrap_custom_input(fn.get("arguments") or ""),
+            })
+        else:
+            output.append({
+                "id": _new_id("fc_"),
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": name,
+                "arguments": fn.get("arguments") or "{}",
+            })
     # DeepSeek DSML tool calls fallback
     if not (msg.get("tool_calls")):
         dsml_calls, clean_t = parse_dsml_tool_calls(text)
@@ -2013,6 +2171,7 @@ def stream_responses_events(upstream, model, holder):
     tool_calls_map = {}
     text_buffer = ""
     dsml_tool_calls = []
+    custom_names = set(holder.get("custom_names") or ())
 
     def resp_obj(status):
         obj = {
@@ -2099,34 +2258,53 @@ def stream_responses_events(upstream, model, holder):
                     out_idx = len(outputs)
                     outputs.append(None)
                     c_id = call_id or _new_id("call_")
-                    tool_calls_map[idx] = {
+                    is_custom = bool(fn_name) and fn_name in custom_names
+                    entry = {
                         "output_index": out_idx,
                         "id": c_id,
                         "name": fn_name,
                         "arguments": fn_args,
+                        "custom": is_custom,
+                        "item_id": _new_id("ctc_" if is_custom else "fc_"),
                     }
+                    tool_calls_map[idx] = entry
+                    item = {
+                        "id": entry["item_id"],
+                        "status": "in_progress",
+                        "call_id": c_id,
+                        "name": fn_name,
+                    }
+                    if is_custom:
+                        item["type"] = "custom_tool_call"
+                        item["input"] = ""
+                    else:
+                        item["type"] = "function_call"
+                        item["arguments"] = ""
                     yield ev("response.output_item.added", {
                         "output_index": out_idx,
-                        "item": {
-                            "id": _new_id("fc_"),
-                            "type": "function_call",
-                            "status": "in_progress",
-                            "call_id": c_id,
-                            "name": fn_name,
-                            "arguments": "",
-                        },
+                        "item": item,
                     })
                 else:
                     entry = tool_calls_map[idx]
                     if fn_name and not entry["name"]:
                         entry["name"] = fn_name
+                        if fn_name in custom_names:
+                            entry["custom"] = True
                     if fn_args:
                         entry["arguments"] += fn_args
-                        yield ev("response.function_call_arguments.delta", {
-                            "output_index": entry["output_index"],
-                            "call_id": entry["id"],
-                            "delta": fn_args,
-                        })
+                        if entry.get("custom"):
+                            yield ev("response.custom_tool_call_input.delta", {
+                                "output_index": entry["output_index"],
+                                "item_id": entry["item_id"],
+                                "call_id": entry["id"],
+                                "delta": fn_args,
+                            })
+                        else:
+                            yield ev("response.function_call_arguments.delta", {
+                                "output_index": entry["output_index"],
+                                "call_id": entry["id"],
+                                "delta": fn_args,
+                            })
 
             piece = delta.get("content")
             if piece:
@@ -2234,19 +2412,35 @@ def stream_responses_events(upstream, model, holder):
     # 1. Emit completed structured tool calls
     for idx in sorted(tool_calls_map.keys()):
         entry = tool_calls_map[idx]
-        yield ev("response.function_call_arguments.done", {
-            "output_index": entry["output_index"],
-            "call_id": entry["id"],
-            "arguments": entry["arguments"],
-        })
-        fc_item = {
-            "id": _new_id("fc_"),
-            "type": "function_call",
-            "status": "completed",
-            "call_id": entry["id"],
-            "name": entry["name"],
-            "arguments": entry["arguments"],
-        }
+        if entry.get("custom"):
+            yield ev("response.custom_tool_call_input.done", {
+                "output_index": entry["output_index"],
+                "item_id": entry["item_id"],
+                "call_id": entry["id"],
+                "input": _unwrap_custom_input(entry["arguments"]),
+            })
+            fc_item = {
+                "id": entry["item_id"],
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": entry["id"],
+                "name": entry["name"],
+                "input": _unwrap_custom_input(entry["arguments"]),
+            }
+        else:
+            yield ev("response.function_call_arguments.done", {
+                "output_index": entry["output_index"],
+                "call_id": entry["id"],
+                "arguments": entry["arguments"],
+            })
+            fc_item = {
+                "id": entry["item_id"],
+                "type": "function_call",
+                "status": "completed",
+                "call_id": entry["id"],
+                "name": entry["name"],
+                "arguments": entry["arguments"],
+            }
         outputs[entry["output_index"]] = fc_item
         yield ev("response.output_item.done", {
             "output_index": entry["output_index"],
@@ -3068,6 +3262,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_responses(self, payload):
         """Serve /v1/responses by translating to chat completions upstream."""
         session_key = extract_session_key(self.headers, payload)
+        custom_names = custom_tool_names(payload.get("tools"))
         chat_req = responses_to_chat(payload)
         model = payload.get("model") or "deepseek-v4.1-flash"
         want_stream = bool(payload.get("stream"))
@@ -3075,9 +3270,10 @@ class Handler(BaseHTTPRequestHandler):
         fp = prompt_fingerprint(chat_req.get("messages"))
 
         log(
-            "responses: model=%s stream=%s msgs=%d effort=%r"
+            "responses: model=%s stream=%s msgs=%d effort=%r custom_tools=%s"
             % (model, want_stream, len(chat_req.get("messages") or []),
-               chat_req.get("reasoning_effort"))
+               chat_req.get("reasoning_effort"),
+               sorted(custom_names) or "-")
         )
 
         try:
@@ -3109,7 +3305,7 @@ class Handler(BaseHTTPRequestHandler):
                 if cors_origin_allowed(self.path):
                     self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                holder = {"usage": None}
+                holder = {"usage": None, "custom_names": custom_names}
                 first_ms = None
                 try:
                     for frame in stream_responses_events(upstream, model, holder):
@@ -3141,7 +3337,7 @@ class Handler(BaseHTTPRequestHandler):
                              elapsed_ms=int((time.time() - t_start) * 1000))
                 return self._error(502, f"upstream stream error: {exc}")
             wall = int((time.time() - t_start) * 1000)
-            result = chat_to_response(chat_obj, model)
+            result = chat_to_response(chat_obj, model, custom_names)
             record_usage(model, chat_obj.get("usage"), stream=False, elapsed_ms=wall, fp=fp,
                          account=account.uid)
             return self._json(200, result)
