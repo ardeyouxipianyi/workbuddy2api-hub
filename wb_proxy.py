@@ -332,17 +332,35 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
                 per[k] += fields[k]
         summary = json.loads(json.dumps(_usage))
 
+    _persist_usage(row, summary, "usage persist failed")
+    return row
+
+
+def _persist_usage(row, summary, fail_label):
+    """Append one JSONL row and atomically rewrite the summary.
+
+    The temp file carries a unique suffix: two threads writing the same
+    "<summary>.tmp" race, and the loser's os.replace() fails with ENOENT
+    because the winner already renamed the file away.
+    """
     try:
         os.makedirs(USAGE_DIR, exist_ok=True)
         with open(USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        tmp_summary = USAGE_SUMMARY + ".tmp"
-        with open(tmp_summary, "w", encoding="utf-8") as fh:
-            json.dump(summary, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp_summary, USAGE_SUMMARY)
+        tmp_summary = "%s.%d.%d.tmp" % (USAGE_SUMMARY, os.getpid(), threading.get_ident())
+        try:
+            with open(tmp_summary, "w", encoding="utf-8") as fh:
+                json.dump(summary, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp_summary, USAGE_SUMMARY)
+        except Exception:
+            # Never leave a stray temp file behind on the failure path.
+            try:
+                os.unlink(tmp_summary)
+            except Exception:
+                pass
+            raise
     except Exception as exc:
-        log(f"usage persist failed: {exc}")
-    return row
+        log("%s: %s" % (fail_label, exc))
 
 
 def record_error(model, status, message, elapsed_ms=None):
@@ -362,16 +380,7 @@ def record_error(model, status, message, elapsed_ms=None):
             _usage["wall_ms_sum"] += elapsed_ms
             _usage["wall_samples"] += 1
         summary = json.loads(json.dumps(_usage))
-    try:
-        os.makedirs(USAGE_DIR, exist_ok=True)
-        with open(USAGE_LOG, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-        tmp_summary = USAGE_SUMMARY + ".tmp"
-        with open(tmp_summary, "w", encoding="utf-8") as fh:
-            json.dump(summary, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp_summary, USAGE_SUMMARY)
-    except Exception as exc:
-        log(f"error persist failed: {exc}")
+    _persist_usage(row, summary, "error persist failed")
     return row
 
 
