@@ -352,6 +352,28 @@ def run_checks(filter_name):
                 "document.querySelector('#recent tbody tr') ? getComputedStyle(document.querySelector('#recent tbody tr')).display : 'none'"
             )
             check("analytics-cards", disp == "grid", disp)
+            # KPI cards must wrap into a grid, not squeeze into one row.
+            kpi = page.evaluate(
+                """
+                (() => {
+                  const cards = Array.from(document.querySelectorAll('#analyticsKpiCards > .card'));
+                  if(!cards.length) return {rows: 0, minW: 0, clipped: []};
+                  const tops = cards.map(c => Math.round(c.getBoundingClientRect().top));
+                  const widths = cards.map(c => Math.round(c.getBoundingClientRect().width));
+                  const clipped = cards.filter(c => {
+                    const k = c.querySelector('.k'), s = c.querySelector('.s');
+                    return (k && k.scrollWidth > k.clientWidth + 2)
+                        || (s && s.scrollWidth > s.clientWidth + 2);
+                  }).length;
+                  return {rows: new Set(tops).size, minW: Math.min.apply(null, widths), clipped: clipped};
+                })()
+                """
+            )
+            check(
+                "analytics-kpi-wrap",
+                kpi["rows"] >= 3 and kpi["minW"] >= 130 and kpi["clipped"] == 0,
+                kpi,
+            )
             page.screenshot(
                 path=os.path.join(SHOTS, "phone-analytics.png"), full_page=True
             )
