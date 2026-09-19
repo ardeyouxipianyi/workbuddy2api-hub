@@ -297,6 +297,23 @@ a:hover{text-decoration:underline}
   #pageLogs > div > div[style*="display:flex"]{flex-wrap:wrap}
   .log-line{flex-wrap:wrap;gap:4px}
   .log-msg{min-width:0;flex-basis:100%}
+  /* Dialogs */
+  .modal-mask{padding:10px;align-items:flex-start}
+  .modal{width:100%;max-height:94vh;border-radius:12px;margin-top:6px}
+  .modal-hd{padding:12px 14px}
+  .modal-bd{padding:14px}
+  .modal-ft{padding:12px 14px;flex-wrap:wrap}
+  .modal-ft button{flex:1;min-height:38px}
+  .modal table td, .modal table th{padding:7px 8px}
+}
+/* ===== Small phone: ≤400px ===== */
+@media (max-width: 400px){
+  h1{font-size:14px}
+  .main-nav-btn{font-size:11px;padding:7px 2px}
+  #cards{grid-template-columns:1fr 1fr;gap:6px}
+  #cards .card .v{font-size:16px}
+  table.data-cards tr{padding:10px}
+  .log-ts{font-size:11px}
 }
 </style>
 <script>
