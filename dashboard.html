@@ -237,6 +237,22 @@ a:hover{text-decoration:underline}
   .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
   .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
   .meta .meta-secondary{display:none}
+  /* Table → card */
+  .table-wrap{overflow:visible}
+  table.data-cards{min-width:0!important;display:block}
+  table.data-cards thead{display:none}
+  table.data-cards tbody{display:block}
+  table.data-cards tr{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:5px 8px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:var(--shadow-sm)}
+  table.data-cards td{display:flex;align-items:baseline;justify-content:space-between;
+    gap:12px;grid-column:span 6;border:none;padding:1px 0;text-align:left!important;
+    font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+  table.data-cards td::before{content:attr(data-label);color:var(--dim);font-size:11px;
+    font-weight:600;flex-shrink:0}
+  table.data-cards td:not([data-label])::before{content:none}
+  table.data-cards td[colspan]{grid-column:span 6;justify-content:center;text-align:center!important}
+  table.data-cards td[colspan]::before{content:none}
 }
 </style>
 <script>
@@ -434,7 +450,7 @@ a:hover{text-decoration:underline}
       <div style="font-size:12px;color:var(--dim)">展示当前视图下官方对话大模型、上下文容量、推理/视觉能力及在售倍率</div>
     </div>
     <div style="overflow-x:auto">
-      <table id="modelsTable">
+      <table id="modelsTable" class="data-cards">
         <thead>
           <tr>
             <th style="text-align:left;width:220px">模型 ID</th>
@@ -473,7 +489,7 @@ a:hover{text-decoration:underline}
     </div>
 
     <div style="overflow-x:auto">
-      <table id="growthTable">
+      <table id="growthTable" class="data-cards">
         <thead>
           <tr>
             <th>任务名称 / 代码</th>
@@ -1071,12 +1087,12 @@ function renderAvailableModels(){
     }
 
     return '<tr>'
-      + '<td style="text-align:left" class="mono"><b>' + esc(m.id) + '</b></td>'
-      + '<td style="text-align:center">' + credBadge + '</td>'
-      + '<td style="text-align:center">' + capHtml + '</td>'
-      + '<td style="text-align:center">' + ctx + '</td>'
-      + '<td style="text-align:center">' + maxOut + '</td>'
-      + '<td style="text-align:left">' + effort + '</td>'
+      + '<td style="text-align:left" class="mono" data-label="模型 ID"><b>' + esc(m.id) + '</b></td>'
+      + '<td style="text-align:center" data-label="消费倍率">' + credBadge + '</td>'
+      + '<td style="text-align:center" data-label="能力">' + capHtml + '</td>'
+      + '<td style="text-align:center" data-label="上下文">' + ctx + '</td>'
+      + '<td style="text-align:center" data-label="最大输出">' + maxOut + '</td>'
+      + '<td style="text-align:left" data-label="思考档位">' + effort + '</td>'
       + '</tr>';
   }).join('');
 }
@@ -1158,11 +1174,11 @@ async function loadGrowthTasks(){
       const rwd = (t.reward_credit ? ('<b style="color:var(--accent2)">+' + t.reward_credit + '</b> 积分') : '') +
                   (t.reward_energy ? (' <span style="color:var(--accent)">+' + t.reward_energy + ' 能量</span>') : '');
       return '<tr>'
-        + '<td><b>' + esc(t.name) + '</b><br><span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t.task_code) + '</span></td>'
-        + '<td style="font-size:12px;color:var(--dim);max-width:300px">' + esc(t.description || '-') + '</td>'
-        + '<td>' + prog + '</td>'
-        + '<td>' + (rwd || '-') + '</td>'
-        + '<td>' + stBadge + '</td>'
+        + '<td data-label="任务"><b>' + esc(t.name) + '</b><br><span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t.task_code) + '</span></td>'
+        + '<td style="font-size:12px;color:var(--dim);max-width:300px" data-label="说明">' + esc(t.description || '-') + '</td>'
+        + '<td data-label="进度">' + prog + '</td>'
+        + '<td data-label="奖励">' + (rwd || '-') + '</td>'
+        + '<td data-label="状态">' + stBadge + '</td>'
         + '</tr>';
     }).join('');
   }catch(e){
