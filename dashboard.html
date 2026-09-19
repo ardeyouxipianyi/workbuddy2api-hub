@@ -337,6 +337,7 @@ a:hover{text-decoration:underline}
     <button class="sec" onclick="exportAccounts(this)">导出账号</button>
     <button class="sec" onclick="openImport()">导入账号</button>
     <button class="sec" onclick="fetchCredits(this)">刷新积分</button>
+    <button class="sec" onclick="autoAssignSlots()">一键自动分配出口</button>
     <button class="sec" onclick="setAll(true, this)">全部启用</button>
     <button class="sec" onclick="setAll(false, this)">全部停用</button>
     
@@ -533,6 +534,24 @@ a:hover{text-decoration:underline}
         <button onclick="addApiKeyRow()">+ 添加 API Key</button>
       </div>
       <div id="keyList"></div>
+    </section>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">代理槽 <em id="slotState"></em></h2>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            每个账号固定绑定一个出口代理槽。槽位地址变化时绑定账号自动跟随；禁用或删除后回退直连。
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="sec" onclick="discoverProxySlots(this)">自动发现 mihomo 端口</button>
+          <button class="sec" onclick="addProxySlotRow()">+ 添加槽位</button>
+          <button onclick="saveProxySlots(this)">保存槽位</button>
+        </div>
+      </div>
+      <div id="slotList"></div>
+      <div id="slotDiscover"></div>
     </section>
 
     <section>
@@ -1351,6 +1370,7 @@ function accountRow(a){
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
     + err + '</td>'
     + '<td style="text-align:center">' + state + '</td>'
+    + '<td style="text-align:center">' + slotSelectHtml(a) + '</td>'
     + '<td style="text-align:left;white-space:nowrap">' + credText + '</td>'
     + '<td style="text-align:right">' + fmt(usage.requests) + '</td>'
     + '<td style="text-align:right">' + fmt(usage.total_tokens) + '</td>'
@@ -1374,6 +1394,11 @@ function renderAccounts(){
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = (window.ACCOUNTS || []).filter(a => !a.realm || a.realm === currentView);
+  // Enabled accounts first; disabled ones sink to the bottom. Within each
+  // group keep the server order stable so the table does not jump around.
+  list = list.map((a, i) => [a, i])
+    .sort((x, y) => (x[0].enabled === y[0].enabled) ? (x[1] - y[1]) : (x[0].enabled ? -1 : 1))
+    .map(pair => pair[0]);
   const usable = list.filter(a => a.enabled).length;
   const viewName = currentView === 'cn' ? '国内版' : '国际版';
   document.getElementById('acctCount').textContent =
@@ -1396,6 +1421,7 @@ function renderAccounts(){
     + '<th style="text-align:center;width:76px">版本</th>'
     + '<th style="text-align:left">账号</th>'
     + '<th style="text-align:center;width:84px">状态</th>'
+    + '<th style="text-align:center;width:150px">出口</th>'
     + '<th style="text-align:left;width:120px">积分</th>'
     + '<th style="text-align:right;width:70px">请求</th>'
     + '<th style="text-align:right;width:88px">总 token</th>'
@@ -1411,6 +1437,7 @@ async function loadAccounts(){
     window.ACCOUNTS = acct.accounts || [];
     USAGE_BY_ACCOUNT = {};
     (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
+    await loadProxySlots();
     renderAccounts();
     updateUI();
     // Auto-fetch credits once if not present
@@ -2549,6 +2576,203 @@ async function saveApiKeys(btn){
   }
 }
 
+let PROXY_SLOTS = [];
+let SLOT_DISCOVER = [];
+
+function slotSelectHtml(a){
+  const current = a.proxySlot || '';
+  // A legacy per-account proxy URL still routes traffic while no slot is
+  // bound. Surface it instead of pretending the account is direct.
+  const legacy = (!current && a.proxy) ? String(a.proxy) : '';
+  const legacyLabel = legacy.length > 28 ? legacy.slice(0, 25) + '...' : legacy;
+  const opts = [];
+  if(legacy){
+    opts.push('<option value="__legacy__" selected>旧代理：' + esc(legacyLabel) + '</option>');
+    opts.push('<option value="">直连（清除旧代理）</option>');
+  } else {
+    opts.push('<option value=""' + (current ? '' : ' selected') + '>直连</option>');
+  }
+  opts.push.apply(opts, PROXY_SLOTS.map(s =>
+    '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
+    + esc(s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
+  const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
+  return '<select onchange="setAccountSlot(&quot;' + uidAttr + '&quot;, this.value, this)" '
+    + 'style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;'
+    + 'padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px">'
+    + opts.join('') + '</select>';
+}
+
+async function setAccountSlot(uid, slotId, el){
+  if(slotId === '__legacy__') return;
+  if(el) el.disabled = true;
+  try{
+    await postJSON('/accounts/set', {uid: uid, proxySlot: slotId});
+    toast('出口已更新', 'ok');
+    await loadAccounts();
+    await loadProxySlots();
+  }catch(e){
+    toast('出口更新失败: ' + e.message, 'bad');
+  }finally{
+    if(el) el.disabled = false;
+  }
+}
+
+async function loadProxySlots(){
+  try{
+    const r = await getJSON('/proxy/slots');
+    PROXY_SLOTS = r.slots || [];
+    renderProxySlots();
+  }catch(e){
+    // Panel not logged in yet; actions on the settings page surface errors.
+  }
+}
+
+function renderProxySlots(){
+  const box = document.getElementById('slotList');
+  if(!box) return;
+  const stateEl = document.getElementById('slotState');
+  if(stateEl) stateEl.textContent = PROXY_SLOTS.length ? ('（' + PROXY_SLOTS.length + ' 个）') : '';
+  if(!PROXY_SLOTS.length){
+    box.innerHTML = '<div class="hint" style="color:var(--dim)">还没有代理槽。点击「自动发现 mihomo 端口」或「+ 添加槽位」。</div>';
+    return;
+  }
+  box.innerHTML = '<div class="table-wrap"><table><thead><tr>'
+    + '<th style="width:150px">名称</th>'
+    + '<th>代理地址</th>'
+    + '<th style="width:90px;text-align:center">启用</th>'
+    + '<th style="width:90px;text-align:center">绑定账号</th>'
+    + '<th style="width:190px;text-align:center">操作</th>'
+    + '</tr></thead><tbody>'
+    + PROXY_SLOTS.map((s, i) =>
+        '<tr>'
+        + '<td><input value="' + esc(s.name || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value" '
+        +   'style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit"></td>'
+        + '<td><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value" '
+        +   'style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit" class="mono"></td>'
+        + '<td style="text-align:center"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
+        +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked"></td>'
+        + '<td style="text-align:center">' + (s.bound || 0) + '</td>'
+        + '<td style="text-align:center;white-space:nowrap">'
+        +   '<button class="sec mini" onclick="testProxySlot(' + i + ', this)">测试</button> '
+        +   '<button class="danger mini" onclick="removeProxySlot(' + i + ')">删除</button>'
+        + '</td></tr>'
+      ).join('')
+    + '</tbody></table></div>'
+    + '<div class="legend"><span>「绑定账号」只统计已启用账号；停用账号会自动释放槽位，重新启用后需重新绑定。在网关页账号表的「出口」下拉中调整绑定。</span></div>';
+}
+
+function addProxySlotRow(){
+  PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: '', enabled: true, bound: 0});
+  renderProxySlots();
+}
+
+function removeProxySlot(index){
+  const s = PROXY_SLOTS[index];
+  if(!s) return;
+  if((s.bound || 0) > 0 && !confirm('该槽位被 ' + s.bound + ' 个账号绑定，删除后它们将回退直连。继续？')) return;
+  PROXY_SLOTS.splice(index, 1);
+  renderProxySlots();
+}
+
+async function saveProxySlots(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const payload = PROXY_SLOTS.map(s => ({id: s.id || '', name: s.name || '', url: (s.url || '').trim(), enabled: s.enabled !== false}));
+    const r = await postJSON('/proxy/slots/save', {slots: payload});
+    PROXY_SLOTS = r.slots || [];
+    renderProxySlots();
+    await loadAccounts();
+    toast('已保存 ' + PROXY_SLOTS.length + ' 个代理槽', 'ok');
+  }catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function testProxySlot(index, btn){
+  const s = PROXY_SLOTS[index];
+  if(!s || !s.url){ toast('槽位还没有填写代理地址', 'warn'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '测试中...'; }
+  try{
+    let id = s.id;
+    if(!id){
+      const payload = PROXY_SLOTS.map(x => ({id: x.id || '', name: x.name || '', url: (x.url || '').trim(), enabled: x.enabled !== false}));
+      const r = await postJSON('/proxy/slots/save', {slots: payload});
+      PROXY_SLOTS = r.slots || [];
+      renderProxySlots();
+      id = (PROXY_SLOTS[index] || {}).id;
+    }
+    const r = await postJSON('/proxy/slots/test', {id: id});
+    if(r.ok) toast('出口 IP: ' + r.exit_ip + '（' + r.latency_ms + 'ms）', 'ok');
+    else toast('测试失败: ' + (r.error || 'unknown'), 'bad');
+  }catch(e){
+    toast('测试失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '测试'; }
+  }
+}
+
+async function discoverProxySlots(btn){
+  if(btn){ btn.disabled = true; btn.textContent = '探测中...'; }
+  try{
+    const r = await postJSON('/proxy/discover', {});
+    SLOT_DISCOVER = r.candidates || [];
+    renderDiscover();
+    const ok = SLOT_DISCOVER.filter(c => c.reachable).length;
+    toast('发现 ' + ok + ' 个可用出口', ok ? 'ok' : 'warn');
+  }catch(e){
+    toast('自动发现失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '自动发现 mihomo 端口'; }
+  }
+}
+
+function renderDiscover(){
+  const box = document.getElementById('slotDiscover');
+  if(!box) return;
+  if(!SLOT_DISCOVER.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="margin-top:14px"><div style="font-size:12px;color:var(--dim);margin-bottom:8px">'
+    + '勾选要导入为槽位的出口：</div>'
+    + SLOT_DISCOVER.map((c, i) =>
+        '<label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px">'
+        + '<input type="checkbox" ' + (c.reachable ? 'checked' : 'disabled') + ' data-idx="' + i + '">'
+        + '<span class="mono">' + esc(c.url) + '</span>'
+        + '<span style="color:' + (c.reachable ? 'var(--accent2)' : 'var(--bad)') + '">'
+        + (c.reachable ? ('出口 ' + esc(c.exit_ip) + ' · ' + c.latency_ms + 'ms') : '不可达') + '</span>'
+        + '</label>').join('')
+    + '<button class="sec" onclick="importDiscovered()" style="margin-top:8px">导入勾选的出口</button></div>';
+}
+
+function importDiscovered(){
+  const box = document.getElementById('slotDiscover');
+  if(!box) return;
+  const picked = Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map(el => SLOT_DISCOVER[+el.dataset.idx]);
+  if(!picked.length){ toast('没有勾选任何出口', 'warn'); return; }
+  picked.forEach(c => {
+    if(PROXY_SLOTS.some(s => s.url === c.url)) return;
+    PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: c.url, enabled: true, bound: 0});
+  });
+  renderProxySlots();
+  toast('已加入 ' + picked.length + ' 个槽位，记得点「保存槽位」', 'ok');
+}
+
+async function autoAssignSlots(){
+  const unbound = (window.ACCOUNTS || []).filter(a => a.enabled && !a.proxySlot);
+  if(!unbound.length){ toast('所有已启用账号都已绑定槽位', 'ok'); return; }
+  const slots = PROXY_SLOTS.filter(s => s.enabled !== false);
+  if(!slots.length){ toast('没有可用槽位，请先添加并保存', 'warn'); return; }
+  let i = 0;
+  for(const a of unbound){
+    const slot = slots[i % slots.length];
+    i++;
+    try{ await postJSON('/accounts/set', {uid: a.uid, proxySlot: slot.id}); }catch(e){}
+  }
+  await loadAccounts();
+  await loadProxySlots();
+  toast('已为 ' + unbound.length + ' 个已启用账号分配出口', 'ok');
+}
+
 function switchMainTab(tab){
   currentMainTab = tab;
   const btnGateway = document.getElementById('btnNavGateway');
@@ -2572,7 +2796,7 @@ function switchMainTab(tab){
     page.style.display = on ? 'block' : 'none';
   });
   if(tab === 'analytics') loadAnalytics();
-  if(tab === 'settings') loadSettings();
+  if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
   if(tab === 'logs'){
     startLogPolling();
     fetchNewLogs(true);

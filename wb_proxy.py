@@ -715,6 +715,70 @@ def account_views(realm=None):
     if not POOL:
         return []
     return POOL.list_public(realm=realm)
+
+
+PROXY_DISCOVER_HOST = os.environ.get("WB_PROXY_DISCOVER_HOST") or "cli-proxy-mihomo"
+
+
+def _proxy_port_range():
+    raw = os.environ.get("WB_PROXY_DISCOVER_PORTS") or "17901-17910"
+    if "-" in raw:
+        lo, _, hi = raw.partition("-")
+        if lo.strip().isdigit() and hi.strip().isdigit():
+            return range(int(lo), int(hi) + 1)
+    if raw.strip().isdigit():
+        return [int(raw)]
+    return range(17901, 17911)
+
+
+def probe_proxy_exit(proxy_url, timeout=12):
+    """Return (exit_ip, error) for one proxy URL."""
+    try:
+        opener = wb_accounts.opener_for_proxy(proxy_url)
+        if opener is None:
+            return "", "empty proxy url"
+        req = urllib.request.Request("https://api.ipify.org", method="GET")
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace").strip(), ""
+    except Exception as exc:
+        return "", str(exc)[:160]
+
+
+def discover_proxy_slots():
+    """Probe the configured mihomo host/ports and report reachable exits."""
+    out = []
+    for port in _proxy_port_range():
+        url = "http://%s:%d" % (PROXY_DISCOVER_HOST, port)
+        started = time.time()
+        exit_ip, error = probe_proxy_exit(url)
+        out.append(
+            {
+                "url": url,
+                "reachable": not error,
+                "exit_ip": exit_ip,
+                "latency_ms": int((time.time() - started) * 1000),
+                "error": error,
+            }
+        )
+    return out
+
+
+def proxy_slots_view():
+    """Proxy slots plus how many enabled accounts are bound to each."""
+    counts = {}
+    if POOL:
+        for account in POOL.accounts:
+            slot_id = account.proxy_slot
+            if slot_id and account.enabled:
+                counts[slot_id] = counts.get(slot_id, 0) + 1
+    out = []
+    for entry in wb_settings.proxy_slots(ACCOUNTS_DIR):
+        item = dict(entry)
+        item["bound"] = counts.get(entry["id"], 0)
+        out.append(item)
+    return out
+
+
 _byacct_cache = {"at": 0.0, "data": None}
 _byacct_lock = threading.Lock()
 
@@ -1324,7 +1388,7 @@ def fetch_endpoint_models():
         return [m for m, _ in (cached or [])]
     req = urllib.request.Request(UPSTREAM + MODELS_PATH, method="GET", headers=account.headers())
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with wb_accounts.urlopen(req, timeout=30, proxy=account.proxy) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
         log(f"model discovery failed: {exc}")
@@ -1772,7 +1836,7 @@ def open_upstream(payload, session_key=None, target_realm=None):
         req = urllib.request.Request(chat_url, data=body, method="POST",
                                      headers=account.headers(purpose="chat"))
         try:
-            resp = urllib.request.urlopen(req, timeout=600)
+            resp = wb_accounts.urlopen(req, timeout=600, proxy=account.proxy)
             account.clear_error(model=model)
             return resp, account
         except urllib.error.HTTPError as exc:
@@ -3119,6 +3183,12 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorized():
                 return
             return self._json(200, runtime_settings_view())
+        if path == "/proxy/slots":
+            if not self._panel_ok():
+                return self._error(
+                    401, "panel password required", "invalid_request_error"
+                )
+            return self._json(200, {"slots": proxy_slots_view()})
         if path == "/logs":
             if not self._authorized():
                 return
@@ -3275,6 +3345,56 @@ class Handler(BaseHTTPRequestHandler):
             reply["scheduler"] = "restarted"
         reply.update(runtime_settings_view())
         return self._json(200, reply)
+
+    def _handle_proxy_slots(self, path, payload):
+        """Proxy-slot management (panel-authenticated)."""
+        if path == "/proxy/slots":
+            return self._json(200, {"slots": proxy_slots_view()})
+        if path == "/proxy/slots/save":
+            raw = payload.get("slots")
+            if not isinstance(raw, list):
+                return self._error(400, "slots must be a list", "invalid_request_error")
+            cleaned = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                cleaned.append(
+                    {
+                        "id": str(item.get("id") or "").strip(),
+                        "name": str(item.get("name") or "").strip(),
+                        "url": url,
+                        "enabled": item.get("enabled", True) is not False,
+                    }
+                )
+            saved = wb_settings.set_proxy_slots(ACCOUNTS_DIR, cleaned)
+            if POOL:
+                POOL.apply_proxy_slots(saved)
+            log("proxy slots saved: %d slot(s)" % len(saved))
+            return self._json(200, {"slots": proxy_slots_view()})
+        if path == "/proxy/slots/test":
+            slot_id = str(payload.get("id") or "").strip()
+            slot = wb_settings.find_proxy_slot(ACCOUNTS_DIR, slot_id)
+            if slot is None:
+                return self._error(404, "no such proxy slot")
+            started = time.time()
+            exit_ip, error = probe_proxy_exit(slot["url"])
+            return self._json(
+                200,
+                {
+                    "ok": not error,
+                    "id": slot_id,
+                    "exit_ip": exit_ip,
+                    "latency_ms": int((time.time() - started) * 1000),
+                    "error": error,
+                },
+            )
+        if path == "/proxy/discover":
+            return self._json(200, {"candidates": discover_proxy_slots()})
+        return self._error(404, "not found", "invalid_request_error")
+
     def _handle_panel(self, path):
         """Panel login, logout and the settings screen (password + API key)."""
         payload = self._payload_or_error()
@@ -3527,7 +3647,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             t0 = time.time()
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with wb_accounts.urlopen(req, timeout=30, proxy=account.proxy) as resp:
                     chat_obj = aggregate_stream(resp, test_model, None)
                     wall_ms = int((time.time() - t0) * 1000)
                     choices = chat_obj.get("choices") or []
@@ -3571,10 +3691,35 @@ class Handler(BaseHTTPRequestHandler):
             uid = payload.get("uid")
             if not uid:
                 return self._error(400, "uid required")
-            updated = POOL.set_enabled(uid, bool(payload.get("enabled")))
+            updated = None
+            if "proxySlot" in payload:
+                updated = POOL.set_proxy_slot(uid, payload.get("proxySlot"))
+                if updated is None:
+                    return self._error(404, "no such account")
+                log(
+                    "account %s proxy slot set to %s"
+                    % (uid[:8], updated.get("proxySlot") or "(direct)")
+                )
+            if "proxy" in payload:
+                updated = POOL.set_proxy(uid, payload.get("proxy"))
+                if updated is None:
+                    return self._error(404, "no such account")
+                log(
+                    "account %s proxy set to %s"
+                    % (uid[:8], updated.get("proxy") or "(direct)")
+                )
+            if "enabled" in payload:
+                updated = POOL.set_enabled(uid, bool(payload.get("enabled")))
+                if updated is None:
+                    return self._error(404, "no such account")
+                log(
+                    "account %s %s"
+                    % (uid[:8], "enabled" if payload.get("enabled") else "disabled")
+                )
             if updated is None:
-                return self._error(404, "no such account")
-            log("account %s %s" % (uid[:8], "enabled" if payload.get("enabled") else "disabled"))
+                return self._error(
+                    400, "nothing to update: pass 'enabled', 'proxy' or 'proxySlot'"
+                )
             return self._json(200, {"account": updated})
         if path == "/accounts/set-all":
             POOL.set_all_enabled(bool(payload.get("enabled")))
@@ -3745,6 +3890,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")
             return self._handle_settings_save()
+        if path.startswith("/proxy/"):
+            if not self._panel_ok():
+                return self._error(
+                    401, "panel password required", "invalid_request_error"
+                )
+            payload = self._payload_or_error()
+            if payload is None:
+                return
+            return self._handle_proxy_slots(path, payload)
         if path in ("/panel/login", "/panel/logout", "/panel/password"):
             return self._handle_panel(path)
         if self._is_panel_route(path) and not self._panel_ok():
@@ -3997,6 +4151,7 @@ def main():
         log("panel      : password is still the default 'admin' - change it in the panel")
     POOL = wb_accounts.AccountPool(ACCOUNTS_DIR, log=log)
     POOL.load()
+    POOL.apply_proxy_slots()
     load_persisted_realm()
     global SCHEDULER
     from wb_scheduler import Scheduler

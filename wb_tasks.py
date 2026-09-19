@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
+import wb_accounts as _accounts
+
 CHAT_BASE = "https://copilot.tencent.com"
 BILL_BASE = "https://www.codebuddy.cn"
 WEB_BASE = "https://www.workbuddy.cn"
@@ -102,7 +104,7 @@ def fetch_growth_tasks(account):
     url = CHAT_BASE + "/v2/activity/growth/tasks"
     req = urllib.request.Request(url, headers=account.headers("chat"))
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             raw_tasks = (data.get("data") or {}).get("tasks") or []
             tasks = []
@@ -135,7 +137,7 @@ def fetch_growth_summary(account):
     # 1. 能量
     try:
         req = urllib.request.Request(CHAT_BASE + "/v2/activity/growth/energy", headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _accounts.urlopen(req, timeout=10, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             out["energy"] = (d.get("data") or {}).get("balance", 0)
     except Exception as exc:
@@ -143,7 +145,7 @@ def fetch_growth_summary(account):
     # 2. 连续打卡
     try:
         req = urllib.request.Request(CHAT_BASE + "/activity/growth/streak", headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _accounts.urlopen(req, timeout=10, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             st = (d.get("data") or {}).get("streak") or {}
             out["streak_days"] = st.get("days", 0)
@@ -152,7 +154,7 @@ def fetch_growth_summary(account):
     # 3. 猫猫旅行
     try:
         req = urllib.request.Request(CHAT_BASE + "/activity/growth/buddy/travel/status", headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _accounts.urlopen(req, timeout=10, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             out["travel"] = d.get("data") or {}
     except Exception as exc:
@@ -167,7 +169,7 @@ def accept_tasks(account, codes):
     body = json.dumps({"task_codes": codes}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers=account.headers("chat"))
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             return d.get("code") == 0
     except Exception:
@@ -179,7 +181,7 @@ def claim_task(account, code):
     url = f"{CHAT_BASE}/activity/growth/tasks/{code}/claim"
     req = urllib.request.Request(url, data=b"{}", method="POST", headers=account.headers("chat"))
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             if d.get("code") == 0:
                 data = d.get("data") or {}
@@ -210,7 +212,7 @@ def claim_task(account, code):
             }
             try:
                 req_web = urllib.request.Request(web_url, data=b"{}", method="POST", headers=web_hdrs)
-                with urllib.request.urlopen(req_web, timeout=15) as resp:
+                with _accounts.urlopen(req_web, timeout=15, proxy=account.proxy) as resp:
                     d = json.loads(resp.read().decode("utf-8"))
                     if d.get("code") == 0:
                         data = d.get("data") or {}
@@ -309,7 +311,7 @@ def report_events(account, events, base=None):
     body = json.dumps(events).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             return d.get("code") == 0
     except Exception:
@@ -322,7 +324,7 @@ def do_cat_travel(account):
     # 1. 查询状态
     try:
         req = urllib.request.Request(CHAT_BASE + "/activity/growth/buddy/travel/status", headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _accounts.urlopen(req, timeout=10, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
             st = d.get("data") or {}
     except Exception as exc:
@@ -333,7 +335,7 @@ def do_cat_travel(account):
         # 领奖 (官方前端: POST travel/claim body {})
         req_cl = urllib.request.Request(CHAT_BASE + "/activity/growth/buddy/travel/claim", data=b"{}", method="POST", headers=headers)
         try:
-            with urllib.request.urlopen(req_cl, timeout=10) as resp:
+            with _accounts.urlopen(req_cl, timeout=10, proxy=account.proxy) as resp:
                 c_res = json.loads(resp.read().decode("utf-8"))
                 credit = (c_res.get("data") or {}).get("reward_credit", 0)
                 account.fetch_credits()
@@ -349,7 +351,7 @@ def do_cat_travel(account):
         lid = None
         try:
             req_cfg = urllib.request.Request(CHAT_BASE + "/activity/growth/buddy/travel/config", headers=headers)
-            with urllib.request.urlopen(req_cfg, timeout=10) as resp:
+            with _accounts.urlopen(req_cfg, timeout=10, proxy=account.proxy) as resp:
                 cfg = json.loads(resp.read().decode("utf-8"))
                 locs = (cfg.get("data") or {}).get("locations") or []
             if locs:
@@ -361,7 +363,7 @@ def do_cat_travel(account):
         dep_body = json.dumps({"location_id": lid}).encode("utf-8")
         req_dep = urllib.request.Request(CHAT_BASE + "/activity/growth/buddy/travel/depart", data=dep_body, method="POST", headers=headers)
         try:
-            with urllib.request.urlopen(req_dep, timeout=10) as resp:
+            with _accounts.urlopen(req_dep, timeout=10, proxy=account.proxy) as resp:
                 dep_res = json.loads(resp.read().decode("utf-8"))
                 if dep_res.get("code") == 0:
                     loc = ((dep_res.get("data") or {}).get("location") or {}).get("name") or ""

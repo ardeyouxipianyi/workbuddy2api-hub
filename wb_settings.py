@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -256,6 +257,85 @@ def set_auth_disabled(accounts_dir, disabled):
         data = load(accounts_dir)
         data["auth_disabled"] = bool(disabled)
         save(accounts_dir, data)
+
+
+_SLOT_ID_RE = re.compile(r"^slot-(\d+)$")
+
+
+def _clean_slot_entry(entry, fallback_id=None):
+    """Normalize one stored slot; returns None when unusable."""
+    if not isinstance(entry, dict):
+        return None
+    url = str(entry.get("url") or "").strip()
+    if not url:
+        return None
+    slot_id = str(entry.get("id") or "").strip()
+    if not slot_id:
+        slot_id = fallback_id or ""
+    return {
+        "id": slot_id,
+        "name": str(entry.get("name") or "").strip() or slot_id,
+        "url": url,
+        "enabled": entry.get("enabled", True) is not False,
+    }
+
+
+def _next_slot_id(existing):
+    """Next free `slot-<n>` id given already-assigned slots."""
+    used = set()
+    for entry in existing:
+        match = _SLOT_ID_RE.match(str(entry.get("id") or ""))
+        if match:
+            used.add(int(match.group(1)))
+    n = 1
+    while n in used:
+        n += 1
+    return "slot-%d" % n
+
+
+def proxy_slots(accounts_dir):
+    """Every configured proxy slot, in stored order."""
+    data = load(accounts_dir)
+    stored = data.get("proxy_slots")
+    if not isinstance(stored, list):
+        return []
+    out, seen = [], set()
+    for raw in stored:
+        entry = _clean_slot_entry(raw)
+        if entry and entry["url"] not in seen:
+            seen.add(entry["url"])
+            if not entry["id"]:
+                entry["id"] = _next_slot_id(out)
+            out.append(entry)
+    return out
+
+
+def set_proxy_slots(accounts_dir, slots):
+    """Replace the whole slot list. Returns the stored list."""
+    with _lock:
+        cleaned, seen = [], set()
+        for raw in slots or []:
+            entry = _clean_slot_entry(raw)
+            if not entry or entry["url"] in seen:
+                continue
+            seen.add(entry["url"])
+            if not entry["id"] or any(e["id"] == entry["id"] for e in cleaned):
+                entry["id"] = _next_slot_id(cleaned)
+            cleaned.append(entry)
+        data = load(accounts_dir)
+        data["proxy_slots"] = cleaned
+        save(accounts_dir, data)
+        return cleaned
+
+
+def find_proxy_slot(accounts_dir, slot_id):
+    slot_id = str(slot_id or "").strip()
+    if not slot_id:
+        return None
+    for entry in proxy_slots(accounts_dir):
+        if entry["id"] == slot_id:
+            return entry
+    return None
 
 
 class PanelSessions(object):

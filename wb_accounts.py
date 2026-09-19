@@ -25,8 +25,40 @@ def _retryable(exc):
     return False
 
 
+_OPENER_CACHE = {}
+_OPENER_LOCK = threading.Lock()
+
+
+def opener_for_proxy(proxy):
+    """Build (and cache) a urllib opener bound to one outbound proxy.
+
+    Empty/blank means "direct", signalled by None so callers can fall back to
+    the process default opener. One opener per account keeps each account's
+    traffic pinned to its own exit IP instead of sharing a rotating pool.
+    """
+    proxy = str(proxy or "").strip()
+    if not proxy:
+        return None
+    with _OPENER_LOCK:
+        opener = _OPENER_CACHE.get(proxy)
+        if opener is None:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            )
+            _OPENER_CACHE[proxy] = opener
+        return opener
+
+
+def urlopen(req, timeout=30, proxy=""):
+    """urlopen honouring an optional per-account proxy."""
+    opener = opener_for_proxy(proxy)
+    if opener is None:
+        return urllib.request.urlopen(req, timeout=timeout)
+    return opener.open(req, timeout=timeout)
+
+
 def http_json(url, data=None, method=None, headers=None, timeout=30,
-              retries=3, backoff=1.0, log=None):
+              retries=3, backoff=1.0, log=None, proxy=""):
     """urlopen + json decode with retries.
 
     Chinese networks and CDN edges routinely drop a TLS handshake with
@@ -43,7 +75,7 @@ def http_json(url, data=None, method=None, headers=None, timeout=30,
             headers=headers or {},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urlopen(req, timeout=timeout, proxy=proxy) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             last = exc
@@ -150,6 +182,10 @@ class Account(object):
         self.expires_at = normalize_epoch(data.get("expiresAt")) or jwt_exp(token)
         self.added_at = data.get("addedAt") or time.time()
         self.source = str(data.get("source") or "oauth")
+        self.proxy_slot = str(data.get("proxySlot") or "").strip()
+        self.proxy_legacy = str(data.get("proxy") or "").strip()
+        # Runtime-resolved value; recomputed by AccountPool.apply_proxy_slots().
+        self.proxy = self.proxy_legacy
         self.enabled = data.get("enabled", True)
         self.last_error = str(data.get("lastError") or "")
         self.cooldown_until = float(data.get("cooldownUntil") or 0)
@@ -175,6 +211,8 @@ class Account(object):
             "expiresAt": self.expires_at,
             "addedAt": self.added_at,
             "source": self.source,
+            "proxySlot": self.proxy_slot,
+            "proxy": self.proxy_legacy,
             "enabled": self.enabled,
             "lastError": self.last_error,
             "cooldownUntil": self.cooldown_until,
@@ -193,6 +231,8 @@ class Account(object):
             "enterpriseId": self.enterprise_id,
             "enabled": bool(self.enabled),
             "source": self.source,
+            "proxySlot": self.proxy_slot,
+            "proxy": self.proxy,
             "expiresAt": exp,
             "expiresIn": _human_delta(exp - time.time()) if exp else None,
             "hasRefreshToken": bool(self.refresh_token),
@@ -495,6 +535,13 @@ class AccountPool(object):
                     self.log("account %s unreadable: %s" % (name, exc))
                     continue
                 if account.uid:
+                    # Migration: disabled accounts must not hold an exit slot.
+                    if not account.enabled and account.proxy_slot:
+                        account.proxy_slot = ""
+                        try:
+                            account.save(self.dir)
+                        except Exception:
+                            pass
                     self.accounts.append(account)
             return self.accounts
 
@@ -519,10 +566,15 @@ class AccountPool(object):
                     account.credits = existing.credits
                 if not account.last_checkin and existing.last_checkin:
                     account.last_checkin = existing.last_checkin
+                if not account.proxy_slot and existing.proxy_slot:
+                    account.proxy_slot = existing.proxy_slot
+                if not account.proxy_legacy and existing.proxy_legacy:
+                    account.proxy_legacy = existing.proxy_legacy
                 self.accounts[self.accounts.index(existing)] = account
             else:
                 self.accounts.append(account)
             account.save(self.dir)
+            self.apply_proxy_slots()
             return account
 
     def remove(self, uid):
@@ -600,6 +652,8 @@ class AccountPool(object):
 
             (updated if existing else added).append(uid)
 
+        if added or updated:
+            self.apply_proxy_slots()
         return {
             "added": added,
             "updated": updated,
@@ -611,8 +665,57 @@ class AccountPool(object):
         account = self.get(uid)
         if account is None: return None
         account.enabled = bool(enabled)
-        if enabled: account.clear_error()
+        if enabled:
+            account.clear_error()
+        else:
+            # A disabled account must not hold an exit slot: free it so the
+            # slot can be handed to an active account.
+            account.proxy_slot = ""
         account.save(self.dir)
+        self.apply_proxy_slots()
+        return account.public()
+
+    def set_proxy(self, uid, proxy):
+        account = self.get(uid)
+        if account is None:
+            return None
+        account.proxy_legacy = str(proxy or "").strip()
+        account.save(self.dir)
+        self.apply_proxy_slots()
+        return account.public()
+
+    def apply_proxy_slots(self, slots=None):
+        """Re-resolve every account's runtime `proxy` from its bound slot.
+
+        `proxy_slot` is the persisted source of truth; `proxy` is a derived
+        runtime value so the many outbound call sites need no change.
+        """
+        import wb_settings
+
+        if slots is None:
+            slots = wb_settings.proxy_slots(self.dir)
+        by_id = {entry["id"]: entry for entry in slots if entry.get("enabled")}
+        with self._lock:
+            for account in self.accounts:
+                slot = by_id.get(account.proxy_slot)
+                if slot:
+                    account.proxy = slot["url"]
+                else:
+                    account.proxy = account.proxy_legacy
+
+    def set_proxy_slot(self, uid, slot_id):
+        account = self.get(uid)
+        if account is None:
+            return None
+        slot_id = str(slot_id or "").strip()
+        account.proxy_slot = slot_id
+        if not slot_id:
+            # Selecting "direct" must mean direct. A stale legacy URL left in
+            # place kept routing traffic through it, so the panel showed
+            # direct while the account was still proxied.
+            account.proxy_legacy = ""
+        account.save(self.dir)
+        self.apply_proxy_slots()
         return account.public()
 
     def set_all_enabled(self, enabled, realm=None):
