@@ -227,6 +227,17 @@ a:hover{text-decoration:underline}
 .log-tag.tag-system{background:rgba(100,116,139,.18);color:#94a3b8}
 .log-msg{color:#cbd5e1;flex:1;word-break:break-all;white-space:pre-wrap}
 .log-empty{padding:48px 24px;text-align:center;color:#64748b;font-size:13px;font-family:inherit}
+/* ===== Phone: ≤640px ===== */
+@media (max-width: 640px){
+  header{padding:10px 12px;gap:8px}
+  header > div:first-child{width:100%;gap:8px}
+  h1{font-size:15px;width:100%}
+  h1 span{font-size:11px;margin-left:6px}
+  .main-nav{display:flex;width:100%;gap:2px;padding:3px}
+  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
+  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
+  .meta .meta-secondary{display:none}
+}
 </style>
 <script>
 /* Runs before <body> is parsed, so the page the user last had is the
