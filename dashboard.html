@@ -99,6 +99,10 @@ button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
 button.danger{border-color:rgba(220,38,38,.3);background:rgba(220,38,38,.06);color:var(--bad)}
 button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
 button.mini{padding:3px 9px;font-size:11px}
+.slot-select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px}
+.acct-actions-col{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center}
+.acct-actions-row{display:flex;gap:4px;justify-content:center}
 .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
   backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px;z-index:100}
 .modal-mask.show{display:flex}
@@ -253,6 +257,31 @@ a:hover{text-decoration:underline}
   table.data-cards td:not([data-label])::before{content:none}
   table.data-cards td[colspan]{grid-column:span 6;justify-content:center;text-align:center!important}
   table.data-cards td[colspan]::before{content:none}
+  /* Account card: grouped layout */
+  table.account-cards td:nth-child(1){order:1;grid-column:span 3;justify-content:flex-start}
+  table.account-cards td:nth-child(1)::before,
+  table.account-cards td:nth-child(2)::before,
+  table.account-cards td:nth-child(3)::before{content:none}
+  table.account-cards td:nth-child(2){order:3;grid-column:span 6;flex-direction:column;align-items:flex-start;gap:2px}
+  table.account-cards td:nth-child(3){order:2;grid-column:span 3;justify-content:flex-end}
+  table.account-cards td:nth-child(4){order:4;grid-column:span 6;flex-direction:column;align-items:stretch;gap:4px}
+  table.account-cards td:nth-child(4)::before{font-size:10px}
+  table.account-cards td:nth-child(5){order:5;grid-column:span 6}
+  table.account-cards td:nth-child(6),
+  table.account-cards td:nth-child(7),
+  table.account-cards td:nth-child(8){order:6;grid-column:span 2;flex-direction:column-reverse;
+    align-items:center;justify-content:center;gap:0;padding:4px 0;
+    background:var(--panel2);border-radius:8px}
+  table.account-cards td:nth-child(6)::before,
+  table.account-cards td:nth-child(7)::before,
+  table.account-cards td:nth-child(8)::before{font-size:10px}
+  table.account-cards td.acct-actions{order:7;grid-column:span 6;justify-content:flex-start}
+  table.account-cards td.acct-actions::before{content:none}
+  table.account-cards .acct-actions-col{flex-direction:row;flex-wrap:wrap;align-items:flex-start;
+    justify-content:flex-start;gap:6px}
+  table.account-cards .acct-actions-row{flex-wrap:wrap;gap:6px}
+  table.account-cards .acct-actions button.mini{min-height:32px;padding:6px 12px}
+  table.account-cards .slot-select{max-width:none;width:100%;min-height:40px}
 }
 </style>
 <script>
@@ -1451,26 +1480,26 @@ function accountRow(a){
   const cred = a.credits;
   const credText = cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>';
   return '<tr>'
-    + '<td style="text-align:center;white-space:nowrap">' + realmBadge + '</td>'
-    + '<td style="text-align:left">'
+    + '<td style="text-align:center;white-space:nowrap" data-label="版本">' + realmBadge + '</td>'
+    + '<td style="text-align:left" data-label="账号">'
     +   '<div style="font-weight:600;font-size:13px;color:var(--fg)">' + esc(a.nickname) + '</div>'
     + '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(a.uid.slice(0,8)) + ' · ' + esc(a.source) + ' · 到期 ' + esc(a.expiresIn || '?') + '</div>'
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
     + err + '</td>'
-    + '<td style="text-align:center">' + state + '</td>'
-    + '<td style="text-align:center">' + slotSelectHtml(a) + '</td>'
-    + '<td style="text-align:left;white-space:nowrap">' + credText + '</td>'
-    + '<td style="text-align:right">' + fmt(usage.requests) + '</td>'
-    + '<td style="text-align:right">' + fmt(usage.total_tokens) + '</td>'
-    + '<td style="text-align:right">' + fmt(usage.cached_tokens) + '</td>'
-    + '<td style="text-align:center;white-space:nowrap;vertical-align:middle">'
-    + '<div style="display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center">'
-    +   '<div style="display:flex;gap:4px;justify-content:center">'
+    + '<td style="text-align:center" data-label="状态">' + state + '</td>'
+    + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
+    + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
+    + '<td style="text-align:right" data-label="请求">' + fmt(usage.requests) + '</td>'
+    + '<td style="text-align:right" data-label="总 token">' + fmt(usage.total_tokens) + '</td>'
+    + '<td style="text-align:right" data-label="缓存">' + fmt(usage.cached_tokens) + '</td>'
+    + '<td class="acct-actions" style="text-align:center;white-space:nowrap;vertical-align:middle">'
+    + '<div class="acct-actions-col">'
+    +   '<div class="acct-actions-row">'
     +     '<button class="sec mini" onclick="toggleAccount(&quot;' + uidAttr + '&quot;,' + (!a.enabled) + ', this)">' + (a.enabled ? '停用' : '启用') + '</button>'
     +     '<button class="sec mini" onclick="testAccount(&quot;' + uidAttr + '&quot;, this)">测试</button>'
     +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新</button>'
     +   '</div>'
-    +   '<div style="display:flex;gap:4px;justify-content:center">'
+    +   '<div class="acct-actions-row">'
     +     '<button class="sec mini" onclick="exportOne(&quot;' + uidAttr + '&quot;)">导出</button>'
     +     '<button class="danger mini" onclick="deleteAccount(&quot;' + uidAttr + '&quot;,&quot;' + nameAttr + '&quot;, this)">删除</button>'
     +   '</div>'
@@ -1504,8 +1533,7 @@ function renderAccounts(){
       + '</div>';
     return;
   }
-  box.innerHTML = '<table><thead><tr>'
-  box.innerHTML = '<div class="table-wrap"><table><thead><tr>'
+  box.innerHTML = '<div class="table-wrap"><table class="data-cards account-cards"><thead><tr>'
     + '<th style="text-align:center;width:76px">版本</th>'
     + '<th style="text-align:left">账号</th>'
     + '<th style="text-align:center;width:84px">状态</th>'
@@ -2609,9 +2637,7 @@ function slotSelectHtml(a){
     '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
     + esc(s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
   const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
-  return '<select onchange="setAccountSlot(&quot;' + uidAttr + '&quot;, this.value, this)" '
-    + 'style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;'
-    + 'padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px">'
+  return '<select class="slot-select" onchange="setAccountSlot(&quot;' + uidAttr + '&quot;, this.value, this)">'
     + opts.join('') + '</select>';
 }
 
