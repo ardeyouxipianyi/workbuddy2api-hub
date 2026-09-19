@@ -101,6 +101,8 @@ button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
 button.mini{padding:3px 9px;font-size:11px}
 .slot-select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
   padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px}
+.slot-input{width:100%;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit;font-size:13px}
 .acct-actions-col{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center}
 .acct-actions-row{display:flex;gap:4px;justify-content:center}
 .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
@@ -282,6 +284,12 @@ a:hover{text-decoration:underline}
   table.account-cards .acct-actions-row{flex-wrap:wrap;gap:6px}
   table.account-cards .acct-actions button.mini{min-height:32px;padding:6px 12px}
   table.account-cards .slot-select{max-width:none;width:100%;min-height:40px}
+  /* Forms stack */
+  #pageSettings section > div[style*="display:flex"]{flex-wrap:wrap}
+  #pageSettings input:not([type=checkbox]), #pageSettings select{min-height:40px;font-size:13px}
+  #pageSettings .slot-input{font-size:13px}
+  table.data-cards td[data-label="启用"]{justify-content:space-between}
+  table.data-cards td[data-label="启用"] input[type=checkbox]{width:20px;height:20px}
 }
 </style>
 <script>
@@ -2675,7 +2683,7 @@ function renderProxySlots(){
     box.innerHTML = '<div class="hint" style="color:var(--dim)">还没有代理槽。点击「自动发现 mihomo 端口」或「+ 添加槽位」。</div>';
     return;
   }
-  box.innerHTML = '<div class="table-wrap"><table><thead><tr>'
+  box.innerHTML = '<div class="table-wrap"><table class="data-cards"><thead><tr>'
     + '<th style="width:150px">名称</th>'
     + '<th>代理地址</th>'
     + '<th style="width:90px;text-align:center">启用</th>'
@@ -2684,14 +2692,12 @@ function renderProxySlots(){
     + '</tr></thead><tbody>'
     + PROXY_SLOTS.map((s, i) =>
         '<tr>'
-        + '<td><input value="' + esc(s.name || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value" '
-        +   'style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit"></td>'
-        + '<td><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value" '
-        +   'style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit" class="mono"></td>'
-        + '<td style="text-align:center"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
+        + '<td data-label="名称"><input value="' + esc(s.name || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value" class="slot-input"></td>'
+        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value" class="slot-input mono"></td>'
+        + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
         +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked"></td>'
-        + '<td style="text-align:center">' + (s.bound || 0) + '</td>'
-        + '<td style="text-align:center;white-space:nowrap">'
+        + '<td style="text-align:center" data-label="绑定账号">' + (s.bound || 0) + '</td>'
+        + '<td style="text-align:center;white-space:nowrap" data-label="">'
         +   '<button class="sec mini" onclick="testProxySlot(' + i + ', this)">测试</button> '
         +   '<button class="danger mini" onclick="removeProxySlot(' + i + ')">删除</button>'
         + '</td></tr>'
