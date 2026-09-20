@@ -238,8 +238,9 @@ a:hover{text-decoration:underline}
 @media (max-width: 640px){
   header{padding:10px 12px;gap:8px}
   header > div:first-child{width:100%;gap:8px}
-  h1{font-size:15px;width:100%}
+  h1{font-size:15px;flex:1;min-width:0}
   h1 span{font-size:11px;margin-left:6px}
+  .gh-link{width:40px;height:40px;flex-shrink:0}
   .main-nav{display:flex;width:100%;gap:2px;padding:3px}
   .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
   .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
@@ -3287,20 +3288,20 @@ function renderPerfMatrix(usage, perf){
     const totWall = perf.wall_ms ? ms(perf.wall_ms.avg) : "-";
     const totCache = perf.cache_hit_pct ? (perf.cache_hit_pct.avg.toFixed(1) + "%") : "-";
     const summaryRow = '<tr style="background:rgba(37,99,235,.06);font-weight:600">'
-      + '<td style="text-align:left"><b>全部模型合计 (Total)</b></td>'
-      + '<td style="text-align:center"><span style="color:var(--dim)">—</span></td>'
-      + '<td style="text-align:left"><span style="color:var(--dim)">全部账号</span></td>'
-      + '<td>' + fmt(usage.requests) + '</td>'
-      + '<td>' + (perf.errors
+      + '<td style="text-align:left" data-label="模型"><b>全部模型合计 (Total)</b></td>'
+      + '<td style="text-align:center" data-label="区域"><span style="color:var(--dim)">—</span></td>'
+      + '<td style="text-align:left" data-label="账号"><span style="color:var(--dim)">全部账号</span></td>'
+      + '<td data-label="请求数">' + fmt(usage.requests) + '</td>'
+      + '<td data-label="失败">' + (perf.errors
           ? ('<span style="color:var(--bad)">' + fmt(perf.errors) + '</span>')
           : '<span style="color:var(--dim)">0</span>') + '</td>'
-      + '<td><b style="color:var(--accent)">' + fmt(usage.total_tokens) + '</b></td>'
-      + '<td class="triple">' + tripleTokens(usage.prompt_tokens, usage.completion_tokens, usage.reasoning_tokens) + '</td>'
-      + '<td>' + totTtft + '</td>'
-      + '<td><b style="color:var(--accent2)">' + totTps + '</b></td>'
-      + '<td>' + totWall + '</td>'
-      + '<td>' + totCache + '</td>'
-      + '<td>100%</td>'
+      + '<td data-label="总 Token"><b style="color:var(--accent)">' + fmt(usage.total_tokens) + '</b></td>'
+      + '<td class="triple" data-label="输入 / 输出 / 思考">' + tripleTokens(usage.prompt_tokens, usage.completion_tokens, usage.reasoning_tokens) + '</td>'
+      + '<td data-label="首字延迟">' + totTtft + '</td>'
+      + '<td data-label="生成速度"><b style="color:var(--accent2)">' + totTps + '</b></td>'
+      + '<td data-label="端到端耗时">' + totWall + '</td>'
+      + '<td data-label="缓存命中">' + totCache + '</td>'
+      + '<td data-label="用量占比">100%</td>'
       + '</tr>';
 
     const rows = rowsData.map(m => {
@@ -3370,22 +3371,22 @@ function renderPerfMatrix(usage, perf){
         }).join('');
       }
       return '<tr>'
-        + '<td style="text-align:left" class="mono"><b>' + esc(m.id) + '</b></td>'
-        + '<td style="text-align:center;white-space:nowrap">' + realmCell + '</td>'
-        + '<td style="text-align:left">' + acctCell + '</td>'
-        + '<td>' + fmt(m.requests) + '</td>'
-        + '<td>' + errCell + '</td>'
-        + '<td><b>' + fmt(m.total_tokens) + '</b></td>'
-        + '<td class="triple">' + tripleTokens(m.prompt_tokens, m.completion_tokens, m.reasoning_tokens) + '</td>'
-        + '<td>' + m_ttft + '</td>'
-        + '<td>' + m_tps + '</td>'
-        + '<td>' + m_wall + '</td>'
-        + '<td>' + m_cache + '</td>'
-        + '<td style="min-width:90px"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
+        + '<td style="text-align:left" class="mono" data-label="模型"><b>' + esc(m.id) + '</b></td>'
+        + '<td style="text-align:center;white-space:nowrap" data-label="区域">' + realmCell + '</td>'
+        + '<td style="text-align:left" data-label="账号">' + acctCell + '</td>'
+        + '<td data-label="请求数">' + fmt(m.requests) + '</td>'
+        + '<td data-label="失败">' + errCell + '</td>'
+        + '<td data-label="总 Token"><b>' + fmt(m.total_tokens) + '</b></td>'
+        + '<td class="triple" data-label="输入 / 输出 / 思考">' + tripleTokens(m.prompt_tokens, m.completion_tokens, m.reasoning_tokens) + '</td>'
+        + '<td data-label="首字延迟">' + m_ttft + '</td>'
+        + '<td data-label="生成速度">' + m_tps + '</td>'
+        + '<td data-label="端到端耗时">' + m_wall + '</td>'
+        + '<td data-label="缓存命中">' + m_cache + '</td>'
+        + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
         + '</tr>';
     }).join('');
 
-    matrixEl.innerHTML = '<table><thead><tr>'
+    matrixEl.innerHTML = '<table class="data-cards"><thead><tr>'
       + '<th style="text-align:left">模型名称</th>'
       + '<th style="text-align:center;width:76px">区域</th>'
       + '<th style="text-align:left">账号</th>'
