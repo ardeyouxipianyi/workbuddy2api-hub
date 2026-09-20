@@ -259,6 +259,28 @@ def run_checks(filter_name):
                 "document.querySelector('header').getBoundingClientRect().width"
             )
             check("header-nav-full", nav_w >= hdr_w - 29, (nav_w, hdr_w))
+            # The upstream GitHub link must share the title row and stay
+            # inside the header box instead of wrapping onto its own line.
+            gh = page.evaluate(
+                """
+                (() => {
+                  const a = document.querySelector('.gh-link');
+                  const h = document.querySelector('header');
+                  const t = document.querySelector('header h1');
+                  if(!a || !h || !t) return {ok: false, why: 'missing'};
+                  const ar = a.getBoundingClientRect();
+                  const hr = h.getBoundingClientRect();
+                  const tr = t.getBoundingClientRect();
+                  const sameRow = Math.abs(ar.top - tr.top) < 24;
+                  return {
+                    ok: ar.right <= hr.right + 1 && ar.left >= hr.left - 1 && sameRow,
+                    right: Math.round(ar.right), hdrRight: Math.round(hr.right),
+                    sameRow: sameRow,
+                  };
+                })()
+                """
+            )
+            check("gh-link-header-row", gh["ok"], gh)
 
         if "models" in filter_name or filter_name == "":
             disp = page.evaluate(
@@ -373,6 +395,26 @@ def run_checks(filter_name):
                 "analytics-kpi-wrap",
                 kpi["rows"] >= 3 and kpi["minW"] >= 130 and kpi["clipped"] == 0,
                 kpi,
+            )
+            # The performance matrix moved to its own renderer upstream; it
+            # must still turn into labelled cards on phones.
+            matrix = page.evaluate(
+                """
+                (() => {
+                  const tr = document.querySelector('#perfMatrix tbody tr');
+                  if(!tr) return {cards: false, rows: 0, labelled: 0};
+                  return {
+                    cards: getComputedStyle(tr).display === 'grid',
+                    rows: document.querySelectorAll('#perfMatrix tbody tr').length,
+                    labelled: tr.querySelectorAll('td[data-label]').length,
+                  };
+                })()
+                """
+            )
+            check(
+                "analytics-matrix-cards",
+                matrix["cards"] and matrix["rows"] >= 1 and matrix["labelled"] >= 10,
+                matrix,
             )
             page.screenshot(
                 path=os.path.join(SHOTS, "phone-analytics.png"), full_page=True
