@@ -32,8 +32,8 @@ BASE = ""
 
 def free_port():
     """Pick a free loopback port so we never collide with another service."""
-    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
-        s.bind(("::1", 0))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
@@ -189,7 +189,7 @@ def start_server():
             sys.executable,
             "wb_proxy.py",
             "--host",
-            "::",
+            "127.0.0.1",
             "--port",
             str(PORT),
             "--accounts-dir",
