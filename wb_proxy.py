@@ -1520,10 +1520,7 @@ INTL_UI_ORDER = [
 ]
 def merge_catalog(primary, realm=None):
     r = realm or CURRENT_REALM
-    merged = {}
-    # "all" is the union of both realms. The analytics dashboard lists every
-    # model the gateway has served, so it must not drop the ones that only
-    # one side's catalog knows about.
+    static_by_id = {}
     if r == "all":
         source_static = list(wb_catalog.STATIC_INTL_MODELS) + list(wb_catalog.STATIC_CN_MODELS)
     else:
@@ -1532,26 +1529,47 @@ def merge_catalog(primary, realm=None):
         mid = item.get("id")
         # First catalog wins for a shared id, so the intl entry is not
         # overwritten by its cn counterpart when both are merged.
-        if mid and is_chat_model(mid) and mid not in merged:
-            merged[mid] = dict(item)
+        if mid and is_chat_model(mid) and mid not in static_by_id:
+            static_by_id[mid] = dict(item)
+    live = []
+    seen_live = set()
     for mid, meta in primary or []:
-        if not is_chat_model(mid):
+        if not is_chat_model(mid) or mid in seen_live:
             continue
-        if meta:
-            base = merged.get(mid) or {}
-            base.update(meta)
-            merged[mid] = base
-        elif mid not in merged:
-            merged[mid] = {}
+        seen_live.add(mid)
+        base = static_by_id.get(mid) or {}
+        base.update(meta or {})
+        live.append((mid, base))
+    # Per-exit call is a picker feed: the desktop app's own model list is
+    # exactly what that picker offers, in the order the client shows it.
+    # Advertise that set and order rather than the hardcoded UI_ORDER list,
+    # which goes stale and previously dropped live models (hy4-preview).
+    # Static entries only fill in metadata for shared ids.
+    if live and r != "all":
+        return live
+    # "all" is the analytics view, not a picker: it has to keep reporting every
+    # model the gateway has served, including ones only one exit's catalog
+    # knows about. Headless / Docker installs have no desktop cache at all and
+    # take the same path, falling back to the static tables.
+    merged = {}
+    for mid, meta in live:
+        merged[mid] = meta
+    for mid, meta in static_by_id.items():
+        if mid not in merged:
+            merged[mid] = meta
     order = CN_UI_ORDER if r == "cn" else INTL_UI_ORDER
-    out = []
     if r == "all":
         order = list(INTL_UI_ORDER) + [m for m in CN_UI_ORDER if m not in INTL_UI_ORDER]
     seen = set()
+    out = []
     for mid in order:
         if mid in merged and mid not in seen:
             seen.add(mid)
             out.append((mid, merged[mid]))
+    for mid, meta in merged.items():
+        if mid not in seen:
+            seen.add(mid)
+            out.append((mid, meta))
     return out
 def fetch_models(realm=None):
     r = realm or CURRENT_REALM
@@ -1695,22 +1713,49 @@ def _read_product_config_dir(cache_dir):
             cfg = json.load(fh)
     except Exception as exc:
         return []
-    def find(node):
-        if isinstance(node, dict):
-            models = node.get("models")
-            if isinstance(models, list) and models and isinstance(models[0], dict) and models[0].get("id"):
-                return models
-            for value in node.values():
-                hit = find(value)
-                if hit:
-                    return hit
-        return None
-    models = find(cfg) or []
+    if not isinstance(cfg, dict):
+        return []
+    # id -> full metadata, from the app's global model table (feature flags,
+    # token limits, reasoning config, ...).
+    meta_by_id = {}
+    raw_models = cfg.get("models")
+    if not (isinstance(raw_models, list) and raw_models and isinstance(raw_models[0], dict)):
+        # Newer/older cache shapes nest the table elsewhere; fall back to a
+        # recursive search so the previous behaviour is preserved.
+        def find(node):
+            if isinstance(node, dict):
+                models = node.get("models")
+                if isinstance(models, list) and models and isinstance(models[0], dict) and models[0].get("id"):
+                    return models
+                for value in node.values():
+                    hit = find(value)
+                    if hit:
+                        return hit
+            return None
+        raw_models = find(cfg)
+    for m in raw_models or []:
+        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]:
+            meta_by_id[m["id"]] = m
+    # The picker renders the "cli" agent's model allowlist - NOT the global
+    # /models table, which also lists legacy, internal (codewise/completion),
+    # image and self-hosted models the UI never offers. Prefer the allowlist,
+    # in the order the client shows it, so /v1/models mirrors the picker.
+    allow = None
+    for agent in cfg.get("agents") or []:
+        if isinstance(agent, dict) and agent.get("name") == "cli":
+            ids = agent.get("models")
+            if isinstance(ids, list) and ids:
+                allow = [i for i in ids if isinstance(i, str) and i]
+            break
+    if not allow:
+        return [(mid, meta) for mid, meta in meta_by_id.items()]
     out = []
-    for m in models:
-        mid = m.get("id")
-        if isinstance(mid, str) and mid:
-            out.append((mid, m))
+    seen = set()
+    for mid in allow:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        out.append((mid, meta_by_id.get(mid) or {"id": mid}))
     return out
 def fetch_endpoint_models():
     account = POOL.pick(realm="intl") if POOL else None

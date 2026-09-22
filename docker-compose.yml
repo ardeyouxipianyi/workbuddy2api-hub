@@ -15,3 +15,10 @@ services:
       # 持久化挂载账号凭证与用量流水
       - ./accounts:/app/accounts
       - ./usage:/app/usage
+      # 只读挂载桌面端缓存：容器据此读到与客户端选择器一致的模型目录。
+      # WB_CACHE_DIR 指向宿主机的缓存目录，例如：
+      #   Windows: WB_CACHE_DIR=C:/Users/<you>/.workbuddy
+      #   macOS:   WB_CACHE_DIR=$HOME/.workbuddy
+      # 国际版桌面端目录是 .workbuddy-ai（两个客户端都装了可再加一行同源挂载）。
+      # 不设置时挂到空的 .desktop-cache，代理退回内置静态模型表，不影响启动。
+      - ${WB_CACHE_DIR:-./.desktop-cache}:/root/.workbuddy:ro

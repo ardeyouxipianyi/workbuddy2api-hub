@@ -11,6 +11,9 @@ usage/*.json
 python/
 *.zip
 
+# docker compose 未设置 WB_CACHE_DIR 时的默认挂载点（空目录）
+.desktop-cache/
+
 # Python 编译缓存
 __pycache__/
 *.py[cod]
