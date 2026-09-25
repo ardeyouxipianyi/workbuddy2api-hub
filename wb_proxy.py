@@ -1844,10 +1844,21 @@ def normalize_roles(messages):
     "developer" role (used by the Codex CLI and current SDKs) is the same thing
     as "system", but sending it verbatim fails with code 11128.
 
-    Trailing role:"system" messages (Claude Code mid-conversation-system beta
-    reminders) also drop images downstream: merge any non-leading system
-    message text into the leading system message so images stay visible.
-    Order-preserving, text-only merge; non-text parts are left untouched.
+    NOTE (PR #58 follow-up): an earlier revision merged trailing
+    role:"system" texts into the leading system message. True-link
+    measurement showed the translator (Anthropic -> OpenAI) already
+    rewrites every system reminder as a user text block, so wb-hub never
+    receives a mid-conversation role:"system" on this path (observed
+    pre-normalize shape has zero "system" entries past index 0), and the
+    merge was a no-op here. Worse, it rewrote messages[0] every round,
+    which is the session-affinity / upstream-prefix-cache anchor
+    (derive_affinity_key hashes messages[:2]): two rounds differing only
+    in the trailing reminder produced different affinity keys, pinning
+    each round to a different upstream account and defeating prefix
+    caching. So this function intentionally leaves non-leading system
+    messages alone; if a future client sends a real mid-conversation
+    system role straight at the OpenAI endpoint, revisit with a
+    prefix-stable rewrite (e.g. relabel to user in place).
     """
     out = []
     for m in messages or []:
@@ -1859,35 +1870,7 @@ def normalize_roles(messages):
             item = dict(m)
             item["role"] = "system"
         out.append(item)
-    if not out or not isinstance(out[0], dict) or out[0].get("role") != "system":
-        return out
-    head = out[0]
-    flags = []
-    for m in out[1:]:
-        if isinstance(m, dict) and m.get("role") == "system":
-            t = m.get("content")
-            if isinstance(t, str) and t.strip():
-                hc = head.get("content")
-                if isinstance(hc, str):
-                    head = dict(head)
-                    head["content"] = hc + "\n\n" + t
-                    out[0] = head
-                    flags.append(True)
-                    continue
-            elif t is None or (isinstance(t, str) and not t.strip()):
-                flags.append(False)
-                continue
-        flags.append(False)
-    if not any(flags):
-        return out
-    keep = [out[0]]
-    for m, mg in zip(out[1:], flags):
-        if mg:
-            continue
-        if isinstance(m, dict) and m.get("role") == "system" and (m.get("content") is None or (isinstance(m.get("content"), str) and not m.get("content").strip())):
-            continue
-        keep.append(m)
-    return keep
+    return out
 # ---------------------------------------------------------------------------
 # Fingerprint Sanitization (immunizes against Codex / Claude Code WAF patterns)
 # ---------------------------------------------------------------------------
