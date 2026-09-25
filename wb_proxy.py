@@ -1843,6 +1843,11 @@ def normalize_roles(messages):
     WorkBuddy only knows system / user / assistant / tool. OpenAI's newer
     "developer" role (used by the Codex CLI and current SDKs) is the same thing
     as "system", but sending it verbatim fails with code 11128.
+
+    Trailing role:"system" messages (Claude Code mid-conversation-system beta
+    reminders) also drop images downstream: merge any non-leading system
+    message text into the leading system message so images stay visible.
+    Order-preserving, text-only merge; non-text parts are left untouched.
     """
     out = []
     for m in messages or []:
@@ -1854,7 +1859,35 @@ def normalize_roles(messages):
             item = dict(m)
             item["role"] = "system"
         out.append(item)
-    return out
+    if not out or not isinstance(out[0], dict) or out[0].get("role") != "system":
+        return out
+    head = out[0]
+    flags = []
+    for m in out[1:]:
+        if isinstance(m, dict) and m.get("role") == "system":
+            t = m.get("content")
+            if isinstance(t, str) and t.strip():
+                hc = head.get("content")
+                if isinstance(hc, str):
+                    head = dict(head)
+                    head["content"] = hc + "\n\n" + t
+                    out[0] = head
+                    flags.append(True)
+                    continue
+            elif t is None or (isinstance(t, str) and not t.strip()):
+                flags.append(False)
+                continue
+        flags.append(False)
+    if not any(flags):
+        return out
+    keep = [out[0]]
+    for m, mg in zip(out[1:], flags):
+        if mg:
+            continue
+        if isinstance(m, dict) and m.get("role") == "system" and (m.get("content") is None or (isinstance(m.get("content"), str) and not m.get("content").strip())):
+            continue
+        keep.append(m)
+    return keep
 # ---------------------------------------------------------------------------
 # Fingerprint Sanitization (immunizes against Codex / Claude Code WAF patterns)
 # ---------------------------------------------------------------------------
