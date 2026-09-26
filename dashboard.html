@@ -1127,16 +1127,24 @@ async function toggleActiveGatewayRealm(){
   }
 };
 
-async function initRealm(keepView){
+async function refreshActiveRealm(){
+  // Refresh which exit the gateway is switched to. Deliberately does NOT touch
+  // VIEW_REALM: the view is the user's choice, and an account action taken from
+  // one realm's view must not throw them into the other one. Boot-time view
+  // selection (including the ?view= parameter) lives in initRealm().
   try {
     const r = await getJSON("/realm");
     if(r && r.current) window.ACTIVE_GATEWAY_REALM = r.current;
   } catch(e){}
-  // keepView: refresh the realm data but leave the panel on the realm the user
-  // is looking at. The account actions (国内签到 / 国际活跃打卡) are taken from
-  // one realm's view, so snapping VIEW_REALM back to the active exit moved the
-  // panel to the other realm the moment the action finished.
-  if(!keepView) window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
+}
+
+async function initRealm(){
+  // Boot only - the initial view follows the active exit unless the URL pins it.
+  // Account actions call refreshActiveRealm() instead: reading ?view= here was
+  // what moved the panel back to the other realm after 签到 / 活跃打卡, because
+  // the view buttons do not rewrite the URL.
+  await refreshActiveRealm();
+  window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
   const viewFromUrl = new URLSearchParams(window.location.search).get('view');
   if(viewFromUrl && ['intl', 'cn'].includes(viewFromUrl)) window.VIEW_REALM = viewFromUrl;
   const limitFromUrl = new URLSearchParams(window.location.search).get('limit');
@@ -1442,7 +1450,7 @@ async function doCheckin(btn){
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "签到成功" : (x.error||x.msg))).join("；");
       toast("每日签到: " + summary, res.some(x => x.ok) ? "ok" : "warn");
     }
-    await initRealm(true); loadAccounts(); loadModels();
+    await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
   }catch(e){ toast("签到失败: " + e.message, "bad"); }
   finally { btn.disabled = false; btn.textContent = ot; }
 }
@@ -1457,7 +1465,7 @@ async function doDailyChat(btn){
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
       toast("每日活跃: " + summary, res.some(x => x.ok) ? "ok" : "warn");
     }
-    await initRealm(true); loadAccounts(); loadModels();
+    await refreshActiveRealm(); window.updateUI(); loadAccounts(); loadModels();
   }catch(e){ toast("打卡失败: " + e.message, "bad"); }
   finally { btn.disabled = false; btn.textContent = ot; }
 }
