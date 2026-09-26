@@ -6,6 +6,7 @@ No upstream credentials or outbound network are used.
 import atexit
 import io
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -17,6 +18,8 @@ import urllib.error
 _startup_dir = tempfile.TemporaryDirectory(prefix="model-cooldowns-")
 atexit.register(_startup_dir.cleanup)
 os.environ["ACCOUNTS_DIR"] = _startup_dir.name
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import wb_accounts as accounts
 import wb_proxy as proxy
 

@@ -23,7 +23,7 @@ import time
 FIX = "/tmp/mobile-fixtures"
 SHOTS = "/tmp/mobile-shots"
 PASSWORD = "testpass123"
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the gateway lives one level up
 
 PASS = FAIL = 0
 PORT = 0

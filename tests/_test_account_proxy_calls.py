@@ -11,7 +11,10 @@ through, so a future edit that drops it fails here instead of in production.
 No network access required.
 """
 
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
 

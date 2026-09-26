@@ -1,6 +1,10 @@
 """The low-credit guard parks an account before its balance reaches zero."""
+import os
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
 import wb_settings

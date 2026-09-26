@@ -1,0 +1,39 @@
+name: tests
+
+# Pushes are covered on main only; every other branch (and every pull request,
+# including ones from forks) is covered by pull_request. Listing both events
+# without the branch filter ran each update twice - two full windows + ubuntu
+# matrices for the same commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One failing version must not cancel the others: the point of the matrix
+      # is to see which interpreter breaks.
+      fail-fast: false
+      matrix:
+        include:
+          # The README advertises Python 3.9+, so the floor is exercised on
+          # Linux; the primary platform (Windows) runs the current release.
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run every suite
+        run: python tests/run_all.py
