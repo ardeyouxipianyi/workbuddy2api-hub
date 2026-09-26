@@ -97,7 +97,9 @@ docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
 ```
 
 - **持久化目录**：`./accounts`（账号凭证与活动区域）与 `./usage`（请求流水与指标快照）；
-- **配置参数**：环境变量 `API_KEY`、`PORT`。
+- **配置参数**：环境变量 `API_KEY`、`PORT`；
+- **鉴权**：容器以 `--lan` 启动（监听 `0.0.0.0`），会生成 API Key 写入 `./accounts/settings.json`，并打印在启动日志里：
+  `docker compose logs wb-proxy | grep -i "api key"`。不带这个 Key 调 `/v1` 会收到 401；想用自己的 Key 就传 `-e API_KEY=...`。
 
 ---
 
