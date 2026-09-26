@@ -55,8 +55,16 @@ def main(argv):
         [ROOT] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     have_node = shutil.which("node") is not None
 
+    selected = suites(pattern)
+    if not selected:
+        # A typo in the filter, or every suite deleted/renamed, would otherwise
+        # report "0 passed, 0 failed" and exit 0 - the one result CI must never
+        # treat as a pass.
+        print("  no suite matches %r in %s" % (pattern, HERE))
+        return 2
+
     passed, failed, skipped = [], [], []
-    for name in suites(pattern):
+    for name in selected:
         if name.endswith(".js") and not have_node:
             skipped.append(name)
             print("  [skip] %-38s node is not on PATH" % name)
