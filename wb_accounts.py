@@ -211,6 +211,7 @@ class Account(object):
         self.model_cooldowns = {}
         self.credits = data.get("credits") or None
         self.last_checkin = data.get("lastCheckin") or None
+        self.last_daily_chat = data.get("lastDailyChat") or None
         # Low-credit guard: once the balance reaches this level the account
         # stops being handed out, so it never drops to zero (a zero balance is
         # what makes the upstream start sending nagging SMS). Resolved from the
@@ -248,6 +249,7 @@ class Account(object):
             "cooldownUntil": self.cooldown_until,
             "credits": self.credits,
             "lastCheckin": self.last_checkin,
+            "lastDailyChat": self.last_daily_chat,
         }
 
     def _throttle_snapshot(self, now):
@@ -294,7 +296,9 @@ class Account(object):
             "reserveCredits": int(self.reserve_credits or 0),
             "reserveBlocked": self.reserve_blocked(),
             "lastCheckin": self.last_checkin,
+            "lastDailyChat": self.last_daily_chat,
             "canCheckin": self.realm == "cn",
+            "canDailyChat": self.realm == "intl",
             "machineId": derive_id(self.uid, "machine"),
             "sessionId": derive_id(self.uid, "session"),
         }
@@ -508,6 +512,51 @@ class Account(object):
         today_str = time.strftime("%Y-%m-%d")
         return not str(self.last_checkin).startswith(today_str)
 
+    def can_daily_chat(self):
+        if self.realm != "intl":
+            return False
+        if not self.last_daily_chat:
+            return True
+        today_str = time.strftime("%Y-%m-%d")
+        return not str(self.last_daily_chat).startswith(today_str)
+
+    def daily_chat(self):
+        """国际版每日活跃对话（满足官方客户端每日对话送 30/50 积分活跃奖励规则）。"""
+        if self.realm != "intl":
+            return {"ok": False, "error": "daily chat is only for international accounts"}
+        import wb_proxy
+        url = self.chat_base_url() + wb_proxy.CHAT_PATH
+        headers = self.headers("chat")
+        body = {
+            "model": "deepseek-v4.1-flash",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+            "max_tokens": 10,
+            "reasoning_effort": "none",
+        }
+        req_body = wb_proxy.build_upstream_body(body)
+        data = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urlopen(req, timeout=20, proxy=self.proxy) as resp:
+                _ = resp.read()
+            self.last_daily_chat = time.strftime("%Y-%m-%d %H:%M:%S")
+            if self.path and os.path.exists(os.path.dirname(self.path)):
+                self.save(os.path.dirname(self.path))
+            try:
+                self.fetch_credits()
+            except Exception:
+                pass
+            return {"ok": True, "msg": "每日活跃对话成功完成"}
+        except urllib.error.HTTPError as exc:
+            try:
+                err = exc.read().decode("utf-8", "replace")
+            except Exception:
+                err = str(exc)
+            return {"ok": False, "error": f"HTTP {exc.code}: {err[:100]}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def checkin(self):
         if self.realm != "cn":
             return {"ok": False, "error": "checkin is only available for CN realm accounts"}
@@ -715,6 +764,8 @@ class AccountPool(object):
                     account.credits = existing.credits
                 if not account.last_checkin and existing.last_checkin:
                     account.last_checkin = existing.last_checkin
+                if not account.last_daily_chat and existing.last_daily_chat:
+                    account.last_daily_chat = existing.last_daily_chat
                 if not account.proxy_slot and existing.proxy_slot:
                     account.proxy_slot = existing.proxy_slot
                 if not account.proxy_legacy and existing.proxy_legacy:
@@ -1180,7 +1231,7 @@ EXPORT_VERSION = 1
 # Fields that describe live state rather than the credential itself. They are
 # exported for inspection but never trusted on import: a stale cooldown or a
 # disabled flag from another machine would silently cripple the target pool.
-VOLATILE_FIELDS = ("cooldownUntil", "lastError", "credits", "lastCheckin")
+VOLATILE_FIELDS = ("cooldownUntil", "lastError", "credits", "lastCheckin", "lastDailyChat")
 
 
 def account_to_export(account):

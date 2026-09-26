@@ -129,6 +129,7 @@ class Scheduler:
         refreshed_count = 0
         checkin_count = 0
         travel_count = 0
+        daily_chat_count = 0
 
         for acc in list(self.pool.accounts):
             uid8 = acc.uid[:8] if acc.uid else "?"
@@ -169,7 +170,19 @@ class Scheduler:
                         self.log(f"🌙 {line}")
                     time.sleep(1.0)
 
-        self.log(f"巡检完成：Token保活 {refreshed_count} 个，每日签到 {checkin_count} 个，猫猫日常 {travel_count} 个")
+            # 3. 如果是国际版账号，检查每日活跃对话 (送 30/50 积分福利)
+            if acc.realm == "intl":
+                if acc.can_daily_chat():
+                    self.log(f"检测到国际版账号 [{uid8}] 今日尚未活跃，执行每日活跃打卡对话...")
+                    res = acc.daily_chat()
+                    if res.get("ok"):
+                        daily_chat_count += 1
+                        self.log(f"✓ 账号 [{uid8}] 每日活跃对话成功")
+                    else:
+                        self.log(f"! 账号 [{uid8}] 每日活跃对话失败: {res.get('error') or res.get('msg')}")
+                    time.sleep(1.5)
+
+        self.log(f"巡检完成：Token保活 {refreshed_count} 个，国内签到 {checkin_count} 个，猫猫日常 {travel_count} 个，国际活跃 {daily_chat_count} 个")
 
     def status(self):
         return {

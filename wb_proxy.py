@@ -1335,7 +1335,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "1.5.9",
+        "version": "1.6.0",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -4131,7 +4131,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/1.5.9"
+    server_version = "wb-proxy/1.6.0"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -5098,6 +5098,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_realm(payload)
         if path == "/accounts/checkin":
             return self._route_accounts_checkin(payload)
+        if path == "/accounts/daily-chat":
+            return self._route_accounts_daily_chat(payload)
         if path == "/accounts/login/start":
             return self._route_accounts_login_start(payload)
         if path == "/accounts/login/cancel":
@@ -5288,6 +5290,20 @@ class Handler(BaseHTTPRequestHandler):
             if account is None:
                 continue
             res = account.checkin()
+            results.append({"uid": account.uid, "nickname": account.nickname, **res})
+        return self._json(200, {"results": results, "accounts": account_views()})
+
+    def _route_accounts_daily_chat(self, payload):
+        uid = payload.get("uid")
+        if uid:
+            targets = [POOL.get(uid)]
+        else:
+            targets = [a for a in POOL.accounts if a.realm == "intl" and a.enabled]
+        results = []
+        for account in targets:
+            if account is None:
+                continue
+            res = account.daily_chat()
             results.append({"uid": account.uid, "nickname": account.nickname, **res})
         return self._json(200, {"results": results, "accounts": account_views()})
 

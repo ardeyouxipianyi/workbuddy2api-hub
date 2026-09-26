@@ -481,6 +481,7 @@ a:hover{text-decoration:underline}
     <div class="toolbar">
     <button onclick="openLoginModal()">+ 添加账号 (OAuth)</button>
     <button class="sec" id="btnCheckin" onclick="doCheckin(this)" style="display:none">每日签到 (国内版)</button>
+    <button class="sec" id="btnDailyChat" onclick="doDailyChat(this)" style="display:none">每日活跃打卡 (国际版)</button>
     <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
          信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
          打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
@@ -1057,6 +1058,8 @@ function updateUI(){
 
   const btnCheckin = document.getElementById("btnCheckin");
   if(btnCheckin) btnCheckin.style.display = (window.VIEW_REALM === "cn" ? "inline-block" : "none");
+  const btnDailyChat = document.getElementById("btnDailyChat");
+  if(btnDailyChat) btnDailyChat.style.display = (window.VIEW_REALM === "intl" ? "inline-block" : "none");
 
   // 计算当前绑定与生效的 Key 数量
   const keys = (typeof API_KEY_ROWS !== 'undefined' && API_KEY_ROWS.length) ? API_KEY_ROWS : (window.API_KEY_ROWS || []);
@@ -1437,6 +1440,21 @@ async function doCheckin(btn){
     }
     await initRealm(); loadAccounts(); loadModels();
   }catch(e){ toast("签到失败: " + e.message, "bad"); }
+  finally { btn.disabled = false; btn.textContent = ot; }
+}
+
+async function doDailyChat(btn){
+  btn.disabled = true; const ot = btn.textContent; btn.textContent = "打卡中...";
+  try {
+    const r = await postJSON("/accounts/daily-chat", {});
+    const res = r.results || [];
+    if(!res.length) toast("未发现国际版账号", "warn");
+    else {
+      const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
+      toast("每日活跃: " + summary, res.some(x => x.ok) ? "ok" : "warn");
+    }
+    await initRealm(); loadAccounts(); loadModels();
+  }catch(e){ toast("打卡失败: " + e.message, "bad"); }
   finally { btn.disabled = false; btn.textContent = ot; }
 }
 

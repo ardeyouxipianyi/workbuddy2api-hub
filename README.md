@@ -1,7 +1,7 @@
 # WorkBuddy2API-Hub — 国际版、国内版多账号网关中枢
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.5.9-2496ED?style=flat-square" alt="Version 1.5.9"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.6.0-2496ED?style=flat-square" alt="Version 1.6.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -17,7 +17,8 @@
 - **设备指纹隔离 (`derive_id`)**：以账号 UID 稳定派生机器码与会话标识，防多号关联风控；
 - **OAuth 免客户端登录**：看板点链接完成授权即自动入库；
 - **国内版自动化**：每日签到、成长任务与积分任务自动接取点亮领奖、猫猫日常旅行与连续打卡；
-- **后台定时调度器**：09:00/21:00 签到与旅行 · 22:00 保活 · 01:00 夜猫，国际版自适应为 Token 集中保活；
+- **国际版每日活跃打卡**：自动向国际版官方通道发送轻量对话，全自动领满官方每日活跃 30/50 积分奖励；
+- **后台定时调度器**：09:00/21:00 国内签到旅行与国际版活跃打卡 · 22:00 保活 · 01:00 夜猫；
 - **双协议支持**：Chat Completions 与 Responses API（Codex / Claude Code）；
 - **Web 看板**：指标卡片、模型性能与用量大表、实时请求流水一屏可查。
 
@@ -120,13 +121,13 @@ docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
 - **成长任务与积分任务**：自动批量接取未接任务，构造规范行为事件上报点亮（画布创建、灵感案例、模板使用、模型体验、多轮对话等 14 项），并自动领奖入账；
 - **猫猫日常**：自动检查旅行状态，在家自动派出、归来自动领奖。
 
-### 4. 后台常驻定时调度器 (Scheduler)
+### 4. 后台常驻定时调度器 (Scheduler) 与每日自动化
 常驻后台，每日按固定整点执行自动化运维排程：
 
-- **每日 09:00 & 21:00**：国内版账号自动签到与猫猫旅行闭环；
+- **每日 09:00 & 21:00**：国内版账号自动签到与猫猫旅行闭环；国际版账号自动执行每日活跃打卡对话（领官方每日 30/50 积分福利）；
 - **每日 22:00**：集中扫描全库账号，Token 剩余寿命不足 2 小时自动调用 Refresh Token 保活；
 - **每日 01:00**：深夜时段自动执行夜猫子任务；
-- **国际版动态自适应**：切换至国际版视图时，调度器自动隐藏签到/猫猫逻辑，专职执行 Token 自动保活与凭证常驻。
+- **国际版动态自适应**：切换至国际版视图时，看板顶部提供「每日活跃打卡 (国际版)」一键触发按钮。
 
 ### 5. 保留积分（避免余额被用尽）
 看板「设置 → 保留积分」可设定一个最低余额，账号剩余积分低于该值时不再接单，账号行会显示「保留积分」标记。
@@ -192,6 +193,13 @@ export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 ---
 
 ## 六、版本更新记录 (Changelog)
+
+### v1.6.0
+
+- **国际版每日活跃自动打卡领 30/50 积分**（issue #59）：官方国际站订阅规则规定「通过客户端发起有效对话可领每日活跃 30 积分（Pro 为 50 积分），网页端对话不计入」。现为国际版账号新增每日活跃自动化支持：
+  - 后台调度器排程自动在 09:00 / 21:00 巡检时为当日未活跃的国际版账号发送一条轻量微型对话（默认走官方 `WB` 客户端出站标头与低消耗模型）；
+  - 看板切换至国际版视图时，顶部工具栏提供「每日活跃打卡 (国际版)」一键触发按钮；
+  - 严格记录 `lastDailyChat`，保证每个账号每天仅触发一次，不浪费额度。
 
 ### v1.5.9
 
