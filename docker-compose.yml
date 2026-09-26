@@ -5,6 +5,7 @@ services:
     container_name: wb-proxy
     restart: unless-stopped
     ports:
+      # 左侧宿主端口可自选；右侧是容器内监听端口，必须与下面的 PORT 一致
       - "8788:8788"
     environment:
       - HOST=0.0.0.0
