@@ -97,7 +97,10 @@ docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
 ```
 
 - **持久化目录**：`./accounts`（账号凭证与活动区域）与 `./usage`（请求流水与指标快照）；
-- **配置参数**：环境变量 `API_KEY`、`PORT`。
+- **配置参数**：环境变量 `API_KEY`、`PORT`；
+- **改 `PORT` 要同步改端口映射**：`PORT` 只决定容器内监听哪个端口，`-p HOST:CONTAINER` 的**右侧必须与之一致**，例如 `-e PORT=9000 -p 9000:9000`；只改 `PORT` 而映射仍是 `8788:8788`，请求会打到没人监听的端口上。用 compose 时 `ports` 与 `PORT` 要同时改（默认的 `8788:8788` + `PORT=8788` 本来就一致）。
+- **鉴权**：容器以 `--lan` 启动（监听 `0.0.0.0`），会生成 API Key 写入 `./accounts/settings.json`，并打印在启动日志里：
+  `docker compose logs wb-proxy | grep -i "api key"`。不带这个 Key 调 `/v1` 会收到 401；想用自己的 Key 就传 `-e API_KEY=...`。
 
 ---
 
