@@ -7,9 +7,12 @@ route changed underneath it. Nothing would look broken, which is what makes
 it worth a test.
 """
 
+import os
 import shutil
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
 import wb_settings

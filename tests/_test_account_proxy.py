@@ -11,7 +11,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault(
     "ACCOUNTS_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "_acc_proxy"),

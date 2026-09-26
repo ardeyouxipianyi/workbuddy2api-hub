@@ -1,7 +1,11 @@
 """The public health flag follows the key check used by /v1 requests."""
+import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as proxy
 import wb_settings as settings

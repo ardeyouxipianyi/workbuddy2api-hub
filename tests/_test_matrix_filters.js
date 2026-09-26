@@ -11,7 +11,7 @@
  */
 const path = require('path');
 const fs = require('fs');
-const html = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
 const blocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
 const code = blocks.join('\n');
 

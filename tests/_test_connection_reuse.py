@@ -25,7 +25,8 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PY = os.path.join(HERE, "python", "python.exe")
+ROOT = os.path.dirname(HERE)          # the gateway lives one level up
+PY = os.path.join(ROOT, "python", "python.exe")
 if not os.path.exists(PY):
     PY = sys.executable
 
@@ -60,9 +61,9 @@ with open(os.path.join(store, "settings.json"), "w", encoding="utf-8") as fh:
                              "enabled": True}]}, fh)
 
 proc = subprocess.Popen(
-    [PY, "wb_proxy.py", "--port", str(port), "--host", "127.0.0.1",
+    [PY, os.path.join(ROOT, "wb_proxy.py"), "--port", str(port), "--host", "127.0.0.1",
      "--accounts-dir", store],
-    cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+    cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
     env=dict(os.environ, WB_PROXY_USAGE_DIR=os.path.join(work, "usage")),
 )
 
