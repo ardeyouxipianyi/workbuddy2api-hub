@@ -1199,12 +1199,10 @@ async function switchViewRealm(r){
   window.VIEW_REALM = r;
   RECENT_PAGE = 1;
   window.updateUI();
-  await loadAccounts();
-  await loadModels();
-  await loadGrowthTasks();
-  await loadSchedulerStatus();
-  await loadAnalytics();
-  await refresh();
+  // 并行发起，不要逐个 await：国内版的成长任务一次要约 2 秒（上游两个接口），
+  // 串行排队时后面那些毫秒级的用量接口全被它堵着，切过去看着就是"过几秒才刷新"。
+  await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                     loadSchedulerStatus(), loadAnalytics(), refresh()]);
 };
 
 async function toggleActiveGatewayRealm(){
@@ -1215,9 +1213,8 @@ async function toggleActiveGatewayRealm(){
     toast("网关默认上游已切换并永久保存为: " + (window.ACTIVE_GATEWAY_REALM === "intl" ? "国际版" : "国内版"));
     window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
     window.updateUI();
-    await loadAccounts();
-    await loadModels();
-    await refresh();
+    await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                       loadSchedulerStatus(), loadAnalytics(), refresh()]);
   }catch(e){
     alert("切换失败: " + e.message);
   }
@@ -2271,15 +2268,24 @@ async function doImportDesktop(btn, path, realm){
 }
 
 /* ------------------------------- dashboard ------------------------------ */
-let REFRESH_BUSY = false;
+let REFRESH_RUNNING = false;
+let REFRESH_QUEUED = false;
+let REFRESH_GEN = 0;
 async function refresh(){
-  // 5 秒轮询：上一轮尚未返回就跳过本轮，避免请求堆积把服务端拖慢
-  if(REFRESH_BUSY) return;
-  REFRESH_BUSY = true;
-  try { await refreshInner(); }
-  finally { REFRESH_BUSY = false; }
+  // 5 秒轮询。撞上正在飞的那一轮时**排队补跑**，而不是直接丢掉：早先的实现是
+  // `if(REFRESH_BUSY) return;`，切区域/切账号那一下如果正好撞上轮询在飞，这次
+  // 刷新就没了下文，只能干等下一个 5 秒周期——"点了要过几秒才变"就是这么来的。
+  REFRESH_GEN++;
+  if(REFRESH_RUNNING){ REFRESH_QUEUED = true; return; }
+  REFRESH_RUNNING = true;
+  const gen = REFRESH_GEN;
+  try { await refreshInner(gen); }
+  finally {
+    REFRESH_RUNNING = false;
+    if(REFRESH_QUEUED){ REFRESH_QUEUED = false; refresh(); }
+  }
 }
-async function refreshInner(){
+async function refreshInner(gen){
   let usage, recent, perf;
   try{
     [usage, recent, perf] = await Promise.all([
@@ -2287,11 +2293,16 @@ async function refreshInner(){
       getJSON('/usage/recent?limit=' + RECENT_LIMIT + '&page=' + RECENT_PAGE + '&realm=' + encodeURIComponent(window.VIEW_REALM)),
       getJSON('/usage/perf?realm=' + encodeURIComponent(window.VIEW_REALM)),
     ]);
+    // 取数期间又发起了更新的一轮（例如刚切了区域），这批结果已经过期，
+    // 直接扔掉，交给排队的那一轮渲染，免得把旧区域的数字画上去。
+    if(gen !== REFRESH_GEN) return;
     document.getElementById('statusDot').className = 'dot';
   }catch(e){
-    document.getElementById('statusDot').className = 'dot err';
-    if(String(e.message) !== 'unauthorized'){
-      document.getElementById('meta').innerHTML = '<b>无法连接反代</b>';
+    if(gen === REFRESH_GEN){
+      document.getElementById('statusDot').className = 'dot err';
+      if(String(e.message) !== 'unauthorized'){
+        document.getElementById('meta').innerHTML = '<b>无法连接反代</b>';
+      }
     }
     return;
   }
@@ -2578,13 +2589,12 @@ let PANEL_TIMERS = [];
 async function startDashboard(){
   if(PANEL_READY) return;
   PANEL_READY = true;
+  // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
+  // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
   await loadSettings();
   await initRealm();
-  await loadAccounts();
-  await loadModels();
-  await loadGrowthTasks();
-  await loadSchedulerStatus();
-  await refresh();
+  await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                     loadSchedulerStatus(), refresh()]);
   updateRecentLimitButtons();
   // The head script already resolved this before first paint; re-apply it
   // here so the data loaders for the active page actually run.
