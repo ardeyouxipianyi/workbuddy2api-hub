@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from wb_fingerprint import derive_id, generate_request_id
+import wb_atrest
 import wb_identity
 import wb_settings
 import wb_webagent
@@ -187,12 +188,60 @@ def normalize_epoch(value):
         number /= 1000.0
     return int(number)
 
-def detect_realm_from_token(token, domain=None):
+#: token / 域名里能认出区域的字样。国内版历史上换过出口：copilot.tencent.com →
+#: codebuddy.cn → workbuddy.cn（新版国内客户端的 JWT issuer 就是
+#: https://www.workbuddy.cn/…），三个都得认；只认前两个会把 workbuddy.cn 的
+#: 国内账号判成国际版——手动导入 JSON 时"明明是国内的却进了国际版"就是这么来的。
+CN_REALM_MARKERS = ("copilot.tencent.com", "codebuddy.cn", "workbuddy.cn")
+INTL_REALM_MARKERS = ("workbuddy.ai", "codebuddy.ai")
+REALM_MARKERS = {"cn": CN_REALM_MARKERS, "intl": INTL_REALM_MARKERS}
+
+def realm_evidence(token, domain=None):
+    """从 token / 域名里看区域，看不出返回 None（不要瞎猜成 intl）。
+
+    先看 token 自己的 issuer，再看域名：域名是客户端随手记下来的字段，可能过期
+    或干脆是另一边的（同一台机器切区登录过就会这样），token 才是要拿去请求的
+    那一串，冲突时以它为准。
+    """
     iss = jwt_issuer(token).lower()
-    dom = str(domain or "").lower()
-    if "copilot.tencent.com" in dom or "codebuddy.cn" in dom or "copilot.tencent.com" in iss or "codebuddy.cn" in iss:
+    if any(marker in iss for marker in CN_REALM_MARKERS):
         return "cn"
-    return "intl"
+    if any(marker in iss for marker in INTL_REALM_MARKERS):
+        return "intl"
+    dom = str(domain or "").lower()
+    if any(marker in dom for marker in CN_REALM_MARKERS):
+        return "cn"
+    if any(marker in dom for marker in INTL_REALM_MARKERS):
+        return "intl"
+    return None
+
+def detect_realm_from_token(token, domain=None):
+    return realm_evidence(token, domain) or "intl"
+
+def domain_for_realm(realm, domain):
+    """把域名对齐到区域：域名写着另一个区域时换成该区域的规范域名。
+
+    出站请求的 X-Domain 头跟着它走，区域既然以 token 为准，就不能让一个过期
+    域名再把请求带回另一边的出口。域名本身看不出区域时原样保留。
+    """
+    dom = str(domain or "").strip()
+    other = "intl" if realm == "cn" else "cn"
+    if dom and not any(marker in dom.lower() for marker in REALM_MARKERS[other]):
+        return dom
+    return get_realm_config(realm)["domain"]
+
+def desktop_effective_realm(hint, token, domain=None):
+    """桌面凭据归哪个区域：token / 域名说了算，文件名只作兜底。
+
+    文件名（workbuddy-desktop.info → 国内、workbuddy-desktop-ai.info → 国际）
+    只是客户端两套安装的默认约定：同一个文件里完全可能登录另一个区域的账号
+    （切区登录就是这么用的）。按 token 判定才不会把国内账号塞进国际版列表——
+    那种账号导入后每个请求都会打到错区域的出口上。
+    """
+    evidence = realm_evidence(token, domain)
+    if evidence:
+        return evidence
+    return hint if hint in ("intl", "cn") else "intl"
 
 class Account(object):
     def __init__(self, data, path=None):
@@ -1304,19 +1353,26 @@ class AccountPool(object):
             blob = json.load(fh)
         auth = blob.get("auth") or {}
         profile = blob.get("account") or {}
-        token = str(auth.get("accessToken") or "")
+        token, key = desktop_decrypt_tokens(auth, log=self.log)
         if not token: raise RuntimeError("no accessToken in %s" % path)
-        detected_realm = realm or detect_realm_from_token(token, auth.get("domain"))
+        detected_realm = desktop_effective_realm(realm, token, auth.get("domain"))
+        if realm and detected_realm != realm:
+            self.log("desktop credential %s is a %s account (file hints %s) - importing as %s"
+                     % (os.path.basename(path), detected_realm, realm, detected_realm))
         cfg = get_realm_config(detected_realm)
+        nickname = profile.get("nickname")
+        if key is not None and wb_atrest.is_envelope(nickname):
+            # 国内版桌面端把昵称也一起加密了，能解就顺手解出来，省得只显示 UID 前缀
+            nickname = wb_atrest.decrypt_field(key, nickname) or ""
         account = Account({
             "uid": profile.get("uid") or jwt_uid(token),
-            "nickname": profile.get("nickname") or "",
-            "domain": auth.get("domain") or cfg["domain"],
+            "nickname": nickname if isinstance(nickname, str) else "",
+            "domain": domain_for_realm(detected_realm, auth.get("domain")),
             "realm": detected_realm,
             "platform": "CLI",
             "enterpriseId": profile.get("enterpriseId") or "",
             "accessToken": token,
-            "refreshToken": auth.get("refreshToken") or "",
+            "refreshToken": desktop_refresh_token(auth, key),
             "expiresAt": normalize_epoch(auth.get("expiresAt")) or jwt_exp(token),
             "source": source,
             "enabled": True,
@@ -1326,6 +1382,42 @@ class AccountPool(object):
             try: account.checkin()
             except Exception: pass
         return account
+
+def desktop_atrest_key(force=False, log=None):
+    """拿到桌面端 at-rest 密钥（内存里有就直接用，没有才去进程内存里找回）。
+
+    只有真的遇到加密信封才会走到这里，所以旧客户端 / 明文凭据完全不受影响。
+    回收失败（客户端没开、系统不是 Windows、权限不够）时抛 wb_atrest.AtRestError，
+    由调用方翻译成给用户看的话。
+    """
+    return wb_atrest.recover_key(force=force, log=log or (lambda msg: None))
+
+
+def desktop_decrypt_tokens(auth, log=None):
+    """返回 (accessToken 明文, 密钥或 None)。
+
+    桌面客户端 2026-09-24 之后把 token 存成 `$wbEncrypted` 信封，这里统一在
+    读取处解密；仍然是明文的旧客户端原样返回、不去碰密钥。
+    """
+    raw = auth.get("accessToken")
+    if not wb_atrest.is_envelope(raw):
+        return str(raw or ""), None
+    key = desktop_atrest_key(log=log)
+    return wb_atrest.decrypt_field(key, raw) or "", key
+
+
+def desktop_refresh_token(auth, key):
+    """refreshToken 同样可能是信封；解不开时留空（有 accessToken 就还能跑）。"""
+    raw = auth.get("refreshToken")
+    if not wb_atrest.is_envelope(raw):
+        return raw if isinstance(raw, str) else ""
+    if key is None:
+        return ""
+    try:
+        return wb_atrest.decrypt_field(key, raw) or ""
+    except Exception:
+        return ""
+
 
 def desktop_auth_dirs():
     """Directories where the desktop client may keep its *.info credentials.
@@ -1373,8 +1465,13 @@ def scan_desktop_credentials():
     Read-only: nothing is added to the pool. The dashboard shows the result
     and lets the user decide which ones to import, so the proxy never
     silently adopts the desktop client's login.
+
+    桌面端加密之后（2026-09-24 起）扫描要多分辨一种情况：凭据是加密信封，
+    得先把密钥回收回来才能读。这里只查内存里已有的密钥，不触发回收（回收要
+    扫客户端进程内存，得由用户在弹窗里显式点一次），所以扫描始终是秒回的。
     """
     found = []
+    key = None
     for path, realm in desktop_credential_candidates():
         cfg = get_realm_config(realm)
         item = {
@@ -1385,6 +1482,8 @@ def scan_desktop_credentials():
             "domain": cfg["domain"],
             "readable": False,
             "valid": False,
+            "encrypted": False,
+            "needsKey": False,
             "uid": "",
             "nickname": "",
             "expiresAt": 0,
@@ -1395,18 +1494,43 @@ def scan_desktop_credentials():
                 blob = json.load(fh)
             auth = blob.get("auth") or {}
             profile = blob.get("account") or {}
-            token = str(auth.get("accessToken") or "")
+            raw = auth.get("accessToken")
             item["readable"] = True
+            if wb_atrest.is_envelope(raw):
+                item["encrypted"] = True
+                if key is None:
+                    try:
+                        key = wb_atrest.cached_key()
+                    except Exception:
+                        key = None
+                if key is None:
+                    item["needsKey"] = True
+                    item["error"] = "凭据已加密：先点「回收密钥」，再回来导入"
+                    found.append(item)
+                    continue
+                token = wb_atrest.decrypt_field(key, raw) or ""
+            else:
+                token = str(raw or "")
             if not token:
                 item["error"] = "no accessToken inside the file"
                 found.append(item)
                 continue
+            nickname = profile.get("nickname")
+            if key is not None and wb_atrest.is_envelope(nickname):
+                nickname = wb_atrest.decrypt_field(key, nickname)
             exp = normalize_epoch(auth.get("expiresAt")) or jwt_exp(token) or 0
+            # 区域以 token 为准（文件名只兜底），跟导入时用的是同一套判断，
+            # 免得列表里标着国内版、导入却跑进国际版
+            item_realm = desktop_effective_realm(realm, token, auth.get("domain"))
+            item_cfg = get_realm_config(item_realm)
             item.update({
                 "valid": True,
                 "uid": profile.get("uid") or jwt_uid(token),
-                "nickname": profile.get("nickname") or "",
-                "domain": auth.get("domain") or cfg["domain"],
+                "nickname": nickname if isinstance(nickname, str) else "",
+                "realm": item_realm,
+                "realmName": item_cfg["name"],
+                "realmHint": realm if item_realm != realm else "",
+                "domain": domain_for_realm(item_realm, auth.get("domain")),
                 "expiresAt": exp,
                 "expiresIn": _human_delta(exp - time.time()) if exp else None,
             })
@@ -1540,8 +1664,21 @@ def normalise_import_row(row, realm=None):
     if token.count(".") != 2:
         raise ValueError("accessToken is not a JWT")
 
-    detected = str(realm or pick("realm") or "").strip().lower()
-    if detected not in ("intl", "cn"):
+    # Where the account belongs. A realm forced by the caller still wins (that
+    # is what the API option is for), otherwise the token/domain decides: a row
+    # carrying a stale "realm" (an account once filed under the wrong region,
+    # then exported again) must not keep dragging itself back there, and the
+    # wrong region sends every request to the wrong upstream.
+    forced = str(realm or "").strip().lower()
+    evidence = realm_evidence(token, pick("domain"))
+    row_realm = str(pick("realm") or "").strip().lower()
+    if forced in ("intl", "cn"):
+        detected = forced
+    elif evidence:
+        detected = evidence
+    elif row_realm in ("intl", "cn"):
+        detected = row_realm
+    else:
         detected = detect_realm_from_token(token, pick("domain"))
     cfg = get_realm_config(detected)
 
@@ -1553,7 +1690,7 @@ def normalise_import_row(row, realm=None):
     return {
         "uid": uid,
         "nickname": str(pick("nickname") or ""),
-        "domain": str(pick("domain") or cfg["domain"]),
+        "domain": domain_for_realm(detected, pick("domain")),
         "realm": detected,
         "platform": str(pick("platform") or "CLI"),
         "enterpriseId": str(pick("enterpriseId") or ""),

@@ -483,10 +483,10 @@ a:hover{text-decoration:underline}
     <button class="sec" id="btnCheckin" onclick="doCheckin(this)" style="display:none">每日签到 (国内版)</button>
       <button class="sec" id="btnDailyChat" onclick="doDailyChat(this)" style="display:none">每日活跃打卡 (国际版)</button>
       <button class="sec" id="btnDailyChatWeb" onclick="doDailyChatWeb(this)" style="display:none">网页通道打卡 (国际版)</button>
-    <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
-         信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
-         打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
-    <!-- <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button> -->
+    <!-- 桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted 信封）。
+         网关现在会从正在运行的桌面端进程内存里回收静态密钥来解密（只读、密钥
+         只留在内存里，实现见 wb_atrest.py），所以这个入口重新放出来。 -->
+    <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button>
     <button class="sec" onclick="exportAccounts(this)">导出账号</button>
     <button class="sec" onclick="openImport()">导入账号</button>
     <button class="sec" onclick="fetchCredits(this)">刷新积分</button>
@@ -2137,7 +2137,7 @@ async function scanDesktop(btn){
     const acct = await getJSON('/accounts?realm=all').catch(() => ({accounts: []}));
     window.SCAN_POOL = new Set((acct.accounts || []).map(a => a.uid));
     const r = await postJSON('/accounts/import/desktop', {});
-    renderDesktopScan(r.detected || []);
+    renderDesktopScan(r.detected || [], r.atrest || null);
   }catch(e){
     const body = document.getElementById('desktopScanBody');
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
@@ -2164,7 +2164,7 @@ async function refreshDesktopScan(btn){
   if(body) body.innerHTML = '<p class="hint">正在检测本机桌面客户端账号…</p>';
   try{
     const r = await postJSON('/accounts/import/desktop', {});
-    renderDesktopScan(r.detected || []);
+    renderDesktopScan(r.detected || [], r.atrest || null);
   }catch(e){
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
   }finally{
@@ -2172,22 +2172,63 @@ async function refreshDesktopScan(btn){
   }
 }
 
-function renderDesktopScan(list){
+/* at-rest 密钥：桌面端把 token 加密存了，得先从客户端进程内存里把静态密钥
+   找回来才能解密导入。密钥只留在网关进程内存里，不落盘、不写日志。 */
+async function recoverAtrestKey(btn){
+  const idle = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在扫描 WorkBuddy.exe 内存…';
+  try{
+    const r = await postJSON('/accounts/import/desktop', {recoverKey: true});
+    if(!r.ok){ throw new Error(r.msg || '回收失败'); }
+    toast('密钥已回收，正在重新扫描');
+    await refreshDesktopScan();
+  }catch(e){
+    toast('回收失败: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = idle;
+    const tip = document.getElementById('atrestTip');
+    if(tip){
+      tip.innerHTML = '回收失败：' + esc(e.message)
+        + '<br><span style="color:var(--dim)">请确认 WorkBuddy 桌面客户端正在运行并已登录；'
+        + '权限不足时可以管理员身份运行网关再试一次。</span>';
+    }
+  }
+}
+
+function renderAtrestBar(atrest, list){
+  if(!atrest) return '';
+  if(atrest.keyCached){
+    return '<div class="hint" style="margin:0 0 12px;color:var(--accent2)">解码密钥已就绪（keyId '
+      + esc(atrest.keyId || '-') + '），加密凭据可直接导入。</div>';
+  }
+  if(!list.some(d => d.needsKey)) return '';
+  let html = '<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;'
+    + 'padding:12px 14px;margin-bottom:14px;font-size:13px">'
+    + '<b>检测到加密凭据</b><div class="hint" style="margin:6px 0 8px" id="atrestTip">'
+    + '桌面客户端把 token 加密存储了，需要从正在运行的 WorkBuddy.exe 进程内存里回收静态密钥'
+    + '（只读，密钥只留在网关内存里）。通常几秒钟，内存大时要十几秒。</div>';
+  if(atrest.huntSupported){
+    html += '<button class="primary mini" onclick="recoverAtrestKey(this)">回收密钥</button>';
+  }else{
+    html += '<div class="hint" style="color:var(--warn)">当前系统（' + esc(atrest.platform)
+      + '）不支持进程内存回收，请改用「+ 添加账号 (OAuth)」。</div>';
+  }
+  return html + '</div>';
+}
+
+function renderDesktopScan(list, atrest){
   const body = document.getElementById('desktopScanBody');
   if(!body) return;
   const valid = list.filter(d => d.valid);
   const bad = list.filter(d => !d.valid);
+  const needKey = bad.filter(d => d.needsKey);
+  const broken = bad.filter(d => !d.needsKey);
   // Use every account across both realms: the visible list is filtered by the
   // current view, so an earlier import could otherwise look "not imported".
   const already = window.SCAN_POOL && window.SCAN_POOL.size
     ? window.SCAN_POOL
     : new Set((window.ACCOUNTS || []).map(a => a.uid));
-
-  if(!list.length){
-    body.innerHTML = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
-      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
-    return;
-  }
 
   const section = (title, items, cls) => {
     let html = '<div style="margin:14px 0 6px;font-size:12px;font-weight:600" class="' + cls + '">'
@@ -2219,19 +2260,41 @@ function renderDesktopScan(list){
     return html;
   };
 
-  let html = section('国际版 (Global) · www.workbuddy.ai',
-                     valid.filter(d => d.realm !== 'cn'), '');
-  html += section('国内版 (China) · copilot.tencent.com',
-                  valid.filter(d => d.realm === 'cn'), '');
+  let html = renderAtrestBar(atrest, list);
+  if(!list.length && !html){
+    body.innerHTML = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
+      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
+    return;
+  }
+  if(list.length){
+    html += section('国际版 (Global) · www.workbuddy.ai',
+                    valid.filter(d => d.realm !== 'cn'), '');
+    html += section('国内版 (China) · copilot.tencent.com',
+                    valid.filter(d => d.realm === 'cn'), '');
+  }
 
-  if(bad.length){
+  if(needKey.length){
+    html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">'
+      + '待解码的凭证（加密存储）</div>';
+    html += '<table><tbody>';
+    needKey.forEach(d => {
+      html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
+        + '<td style="color:var(--dim);font-size:12px;text-align:right">需要先回收密钥</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  if(broken.length){
     html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">无法读取的凭证</div>';
     html += '<table><tbody>';
-    bad.forEach(d => {
+    broken.forEach(d => {
       html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
         + '<td style="color:var(--warn);font-size:12px;text-align:right">' + esc(d.error || '未知原因') + '</td></tr>';
     });
     html += '</tbody></table>';
+  }
+  if(!html){
+    html = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
+      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
   }
   body.innerHTML = html;
   // Wire the import buttons through event delegation (see renderDesktopScan).
@@ -2255,7 +2318,7 @@ async function doImportDesktop(btn, path, realm){
     try {
       const s = await postJSON('/accounts/import/desktop', {});
       if(s.pool_uids) window.SCAN_POOL = new Set(s.pool_uids);
-      renderDesktopScan(s.detected || []);
+      renderDesktopScan(s.detected || [], s.atrest || null);
     } catch(e2) { /* keep the refreshed toasts; list will refresh on next scan */ }
     // The scan list is filtered by the current view; tell the user where the
     // account actually landed so this never looks like a no-op.

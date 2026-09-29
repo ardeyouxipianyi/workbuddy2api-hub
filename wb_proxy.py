@@ -36,6 +36,7 @@ import urllib.error
 import urllib.request
 import uuid
 import wb_accounts
+import wb_atrest
 import wb_catalog
 import wb_settings
 import wb_webtools
@@ -6322,7 +6323,25 @@ class Handler(BaseHTTPRequestHandler):
         #   {}                     -> scan only (read-only, nothing imported)
         #   {"path": "..."}        -> import that credential
         #   {"all": true}          -> import everything the scan found
+        #   {"recoverKey": true}   -> recover the at-rest key from the desktop client
         target_path = payload.get("path")
+        if payload.get("recoverKey"):
+            try:
+                key = wb_accounts.desktop_atrest_key(
+                    force=bool(payload.get("force")), log=lambda m: log(m, tag="accounts"))
+            except Exception as exc:
+                log("at-rest key recovery failed: %s" % exc, level="WARN", tag="accounts")
+                return self._json(200, {"ok": False, "msg": str(exc),
+                                        "atrest": wb_atrest.status()})
+            return self._json(200, {
+                "ok": True,
+                "keyId": wb_atrest.derive_key_id(key),
+                "msg": "已从桌面客户端进程回收密钥（只留在内存里）",
+                "atrest": wb_atrest.status(),
+            })
+        if payload.get("forgetKey"):
+            wb_atrest.forget_key()
+            return self._json(200, {"ok": True, "atrest": wb_atrest.status()})
         if target_path:
             realm = payload.get("realm")
             try:
@@ -6345,6 +6364,7 @@ class Handler(BaseHTTPRequestHandler):
             "detected": desktop_credential_scan(),
             "accounts": account_views(),
             "pool_uids": [a.uid for a in POOL.accounts],
+            "atrest": wb_atrest.status(),
         })
 
     def _route_accounts_refresh(self, payload):
