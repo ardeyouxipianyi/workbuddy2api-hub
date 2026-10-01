@@ -1,7 +1,7 @@
 services:
   wb-proxy:
     build: .
-    image: ardeyouxipianyi/workbuddy2api-hub:latest
+    image: ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
     container_name: wb-proxy
     restart: unless-stopped
     ports:
