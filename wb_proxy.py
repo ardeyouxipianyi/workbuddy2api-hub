@@ -383,7 +383,7 @@ def row_outcome(row):
         return o
     return "failed" if row.get("error") else "completed"
 def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_ms=None, fp=None,
-                account=None, outcome="completed"):
+                account=None, outcome="completed", key=None):
     """Record one finished request as exactly one JSONL row.
 
     A request without a usage block still gets a row (flagged usage_missing):
@@ -393,6 +393,12 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     outcome is the terminal state: completed / client_aborted /
     upstream_aborted / failed. It is deliberately not called status, because
     status already means the HTTP status code on error rows.
+
+    key is the settings id of the client API key that paid for the request,
+    never the secret itself. It is passed in explicitly rather than read from
+    a thread-local: one keep-alive thread serves many requests, so an implicit
+    channel would attribute spend to the wrong key silently, while a missed
+    call site only shows up as an extra "no key" row.
     """
     fields = _extract_usage(usage) or {}
     usage_missing = not fields
@@ -415,6 +421,11 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         row["account"] = account
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = acc.realm if acc else CURRENT_REALM
+    # Always written, even when the caller presented no key. The empty value is
+    # what separates "ran without a key" from rows written before the field
+    # existed; the dashboard reports those as two different buckets, and a
+    # missing field is the only evidence of the cutover that survives.
+    row["key"] = key or ""
     # Derived per-request rates (None-safe).
     if gen_ms and gen_ms > 0:
         row["tokens_per_sec"] = round(fields.get("completion_tokens", 0) / (gen_ms / 1000.0), 2)
@@ -473,7 +484,7 @@ def _persist_usage(row, fail_label):
 
 def record_error(model, status, message, elapsed_ms=None, account=None,
                  usage=None, stream=None, ttft_ms=None, gen_ms=None, fp=None,
-                 outcome="failed"):
+                 outcome="failed", key=None):
     """Record one failed request as exactly one JSONL row.
 
     Passing the account uid records which account the request was bound to, so
@@ -487,6 +498,11 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
 
     status stays the HTTP status code; outcome is the terminal state, so the
     two never disagree about what the field means.
+
+    key is the client API key's settings id, same as record_usage. It is the
+    only way a rejected request can be attributed to a key, so failures on the
+    key's model whitelist still land on the right row instead of vanishing
+    into the unattributed bucket.
     """
     fields = _extract_usage(usage) or {}
     row = {
@@ -512,6 +528,7 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
         row["account"] = account
         acc = POOL.get(account) if POOL else None
         row["realm"] = acc.realm if acc else CURRENT_REALM
+    row["key"] = key or ""
     with _lock:
         _usage["errors"] += 1
         if elapsed_ms is not None:
@@ -1355,14 +1372,34 @@ def _new_analytics_stat():
         }
 
 
+# Rows the per-key table folds traffic into when no real key id applies.
+# `before` and `anon` are told apart by whether the row carries a `key` field
+# at all: rows written before this feature existed have none, and their number
+# can only ever shrink, while "no key configured" deployments keep adding rows
+# with an empty key. The two need different responses, so they never merge.
+KEY_BUCKET_BEFORE = "__before_keys__"
+KEY_BUCKET_ANON = "__no_key__"
+KEY_BUCKET_UNKNOWN = "__unknown_key__"
+# The per-key model breakdown is capped: a deployment with 50 keys would
+# otherwise ship a few thousand pills to a page that repaints every 5 seconds.
+# The accounts table can afford to list every model because it has one row per
+# upstream account, not one per caller.
+KEY_MODEL_TOP_N = 5
+
+
 def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None, until=None,
-                    realm=None):
+                    realm=None, key_map=None):
     """Walk the usage JSONL once, folding every row into the maps.
 
     `all_summary` always covers the whole log (it is the stable reference the
     page shows next to the selection); `window_summary` and the per-account /
     per-model "window" buckets cover only the selected range, which is what
     every figure on the first column of the page describes.
+
+    `key_map` (optional) folds the same rows by the API key that called the
+    gateway. It is a separate axis from `acct_map` on purpose: one key can be
+    served by many upstream accounts, and one account can serve many keys, so
+    the two tables are views of the same spend, not a decomposition of it.
     """
     if os.path.exists(USAGE_LOG):
         try:
@@ -1417,6 +1454,21 @@ def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None
                         if r.get("elapsed_ms"):
                             stat_obj["elapsed_sum"] += r["elapsed_ms"]
                             stat_obj["elapsed_n"] += 1
+                    def bump_models(tgt_all, tgt_window, is_error):
+                        # Model distribution counts successful requests only:
+                        # a failed call attributed to a model would show up as
+                        # demand for it when the caller got nothing.
+                        if is_error:
+                            return
+                        tm = tgt_all.setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
+                        tm["requests"] += 1
+                        tm["tokens"] += (r.get("total_tokens") or 0)
+                        tm["reasoning"] += (r.get("reasoning_tokens") or 0)
+                        if in_window:
+                            tdm = tgt_window.setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
+                            tdm["requests"] += 1
+                            tdm["tokens"] += (r.get("total_tokens") or 0)
+                            tdm["reasoning"] += (r.get("reasoning_tokens") or 0)
                     feed(all_summary, is_err)
                     if in_window:
                         feed(window_summary, is_err)
@@ -1434,23 +1486,176 @@ def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None
                     feed(acct_map[acct_uid]["all_time"], is_err)
                     if in_window:
                         feed(acct_map[acct_uid]["window"], is_err)
-                    if not is_err:
-                        tm = acct_map[acct_uid]["all_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
-                        tm["requests"] += 1
-                        tm["tokens"] += (r.get("total_tokens") or 0)
-                        tm["reasoning"] += (r.get("reasoning_tokens") or 0)
-                        if in_window:
-                            tdm = acct_map[acct_uid]["window_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
-                            tdm["requests"] += 1
-                            tdm["tokens"] += (r.get("total_tokens") or 0)
-                            tdm["reasoning"] += (r.get("reasoning_tokens") or 0)
+                    bump_models(acct_map[acct_uid]["all_models"], acct_map[acct_uid]["window_models"], is_err)
                     if m_id not in model_map:
                         model_map[m_id] = {"model": m_id, "window": _new_analytics_stat(), "all_time": _new_analytics_stat()}
                     feed(model_map[m_id]["all_time"], is_err)
                     if in_window:
                         feed(model_map[m_id]["window"], is_err)
+                    if key_map is not None:
+                        # A row written before this feature existed has no
+                        # `key` field at all; a row from a deployment that
+                        # never configured a key has one, and it is empty.
+                        if "key" in r:
+                            k_id = r.get("key") or KEY_BUCKET_ANON
+                        else:
+                            k_id = KEY_BUCKET_BEFORE
+                        km = key_map.get(k_id)
+                        if km is None:
+                            km = key_map[k_id] = {
+                                "key": k_id,
+                                "window": _new_analytics_stat(),
+                                "all_time": _new_analytics_stat(),
+                                "window_models": {},
+                                "all_models": {},
+                                # realm -> row count. A key bound to one
+                                # exit only ever sees that exit; a key with no
+                                # binding follows the model, and its credit
+                                # column then adds up two different products.
+                                # Kept as a dict because this ends up in JSON.
+                                "realms": {},
+                                "last_at": 0,
+                            }
+                        k_realm = row_realm(r) or ""
+                        km["realms"][k_realm] = km["realms"].get(k_realm, 0) + 1
+                        if at and at > km["last_at"]:
+                            km["last_at"] = at
+                        feed(km["all_time"], is_err)
+                        if in_window:
+                            feed(km["window"], is_err)
+                        bump_models(km["all_models"], km["window_models"], is_err)
         except Exception as exc:
             log("compute_usage_analytics failed: %s" % exc)
+
+
+def _add_analytics_stat(dst, src):
+    """Field-wise sum of two _new_analytics_stat() dicts, in place."""
+    for field, value in src.items():
+        if isinstance(value, (int, float)):
+            dst[field] += value
+
+
+def _top_models(bucket, top_n=KEY_MODEL_TOP_N):
+    """Split a model bucket into the N busiest models plus one remainder.
+
+    The remainder is flagged with `other` rather than being recognised by its
+    label, so a model genuinely called "(其他)" cannot be mistaken for it.
+    """
+    items = sorted(bucket.items(), key=lambda kv: (-kv[1]["tokens"], -kv[1]["requests"], kv[0]))
+    head = [{"model": mid, "requests": s["requests"], "tokens": s["tokens"],
+             "reasoning": s["reasoning"]} for mid, s in items[:top_n]]
+    rest = items[top_n:]
+    other = None
+    if rest:
+        other = {
+            "model": "(其他)",
+            "other": True,
+            "models": len(rest),
+            "requests": sum(s["requests"] for _, s in rest),
+            "tokens": sum(s["tokens"] for _, s in rest),
+            "reasoning": sum(s["reasoning"] for _, s in rest),
+        }
+    return head, other
+
+
+def _build_key_rows(key_map, realm=None):
+    """Merge observed per-key traffic with the configured key roster.
+
+    Every key the panel can still see gets a row even with no traffic in the
+    window: a key that was used yesterday and not today is a fact about
+    today's spend, and dropping it would read as "the key is gone". A key that
+    is disabled *and* idle in this window is dropped, because that row says
+    nothing about the selected range.
+
+    The reverse direction matters just as much: an id seen in the log that the
+    roster does not know still gets a row, so the per-key table always adds up
+    to the per-account table. Those are folded into a single row - ids that
+    cannot be named are an anomaly, not a dimension worth splitting.
+    """
+    key_map = key_map or {}
+    rows = {}
+
+    def empty_row(k_id, name, declared_realm, enabled, source):
+        return {
+            "key": k_id,
+            "name": name,
+            "realm": declared_realm,
+            "enabled": enabled,
+            "source": source,
+            "window": _new_analytics_stat(),
+            "all_time": _new_analytics_stat(),
+            "window_models": {},
+            "all_models": {},
+            "realms": {},
+            "last_at": 0,
+        }
+
+    for entry in configured_keys():
+        k_id = entry.get("id") or ""
+        if not k_id:
+            continue
+        declared = entry.get("realm") or ""
+        # A key bound to the other exit can never have rows in this view.
+        if realm and declared and declared != realm:
+            continue
+        rows[k_id] = empty_row(k_id, entry.get("name") or k_id, declared,
+                               entry.get("enabled", True) is not False, "panel")
+    # The launcher key (--api-key / API_KEY) lives in no settings file, so it
+    # is only ever visible as an id in the log. It gets a row when it could
+    # have been used at all, which is what keeps the totals reconcilable.
+    if "launcher" not in rows and (API_KEY or "launcher" in key_map):
+        rows["launcher"] = empty_row("launcher", "启动参数", "", True, "launcher")
+
+    def adopt(row, km):
+        row["window"] = km["window"]
+        row["all_time"] = km["all_time"]
+        row["window_models"] = km["window_models"]
+        row["all_models"] = km["all_models"]
+        row["realms"] = km["realms"]
+        row["last_at"] = km["last_at"]
+
+    unknown = None
+    for k_id, km in key_map.items():
+        if k_id == KEY_BUCKET_BEFORE:
+            rows[k_id] = empty_row(k_id, "(切换前)", "", False, "bucket")
+            adopt(rows[k_id], km)
+        elif k_id == KEY_BUCKET_ANON:
+            rows[k_id] = empty_row(k_id, "(无 key)", "", False, "bucket")
+            adopt(rows[k_id], km)
+        elif k_id in rows:
+            adopt(rows[k_id], km)
+        else:
+            if unknown is None:
+                unknown = rows[KEY_BUCKET_UNKNOWN] = empty_row(
+                    KEY_BUCKET_UNKNOWN, "(未知 key)", "", False, "bucket")
+            _add_analytics_stat(unknown["window"], km["window"])
+            _add_analytics_stat(unknown["all_time"], km["all_time"])
+            for tgt, src in ((unknown["window_models"], km["window_models"]),
+                             (unknown["all_models"], km["all_models"])):
+                for mid, s in src.items():
+                    dst = tgt.setdefault(mid, {"requests": 0, "tokens": 0, "reasoning": 0})
+                    dst["requests"] += s["requests"]
+                    dst["tokens"] += s["tokens"]
+                    dst["reasoning"] += s["reasoning"]
+            for k_realm, count in km["realms"].items():
+                unknown["realms"][k_realm] = unknown["realms"].get(k_realm, 0) + count
+            unknown["last_at"] = max(unknown["last_at"], km["last_at"])
+
+    out = []
+    for row in rows.values():
+        if (row["source"] == "panel" and not row["enabled"]
+                and not row["window"]["requests"] and not row["window"]["errors"]):
+            continue
+        _finalize_analytics_stat(row["window"])
+        _finalize_analytics_stat(row["all_time"])
+        row["models"], row["models_other"] = _top_models(row["window_models"])
+        # A key with no realm binding follows the model it is asked for, so it
+        # can serve both exits - and then its credit column adds up two
+        # different products' prices. The page has to be able to say so.
+        row["cross_realm"] = len([x for x in row["realms"] if x]) > 1
+        out.append(row)
+    out.sort(key=lambda r: (-r["window"]["total_tokens"], -r["all_time"]["total_tokens"], r["name"]))
+    return out
 
 
 def _enrich_accounts_from_pool(acct_map, realm=None):
@@ -1496,8 +1701,9 @@ def _compute_usage_analytics_uncached(realm=None, since=None, until=None):
     window_summary = _new_analytics_stat()
     acct_map = {}
     model_map = {}
+    key_map = {}
     _scan_usage_log(all_summary, window_summary, acct_map, model_map,
-                    since=since, until=until, realm=realm)
+                    since=since, until=until, realm=realm, key_map=key_map)
     _enrich_accounts_from_pool(acct_map, realm=realm)
     _finalize_analytics_stat(all_summary)
     _finalize_analytics_stat(window_summary)
@@ -1509,6 +1715,7 @@ def _compute_usage_analytics_uncached(realm=None, since=None, until=None):
         _finalize_analytics_stat(m["all_time"])
     accts_list = sorted(acct_map.values(), key=lambda a: (-a["window"]["total_tokens"], -a["all_time"]["total_tokens"]))
     models_list = sorted(model_map.values(), key=lambda m: (-m["window"]["total_tokens"], -m["all_time"]["total_tokens"]))
+    keys_list = _build_key_rows(key_map, realm=realm)
     return {
         # The resolved window travels with the payload so the page can label
         # its first column from what the server actually applied, not from
@@ -1518,6 +1725,11 @@ def _compute_usage_analytics_uncached(realm=None, since=None, until=None):
         "summary": {"window": window_summary, "all_time": all_summary},
         "accounts": accts_list,
         "models": models_list,
+        # Same rows, folded by the API key that called the gateway instead of
+        # by the upstream account that served the call. One key can be served
+        # by several accounts and one account can serve several keys, so this
+        # is a second view of the same spend, not a breakdown of it.
+        "keys": keys_list,
     }
 def runtime_settings_view():
     """Current panel-visible settings (never returns the password or the key)."""
@@ -1538,6 +1750,19 @@ def runtime_settings_view():
             "source": entry.get("source") or "panel",
             "created_at": entry.get("created_at") or "",
         })
+    # Deleted keys are read-only history: the secret is gone, so the panel can
+    # only list them (name and dates) and must not offer a copy button.
+    deleted_keys = []
+    for entry in wb_settings.api_keys(ACCOUNTS_DIR, include_deleted=True):
+        if not entry.get("deleted_at"):
+            continue
+        deleted_keys.append({
+            "id": entry.get("id") or "",
+            "name": entry.get("name") or "",
+            "realm": entry.get("realm") or "",
+            "created_at": entry.get("created_at") or "",
+            "deleted_at": entry.get("deleted_at") or "",
+        })
     return {
         "panel_password_is_default": wb_settings.panel_password_is_default(ACCOUNTS_DIR),
         "api_key_set": bool(key),
@@ -1545,6 +1770,7 @@ def runtime_settings_view():
         "api_key_masked": masked,
         "auth_required": auth_required(),
         "api_keys": keys,
+        "deleted_api_keys": deleted_keys,
         "reserve_credits": wb_settings.reserve_credits(ACCOUNTS_DIR),
         "daily_token_limit": wb_settings.daily_token_limit(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
@@ -5294,6 +5520,14 @@ class Handler(BaseHTTPRequestHandler):
     def _key_realm(self):
         """Realm bound to the key this request used, or "" when unbound."""
         return (self.key_entry or {}).get("realm") or ""
+    def _key_id(self):
+        """Settings id of the key that paid for this request, or None.
+
+        None covers a panel session and a deployment that runs without any key
+        configured - both are real, and the usage log keeps them apart from
+        rows written before the key field existed.
+        """
+        return (self.key_entry or {}).get("id") or None
     def _cross_realm_error(self, model, realm):
         """Explain a model/exit mismatch instead of letting upstream reject it.
         Sending gpt-6-astra to the domestic exit (or deepseek-v4-pro to the
@@ -6565,25 +6799,29 @@ class Handler(BaseHTTPRequestHandler):
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._error(403, "upstream 403: %s" % (exc.detail or "content rejected"),
                                "invalid_request_error")
         except RateLimited as exc:
             t = time.time() - t_start
             record_error(model, 429, exc.detail[:200], elapsed_ms=int(t * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
             detail = exc.read(600).decode("utf-8", "replace")
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
             message = str(exc)
             record_error(model, 502, message,
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             if message.startswith("no usable account"):
                 return self._error(503, message +
                                    " - add or enable one at the dashboard (/)")
@@ -6649,7 +6887,7 @@ class Handler(BaseHTTPRequestHandler):
                          ttft_ms=first_ms,
                          gen_ms=(wall - first_ms) if first_ms is not None else None,
                          fp=fp, account=account.uid,
-                         outcome="client_aborted")
+                         outcome="client_aborted", key=self._key_id())
             return
         except Exception as exc:
             wall = int((time.time() - t_start) * 1000)
@@ -6658,7 +6896,7 @@ class Handler(BaseHTTPRequestHandler):
                          usage=holder.get("usage"), stream=True,
                          ttft_ms=first_ms,
                          gen_ms=(wall - first_ms) if first_ms is not None else None,
-                         fp=fp, outcome="upstream_aborted")
+                         fp=fp, outcome="upstream_aborted", key=self._key_id())
             try:
                 self.wfile.write(b"data: [DONE]" + bytes([10, 10]))
                 self.wfile.flush()
@@ -6676,7 +6914,7 @@ class Handler(BaseHTTPRequestHandler):
         record_usage(model, holder.get("usage"), stream=True, elapsed_ms=wall,
                      ttft_ms=first_ms,
                      gen_ms=(wall - first_ms) if first_ms is not None else None,
-                     fp=fp, account=account.uid)
+                     fp=fp, account=account.uid, key=self._key_id())
         return
 
     def _responses_nonstream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None, base_body=None, session_key=None, realm=None):
@@ -6694,7 +6932,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 record_error(model, 502, str(exc),
                              elapsed_ms=int((time.time() - t_start) * 1000),
-                             account=account.uid)
+                             account=account.uid, key=self._key_id())
                 return self._error(502, f"upstream stream error: {exc}")
             calls = internal_calls_from_chat(chat_obj, web_tools=web_tools)
             if not calls:
@@ -6714,14 +6952,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 record_error(model, 502, "web tool follow-up failed: %s" % exc,
                              elapsed_ms=int((time.time() - t_start) * 1000),
-                             account=account.uid)
+                             account=account.uid, key=self._key_id())
                 return self._error(502, "web tool follow-up failed: %s" % exc)
             sources = holder.get("web_sources") or sources
         wall = int((time.time() - t_start) * 1000)
         result = chat_to_response(chat_obj, model, custom_names, request_meta, namespace_map,
                                   sources=sources)
         record_usage(model, chat_obj.get("usage"), stream=False, elapsed_ms=wall, fp=fp,
-                     account=account.uid)
+                     account=account.uid, key=self._key_id())
         return self._json(200, result)
 
     def do_POST(self):
@@ -6822,24 +7060,28 @@ class Handler(BaseHTTPRequestHandler):
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._error(403, "upstream 403: %s" % (exc.detail or "content rejected"),
                                "invalid_request_error")
         except RateLimited as exc:
             record_error(model, 429, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
             detail = exc.read(600).decode("utf-8", "replace")
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
             message = str(exc)
             record_error(model, 502, message, elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
             if message.startswith("no usable account"):
                 # Only a genuinely empty/cooling pool is a 503. A throttled model
                 # is reported as 429 by _rate_limited above instead.
@@ -6899,7 +7141,7 @@ class Handler(BaseHTTPRequestHandler):
                              elapsed_ms=wall, ttft_ms=first_ms,
                              gen_ms=(wall - first_ms) if first_ms is not None else None,
                              fp=fp, account=account.uid,
-                             outcome="client_aborted")
+                             outcome="client_aborted", key=self._key_id())
                 return
             except Exception as exc:
                 # Upstream quit mid-stream (timeout, incomplete read, ...).
@@ -6910,7 +7152,7 @@ class Handler(BaseHTTPRequestHandler):
                              elapsed_ms=wall, account=account.uid,
                             usage=last_usage, stream=True, ttft_ms=first_ms,
                             gen_ms=(wall - first_ms) if first_ms is not None else None,
-                             fp=fp, outcome="upstream_aborted")
+                             fp=fp, outcome="upstream_aborted", key=self._key_id())
                 try:
                     self.wfile.write(b"data: [DONE]\n\n")
                     self.wfile.flush()
@@ -6937,7 +7179,7 @@ class Handler(BaseHTTPRequestHandler):
             record_usage(model, last_usage, stream=True,
                          elapsed_ms=wall, ttft_ms=first_ms,
                          gen_ms=(wall - first_ms) if first_ms is not None else None,
-                         fp=fp, account=account.uid)
+                         fp=fp, account=account.uid, key=self._key_id())
             return
 
     def _chat_nonstream_response(self, upstream, model, fp, account, t_start):
@@ -6945,7 +7187,7 @@ class Handler(BaseHTTPRequestHandler):
             result = aggregate_stream(upstream, model, None)
         except Exception as exc:
             record_error(model, 502, str(exc), elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=account.uid)
+                         account=account.uid, key=self._key_id())
             return self._error(502, f"upstream stream error: {exc}")
         wall = int((time.time() - t_start) * 1000)
         first_at = result.get("first_chunk_at")
@@ -6954,7 +7196,7 @@ class Handler(BaseHTTPRequestHandler):
         record_usage(model, result.get("usage"), stream=False,
                      elapsed_ms=wall, ttft_ms=first_ms,
                      gen_ms=(wall - first_ms) if first_ms is not None else None,
-                     fp=fp, account=account.uid)
+                     fp=fp, account=account.uid, key=self._key_id())
         return self._json(200, result)
 
 def main():

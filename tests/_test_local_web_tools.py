@@ -150,6 +150,11 @@ class FakeAccount(object):
 class FakeHandler(object):
     _responses_stream_response = proxy.Handler._responses_stream_response
 
+    def _key_id(self):
+        # These tests present no API key, so the usage row they produce is
+        # unattributed - exactly what the real handler records in that case.
+        return None
+
     def __init__(self):
         self.path = "/v1/responses"
         self.written = []

@@ -188,11 +188,18 @@ def key_allows_model(entry, model):
 
 
 def _clean_key_entry(entry):
-    """Normalize one stored key entry; returns None when unusable."""
+    """Normalize one stored key entry; returns None when unusable.
+
+    A deleted entry keeps its row even though its secret is gone: the id is
+    what the usage log records, so dropping the row would make every past
+    request of that key unattributable. Deletion is one-way - the secret is
+    never stored again and the entry can only ever be read, not re-enabled.
+    """
     if not isinstance(entry, dict):
         return None
     key = str(entry.get("key") or "").strip()
-    if not key:
+    deleted_at = str(entry.get("deleted_at") or "").strip()
+    if not key and not deleted_at:
         return None
     realm = str(entry.get("realm") or "").strip().lower()
     if realm not in REALMS:
@@ -203,8 +210,9 @@ def _clean_key_entry(entry):
         "key": key,
         "realm": realm,
         "models": _clean_model_patterns(entry.get("models")),
-        "enabled": entry.get("enabled", True) is not False,
+        "enabled": False if deleted_at else entry.get("enabled", True) is not False,
         "created_at": entry.get("created_at") or time.strftime("%Y/%m/%d %H:%M"),
+        "deleted_at": deleted_at,
     }
 
 
@@ -234,7 +242,7 @@ def _unique_key_id(candidate, used):
             return alt
 
 
-def api_keys(accounts_dir):
+def api_keys(accounts_dir, include_deleted=False):
     """Every configured key, newest shape first.
 
     A settings file written by an older build only has the single
@@ -242,6 +250,11 @@ def api_keys(accounts_dir):
     upgrades keep working without a migration step. Ids are made unique here
     as well as on write, so a file that already holds a duplicate (and no
     longer has to be saved before it behaves) reads back as distinct rows.
+
+    Deleted entries are hidden by default: they are gone as credentials, and
+    match_api_key must never see them. Their rows stay on disk (and come back
+    with include_deleted) because the usage log names a key by id, and an id
+    with no name is not a table anyone can read.
     """
     data = load(accounts_dir)
     stored = data.get("api_keys")
@@ -251,11 +264,19 @@ def api_keys(accounts_dir):
         seen_ids = set()
         for raw in stored:
             entry = _clean_key_entry(raw)
-            if entry and entry["key"] not in seen:
+            if entry is None:
+                continue
+            # Deduplicate on the secret, and only when there is one: every
+            # deleted entry has an empty key, and those are distinct rows.
+            if entry["key"]:
+                if entry["key"] in seen:
+                    continue
                 seen.add(entry["key"])
-                entry["id"] = _unique_key_id(entry["id"], seen_ids)
-                seen_ids.add(entry["id"])
-                out.append(entry)
+            entry["id"] = _unique_key_id(entry["id"], seen_ids)
+            seen_ids.add(entry["id"])
+            out.append(entry)
+        if not include_deleted:
+            out = [e for e in out if not e.get("deleted_at")]
         return out
 
     if data.get("api_key_set"):
@@ -268,23 +289,52 @@ def api_keys(accounts_dir):
                 "realm": "",
                 "models": [],
                 "enabled": True,
+                "created_at": "",
+                "deleted_at": "",
             }]
     return []
 
 
 def set_api_keys(accounts_dir, keys):
-    """Replace the whole key list. Returns the stored list."""
+    """Replace the whole key list. Returns the saved (live) list.
+
+    Removal is a soft delete. The caller is the panel, which can only submit
+    the rows it can see and cannot see deleted ones, so an id that vanishes
+    from the submission is marked deleted instead of dropped: the usage log
+    attributes spend by id, and losing the id would dump a key's whole history
+    into "(未知 key)". The secret is wiped at that same moment, so a deleted
+    key can never authenticate again.
+    """
     with _lock:
+        previous = api_keys(accounts_dir, include_deleted=True)
         cleaned = []
         seen = set()
         seen_ids = set()
         for raw in keys or []:
             entry = _clean_key_entry(raw)
-            if entry and entry["key"] not in seen:
+            if entry is None:
+                continue
+            if entry["key"]:
+                if entry["key"] in seen:
+                    continue
                 seen.add(entry["key"])
-                entry["id"] = _unique_key_id(entry["id"], seen_ids)
-                seen_ids.add(entry["id"])
-                cleaned.append(entry)
+            entry["id"] = _unique_key_id(entry["id"], seen_ids)
+            seen_ids.add(entry["id"])
+            cleaned.append(entry)
+        for old in previous:
+            if old["id"] in seen_ids:
+                continue
+            seen_ids.add(old["id"])
+            cleaned.append({
+                "id": old["id"],
+                "name": old["name"],
+                "key": "",
+                "realm": old.get("realm") or "",
+                "models": old.get("models") or [],
+                "enabled": False,
+                "created_at": old.get("created_at") or "",
+                "deleted_at": old.get("deleted_at") or time.strftime("%Y/%m/%d %H:%M"),
+            })
         data = load(accounts_dir)
         data["api_keys"] = cleaned
         # The single-key fields are now derived; drop them so there is one
@@ -292,7 +342,7 @@ def set_api_keys(accounts_dir, keys):
         data.pop("api_key", None)
         data.pop("api_key_set", None)
         save(accounts_dir, data)
-        return cleaned
+        return [e for e in cleaned if not e.get("deleted_at")]
 
 
 def match_api_key(accounts_dir, supplied, extra_keys=()):
@@ -305,7 +355,10 @@ def match_api_key(accounts_dir, supplied, extra_keys=()):
     if not supplied:
         return None
     for entry in api_keys(accounts_dir):
-        if entry["enabled"] and hmac.compare_digest(supplied, entry["key"]):
+        # A deleted entry is already stored with enabled=False; the explicit
+        # check keeps a hand-edited settings file from reviving one.
+        if entry["enabled"] and not entry.get("deleted_at") \
+                and hmac.compare_digest(supplied, entry["key"]):
             out = dict(entry)
             out["source"] = "panel"
             return out
