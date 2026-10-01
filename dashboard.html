@@ -668,7 +668,33 @@ a:hover{text-decoration:underline}
       </div>
     </section>
 
-    <!-- 表格 2：模型用量透视与响应指标 -->
+    <!-- 表格 2：按 API Key 的消耗归属 -->
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 style="margin:0">按 API Key 的消耗归属 <em id="analyticsKeyCount"></em></h2>
+        <div style="font-size:12px;color:var(--dim)">同一批请求按调用方使用的 API Key 再分一次组，用于把消耗归属到人 / 项目</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="analyticsKeyTable" class="data-cards">
+          <thead>
+            <tr>
+              <th style="text-align:left">API Key</th>
+              <th>出口</th>
+              <th>请求次数</th>
+              <th>消耗总 Token</th>
+              <th>输入 · 输出 · 思考</th>
+              <th>缓存命中</th>
+              <th>消耗积分</th>
+              <th style="text-align:left">调用的模型分布 (请求数 · 消耗)</th>
+            </tr>
+          </thead>
+          <tbody id="analyticsKeyTbody"></tbody>
+        </table>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:10px" id="analyticsKeyNote"></div>
+    </section>
+
+    <!-- 表格 3：模型用量透视与响应指标 -->
     <section>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="margin:0">模型性能指标与用量一览 <em id="matrixModelCount"></em></h2>
@@ -735,6 +761,9 @@ a:hover{text-decoration:underline}
         <button onclick="addApiKeyRow()">+ 添加 API Key</button>
       </div>
       <div id="keyList"></div>
+      <!-- 已删除的 Key 只留名字和日期：密钥已抹掉，所以这里没有「复制」。
+           历史用量按 id 记账，删掉这一行会让那些请求变成「未知 key」。 -->
+      <div id="deletedKeySection"></div>
     </section>
 
     <section>
@@ -2674,6 +2703,13 @@ async function loadSettings(showToast){
       _editing: false,
     }));
     window.API_KEY_ROWS = API_KEY_ROWS;
+    DELETED_KEY_ROWS = (data.deleted_api_keys || []).map(k => ({
+      id: k.id || '',
+      name: k.name || '',
+      realm: k.realm || '',
+      created_at: k.created_at || '',
+      deleted_at: k.deleted_at || '',
+    }));
     renderKeyRows();
     updateUI();
     const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
@@ -2789,6 +2825,7 @@ async function saveLocalWebTools(btn){
 
 /* ---- API key list: several keys, each bound to an upstream exit ---- */
 let API_KEY_ROWS = [];
+let DELETED_KEY_ROWS = [];
 
 function randomKeyValue(){
   const bytes = new Uint8Array(18);
@@ -2820,7 +2857,33 @@ function modelPatternsText(patterns){
   return Array.isArray(patterns) ? patterns.join(', ') : '';
 }
 
+/* 已删除的 Key 是只读历史：密钥已被抹掉，所以这里不提供复制，也不提供恢复。 */
+function renderDeletedKeyRows(){
+  const box = document.getElementById('deletedKeySection');
+  if(!box) return;
+  if(!DELETED_KEY_ROWS.length){ box.innerHTML = ''; return; }
+  const rows = DELETED_KEY_ROWS.map(k => {
+    const realmLbl = (k.realm === 'intl') ? '固定国际版出口'
+      : ((k.realm === 'cn') ? '固定国内版出口' : '跟随面板切换');
+    return '<div style="font-size:12px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--line)">'
+      + '<span style="color:var(--fg);font-weight:600">' + esc(k.name || '未命名') + '</span>'
+      + '<span>' + esc(realmLbl) + '</span>'
+      + (k.created_at ? '<span>创建 ' + esc(k.created_at) + '</span>' : '')
+      + (k.deleted_at ? '<span>删除 ' + esc(k.deleted_at) + '</span>' : '')
+      + '<span class="mono">' + esc(k.id) + '</span>'
+      + '</div>';
+  }).join('');
+  box.innerHTML = '<details style="margin-top:14px">'
+    + '<summary style="cursor:pointer;font-size:12px;color:var(--dim);font-weight:600">已删除的 API Key（'
+    + DELETED_KEY_ROWS.length + '）· 只读</summary>'
+    + '<div style="margin-top:4px">' + rows + '</div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:8px">'
+    + '删除时密钥已被抹掉，无法恢复、也无法再用于请求。保留这条记录是为了让「按 API Key 的消耗归属」里这些 Key 的历史用量仍然显示名字。'
+    + '</div></details>';
+}
+
 function renderKeyRows(){
+  renderDeletedKeyRows();
   const box = document.getElementById('keyList');
   if(!box) return;
   if(!API_KEY_ROWS.length){
@@ -2982,7 +3045,7 @@ async function toggleKeyRow(index){
 async function removeKeyRow(index){
   const row = API_KEY_ROWS[index];
   if(!row) return;
-  if(!confirm('确定删除 API Key [' + (row.name || '未命名') + '] 吗？此操作不可撤销。')) return;
+  if(!confirm('确定删除 API Key [' + (row.name || '未命名') + '] 吗？密钥会被抹掉且无法恢复；看板里它已经产生的历史用量仍会保留这个名字。')) return;
   API_KEY_ROWS.splice(index, 1);
   try {
     await saveApiKeys();
@@ -4138,6 +4201,100 @@ function renderAnalytics(data){
       }).join('');
     }
   }
+
+  renderKeyTable(data);
+}
+
+/* 按 API Key 的归属表。口径与账号表完全一致（window 桶 = 当前选中范围），
+   所以两张表的请求数应当相等；对不上是数据问题，不是渲染能修的，故这里
+   不隐藏任何一行——(未知 key) 那行正是用来兜住差额的。 */
+function keyRealmCell(k){
+  if(k.source === 'bucket') return '<span style="color:var(--dim)">—</span>';
+  if(k.realm === 'cn') return '<span class="badge warn" style="font-size:10px">国内版</span>';
+  if(k.realm === 'intl') return '<span class="badge s" style="font-size:10px">国际版</span>';
+  // realm 为空的 Key 不绑出口，而是跟着模型走：它可能两个出口都用过，
+  // 那时代理返回的积分是两个价格体系相加的结果，必须说出来。
+  if(k.cross_realm) return '<span class="badge warn" style="font-size:10px">跟随 · 混合</span>';
+  return '<span class="badge off" style="font-size:10px">跟随</span>';
+}
+
+function keyModelPills(k){
+  const pills = (k.models || []).map(m =>
+    '<span class="model-pill">'
+    + '<b style="color:var(--fg)">' + esc(m.model) + '</b>: '
+    + m.requests + '次 · <b style="color:var(--accent)">' + fmt(m.tokens) + '</b> tok'
+    + '</span>');
+  const rest = k.models_other;
+  if(rest){
+    pills.push('<span class="model-pill">'
+      + '<b style="color:var(--dim)">' + esc(rest.model || '(其他)') + '</b> '
+      + '<span style="color:var(--dim)">' + (rest.models || 0) + ' 个模型 · </span>'
+      + rest.requests + '次 · ' + fmt(rest.tokens) + ' tok</span>');
+  }
+  return pills.length ? pills.join('') : '<span style="color:var(--dim)">无调用</span>';
+}
+
+function renderKeyTable(data){
+  const tbody = document.getElementById('analyticsKeyTbody');
+  if(!tbody) return;
+  const countEm = document.getElementById('analyticsKeyCount');
+  const note = document.getElementById('analyticsKeyNote');
+  const keys = data.keys || [];
+  if(countEm) countEm.textContent = keys.length ? '(' + keys.length + ' 把)' : '';
+
+  if(note){
+    const named = keys.filter(k => k.source !== 'bucket');
+    const cross = named.filter(k => k.cross_realm).length;
+    const parts = [];
+    if(!named.length) parts.push('设置里还没有任何 API Key，全部流量都落在下面的未归属行里。');
+    if(cross) parts.push('有 ' + cross + ' 把 Key 没有绑定出口，它的积分由国际版与国内版两套价格相加而来，只能当量级看。');
+    parts.push('Key 维度只从本次升级之后开始记录：更早的请求没有这个字段，会一直留在「(切换前)」里且不会再增长。');
+    note.innerHTML = parts.join(' ');
+  }
+
+  if(!keys.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无 API Key 用量数据</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = keys.map(k => {
+    const st = k.window || {};
+    const sub = {panel:'面板 Key', launcher:'启动参数', bucket:'未归属', builtin:'内置'}[k.source] || '';
+    let nameCell = '<td style="text-align:left" data-label="API Key">'
+      + '<b>' + esc(k.name || k.key) + '</b>';
+    if(sub || !k.enabled){
+      nameCell += '<div style="font-size:11px">'
+        + (sub ? '<span style="color:var(--dim)">' + esc(sub) + '</span>' : '')
+        + (!k.enabled && k.source === 'panel' ? '<span class="badge off mini">已禁用</span>' : '')
+        + '</div>';
+    }
+    nameCell += '</td>';
+
+    const reqCell = '<td data-label="请求次数">' + fmt(st.requests || 0) + ' 次'
+      + (st.errors ? '<span style="color:var(--bad);font-size:11px"> · 失败 ' + fmt(st.errors) + '</span>' : '')
+      + '</td>';
+    const tokCell = '<td data-label="消耗总 Token"><b style="color:var(--accent)">'
+      + fmt(st.total_tokens || 0) + '</b></td>';
+    const splitCell = '<td data-label="输入 · 输出 · 思考" style="font-size:12px">'
+      + '<span style="color:var(--accent)">' + fmt(st.prompt_tokens || 0) + '</span>'
+      + ' <span style="color:var(--dim-light)">/</span> '
+      + '<span style="color:var(--accent2)">' + fmt(st.completion_tokens || 0) + '</span>'
+      + ' <span style="color:var(--dim-light)">/</span> '
+      + '<span style="color:var(--think)">' + fmt(st.reasoning_tokens || 0) + '</span>'
+      + '</td>';
+    const cacheCell = '<td data-label="缓存命中">'
+      + (st.cache_hit_pct != null ? st.cache_hit_pct.toFixed(1) : '0.0') + '%</td>';
+    const creditCell = '<td data-label="消耗积分"><b style="color:var(--accent2)">'
+      + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>';
+    const modelCell = '<td style="text-align:left;max-width:440px" data-label="调用的模型分布">'
+      + keyModelPills(k) + '</td>';
+
+    return '<tr>'
+      + nameCell
+      + '<td data-label="出口">' + keyRealmCell(k) + '</td>'
+      + reqCell + tokCell + splitCell + cacheCell + creditCell + modelCell
+      + '</tr>';
+  }).join('');
 }
 </script>
 </body>
