@@ -20,6 +20,19 @@ import time
 DEFAULT_PANEL_PASSWORD = "admin"
 PBKDF2_ROUNDS = 120_000
 SESSION_TTL = 7 * 24 * 3600
+# How often the gateway pulls fresh prices, in minutes; keep in step with
+# wb_pricing.DEFAULT_REFRESH_MINUTES.
+DEFAULT_PRICING_REFRESH_MINUTES = 5.0
+# The setting used to be counted in hours and stored under this key. It is read
+# once on upgrade (x60) and rewritten under the new key, so 6 hours can never
+# come back as 6 minutes.
+LEGACY_PRICING_REFRESH_HOURS_KEY = "pricing_refresh_hours"
+PRICING_REFRESH_MINUTES_KEY = "pricing_refresh_minutes"
+# A month, the old cap converted: 720 hours = 43200 minutes.
+MAX_PRICING_REFRESH_MINUTES = 24 * 30 * 60
+# Whether a model name may inherit its price from a suffix-stripped base
+# (deepseek-r1-0528-lkeap → deepseek-r1-0528). Missing key reads as on.
+PRICING_VARIANT_INHERIT_KEY = "pricing_variant_inherit"
 
 _lock = threading.RLock()
 
@@ -389,6 +402,107 @@ def set_daily_token_limit(accounts_dir, value):
         data["daily_token_limit"] = value
         save(accounts_dir, data)
     return value
+
+
+def _clamp_refresh_minutes(value):
+    """A month is well past "often enough"; the cap keeps a typo from parking
+    the next refresh beyond any horizon the panel can show."""
+    return max(0.0, min(MAX_PRICING_REFRESH_MINUTES, value))
+
+
+def _migrate_pricing_refresh(data, accounts_dir):
+    """(found, minutes) - convert a pre-minutes settings.json in place.
+
+    `pricing_refresh_hours` used to hold hours. Reading it as minutes would
+    turn 6 hours into 6 minutes, so the value is multiplied by 60 here, written
+    under the new key and the old key dropped - one time, on the first read
+    after the upgrade. A value that is not a number just loses the stale key
+    and falls back to the default; a legacy 0 still means "off".
+    """
+    legacy = data.pop(LEGACY_PRICING_REFRESH_HOURS_KEY, None)
+    if legacy is None:
+        return False, None
+    try:
+        minutes = _clamp_refresh_minutes(float(legacy) * 60.0)
+    except (TypeError, ValueError):
+        minutes = None
+    else:
+        data[PRICING_REFRESH_MINUTES_KEY] = minutes
+    try:
+        save(accounts_dir, data)
+    except Exception:
+        # A read-only accounts dir must not take the panel down; the converted
+        # value is still returned, and the next read simply migrates again.
+        pass
+    return True, minutes
+
+
+def pricing_refresh_minutes(accounts_dir):
+    """How often the gateway refreshes the OpenRouter price history, in minutes.
+
+    Zero disables the refresh, which keeps installs that predate the setting
+    on the bundled snapshot. A settings.json written before the unit changed
+    carries `pricing_refresh_hours`, migrated here on first read (see
+    `_migrate_pricing_refresh`). Anything not a number falls back to the
+    default, so a hand-edited settings.json cannot wedge the refresh loop.
+    """
+    with _lock:
+        data = load(accounts_dir)
+        raw = data.get(PRICING_REFRESH_MINUTES_KEY)
+        if raw is None:
+            found, minutes = _migrate_pricing_refresh(data, accounts_dir)
+            if not found:
+                return DEFAULT_PRICING_REFRESH_MINUTES
+            if minutes is None:
+                return DEFAULT_PRICING_REFRESH_MINUTES
+            return minutes
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_PRICING_REFRESH_MINUTES
+    return value if value > 0 else 0.0
+
+
+def set_pricing_refresh_minutes(accounts_dir, value):
+    """Persist the refresh interval in minutes. Returns the stored value."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return pricing_refresh_minutes(accounts_dir)
+    value = _clamp_refresh_minutes(value)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_REFRESH_MINUTES_KEY] = value
+        # The minutes key is the one in force; a leftover legacy key would only
+        # confuse a later rollback into reading a stale interval.
+        data.pop(LEGACY_PRICING_REFRESH_HOURS_KEY, None)
+        save(accounts_dir, data)
+    return value
+
+
+def pricing_variant_inherit(accounts_dir):
+    """Whether a model name may inherit its price from a suffix-stripped base.
+
+    On unless the operator turns it off: a hub model carrying a channel suffix
+    (`deepseek-r1-0528-lkeap`) is the same entity as its base model upstream,
+    and without this the gateway would show "未定价" for a model it can price
+    exactly. Off restores the previous behaviour - only the override table and
+    an exact name match can price a model - so an install that wants the
+    strictest possible rule keeps it. A settings.json that predates the key
+    reads back as on, which is the default this ships with.
+    """
+    value = load(accounts_dir).get(PRICING_VARIANT_INHERIT_KEY)
+    return True if value is None else value is True
+
+
+def set_pricing_variant_inherit(accounts_dir, enabled):
+    """Persist the variant-inheritance switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_VARIANT_INHERIT_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
 
 
 def auto_switch_product(accounts_dir):
