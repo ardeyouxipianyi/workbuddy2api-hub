@@ -918,18 +918,20 @@ def _pick(rate, key, fallback=None):
 def compute_row(row, pricing=None):
     """The estimated cost of one usage row, in CNY.
 
-    Returns {"cny": float, "known": bool, "band": int|None}. known=False
-    means the model has no price entry - cny stays 0 and the caller reports
-    it as unpriced instead of guessing. band is the time-of-day band the
+    Returns {"cny": float, "known": bool, "band": int|None, "rates": dict|None}.
+    known=False means the model has no price entry - cny stays 0 and the caller
+    reports it as unpriced instead of guessing. band is the time-of-day band the
     row's timestamp landed in (None for the model's flat price), so callers
-    can tell a time-priced row from an ordinary one.
+    can tell a time-priced row from an ordinary one. rates is that band's own
+    per-million table, exactly as stored, so a caller can show which unit
+    prices the figure came from instead of re-deriving the band.
     """
     if not row:
-        return {"cny": 0.0, "known": False, "band": None}
+        return {"cny": 0.0, "known": False, "band": None, "rates": None}
     pricing = pricing if pricing is not None else load_pricing()
     entry = (pricing.get("models") or {}).get(row.get("model"))
     if not isinstance(entry, dict):
-        return {"cny": 0.0, "known": False, "band": None}
+        return {"cny": 0.0, "known": False, "band": None, "rates": None}
     meta = pricing.get("meta") or {}
     unit = _as_float(entry.get("unit")) or 1000000.0
     prompt = _as_float(row.get("prompt_tokens"))
@@ -946,7 +948,7 @@ def compute_row(row, pricing=None):
     hit = _pick(rate, "input_cache_hit", "input_cache_miss")
     out_rate = _pick(rate, "output")
     cny = (uncached * miss + cached * hit + output * out_rate) / unit * factor
-    return {"cny": cny, "known": True, "band": band}
+    return {"cny": cny, "known": True, "band": band, "rates": rate}
 
 
 def sum_rows(rows, pricing=None):
@@ -1284,11 +1286,14 @@ def inherited_from(hub_id, or_models, by_norm):
     return None
 
 
-def entry_for(hub_id, ref, or_models, inherited=None):
+def entry_for(hub_id, ref, or_models, inherited=None, overridden=False):
     """一条 hub 模型 → OpenRouter 条目的快照记录（刷新与按需补价共用）。
 
-    inherited 非空时是剥后缀继承来的基准模型名，写进 via / inherited_from
-    留审计痕迹；这两个字段不参与 policy_id 的内容哈希，只作展示与追溯。
+    inherited 非空时是剥后缀继承来的基准模型名，写进 via / inherited_from；
+    overridden 表示这次命中来自人工映射表（面板手填或 OVERRIDES），写进
+    via="override" 与 override_from。resolve() 的变体分支同样返回
+    via_override=True，所以两个分支必须靠 inherited 区分，否则变体继承会被
+    误记成人工映射。这三个字段都不参与 policy_id 的内容哈希，只作展示与追溯。
     """
     p = or_models.get(ref) or {}
     entry = {
@@ -1305,6 +1310,9 @@ def entry_for(hub_id, ref, or_models, inherited=None):
     if inherited:
         entry["via"] = "variant"
         entry["inherited_from"] = inherited
+    elif overridden:
+        entry["via"] = "override"
+        entry["override_from"] = hub_id
     return entry
 
 
@@ -1336,9 +1344,11 @@ def build_snapshot(or_models, previous=None, extra_ids=None, variants=None):
             continue
         if via_override:
             overridden.append(hub_id)
-        models[hub_id] = entry_for(hub_id, ref, or_models,
-                                   inherited_from(hub_id, or_models, by_norm)
-                                   if variants else None)
+        models[hub_id] = entry_for(
+            hub_id, ref, or_models,
+            inherited=(inherited_from(hub_id, or_models, by_norm)
+                       if variants else None),
+            overridden=via_override)
     doc = {
         "meta": {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1642,17 +1652,20 @@ def ensure_policy(model):
         return None
     try:
         inherited = inherited_from(mid, or_models, by_norm)
-        ref, _via = resolve(mid, or_models, by_norm)
+        ref, via = resolve(mid, or_models, by_norm)
         if not ref:
             return None
-        entry = entry_for(mid, ref, or_models, inherited=inherited)
+        entry = entry_for(mid, ref, or_models, inherited=inherited,
+                          overridden=via)
         doc = {"meta": {"base_currency": "CNY", "usd_cny": USD_CNY},
                "models": {mid: entry}}
         added, _changed, assignment = record_policies(doc, merge=True)
         pid = assignment.get(mid)
         if added:
             _log_pricing("按需补价：%s → %s%s（策略 %s）"
-                         % (mid, ref, "（继承自 %s）" % inherited if inherited else "", pid))
+                         % (mid, ref,
+                            "（继承自 %s）" % inherited if inherited
+                            else ("（人工映射）" if via else ""), pid))
         return pid
     except Exception as exc:
         _log_pricing("按需补价失败（按未定价处理）：%s（%s）" % (mid, exc))
@@ -1773,6 +1786,11 @@ def policy_entry(policy):
         "unit": policy.get("unit") or 1000000,
         "or_id": policy.get("or_id"),
         "flat": policy.get("flat") or {},
+        # 展示字段，与 entry_for 写进快照的同一套；老策略行没有这几个键，
+        # cost_for_row 会用当前映射表去解释。
+        "via": policy.get("via"),
+        "inherited_from": policy.get("inherited_from"),
+        "override_from": policy.get("override_from"),
     }
     if policy.get("bands"):
         entry["bands"] = policy["bands"]
@@ -1827,10 +1845,12 @@ def record_policies(doc, at=None, merge=False):
                 "usd_cny": usd,
                 "flat": entry.get("flat") or {},
                 "bands": entry.get("bands"),
-                # 审计痕迹：这条价是直接匹配来的，还是从基准模型继承来的
-                # （via="variant" 时 inherited_from 给出基准名）。不进哈希。
+                # 审计痕迹：这条价是直接匹配、人工映射还是从基准模型继承来的
+                # （via="variant" 时 inherited_from 给出基准名，via="override"
+                # 时 override_from 给出原始 hub 模型名）。不进哈希。
                 "via": entry.get("via") or "direct",
                 "inherited_from": entry.get("inherited_from"),
+                "override_from": entry.get("override_from"),
                 "first_seen": stamp,
             }
             fresh.append(known[pid])
@@ -1942,18 +1962,103 @@ def policy_ref_at(epoch_sec, model):
     return None, False
 
 
+# ---- what a row's price is made of -------------------------------------------
+# 面板要能回答「这个数是怎么来的」：这条请求落在哪一档、那一档的三档单价是
+# 多少、按哪条 OpenRouter 条目、又是怎么匹配到它的。这里把 cost_for_row 已经
+# 决定好的东西摊开，不改任何计价口径。
+
+_WEEKDAY_CN = {"mon": "周一", "tue": "周二", "wed": "周三", "thu": "周四",
+               "fri": "周五", "sat": "周六", "sun": "周日"}
+
+# 明细字段的固定顺序，未定价时整组给 None，不编 0。
+_DETAIL_KEYS = ("rates", "unit", "currency", "usd_cny", "or_id", "via",
+                "inherited_from", "override_from", "band_note", "via_derived")
+
+
+def _hhmm(value):
+    """1600 -> 16:00；2400 是源里「当天结束」的写法。"""
+    minutes = int(_as_float(value))
+    return "%02d:%02d" % (minutes // 100, minutes % 100)
+
+
+def band_note(entry, index):
+    """这一行凭什么落在这个条件档位；没有档位（或索引越界）时 None。"""
+    bands = entry.get("bands")
+    if index is None or not isinstance(bands, list):
+        return None
+    if not isinstance(index, int) or not 0 <= index < len(bands):
+        return None
+    band = bands[index]
+    if not isinstance(band, dict):
+        return None
+    threshold = band.get("min_prompt_tokens")
+    if threshold is not None:
+        return "输入长度 ≥ %s tokens" % format(int(_as_float(threshold)), ",")
+    days = [day for day in (band.get("days") or []) if day in _WEEKDAY_CN]
+    window = "%s–%s UTC" % (_hhmm(band.get("start")), _hhmm(band.get("end")))
+    if days:
+        return "每周 %s %s" % ("/".join(_WEEKDAY_CN[day] for day in days), window)
+    return "每天 %s" % window
+
+
+def match_source(entry, model):
+    """(via, inherited_from, override_from, derived) —— 这条价怎么匹配来的。
+
+    策略行里记着 via 就直接用。更早写下的策略行没有这个字段（字段是后加的），
+    只能拿当前映射表去解释：模型在表里、且表里指的正是这条 or_id，那它只可能
+    是人工映射命中，按 override 记并标记为推断；表改过或指不到这条就不敢这么
+    说，按直接匹配记。
+    """
+    via = str(entry.get("via") or "").strip()
+    if via in ("variant", "override", "direct"):
+        return via, entry.get("inherited_from"), entry.get("override_from"), False
+    mapping = runtime_overrides().get(model) or OVERRIDES.get(model)
+    if mapping and mapping == entry.get("or_id"):
+        return "override", None, model, True
+    return "direct", None, None, False
+
+
+def _no_details():
+    return {key: None for key in _DETAIL_KEYS}
+
+
+def _details_for(cost, entry, meta, model):
+    """这一行实际用的价摊开：档位说明、三档单价、汇率、匹配来源。"""
+    if not cost.get("known") or not isinstance(entry, dict):
+        return _no_details()
+    via, inherited, override_from, derived = match_source(entry, model)
+    return {
+        "rates": dict(cost.get("rates") or {}),
+        "unit": _as_float(entry.get("unit")) or 1000000.0,
+        "currency": entry.get("currency") or "USD",
+        "usd_cny": _as_float((meta or {}).get("usd_cny")),
+        "or_id": entry.get("or_id"),
+        "via": via,
+        "inherited_from": inherited,
+        "override_from": override_from,
+        "band_note": band_note(entry, cost.get("band")),
+        "via_derived": derived,
+    }
+
+
 def cost_for_row(row):
-    """A usage row -> {"cny", "known", "band", "source", "source_at", "backfilled"}.
+    """A usage row -> {"cny", "known", "band", "source", "source_at", "backfilled"}
+    外加悬停要用的价格明细（rates / unit / currency / usd_cny / or_id / via /
+    inherited_from / override_from / band_note / via_derived）。
 
     The row's own policy reference wins; a row written before references
     existed falls back to the timeline, and a model with no policy at all is
     priced from the factory snapshot. This is the single place that decides
     which price a request is measured against, so the per-row view and every
     summary agree by construction.
+
+    明细只解释这一行用的是哪份价，未定价时整组 None（不编 0）。
     """
     if not row:
-        return {"cny": 0.0, "known": False, "band": None, "source": "builtin",
+        cost = {"cny": 0.0, "known": False, "band": None, "source": "builtin",
                 "source_at": None, "backfilled": False}
+        cost.update(_no_details())
+        return cost
     model = row.get("model")
     pid = row.get("cost_policy")
     backfilled = False
@@ -1965,11 +2070,15 @@ def cost_for_row(row):
         cost["source"] = pid
         cost["source_at"] = _as_float(policy.get("first_seen"))
         cost["backfilled"] = backfilled
+        cost.update(_details_for(cost, policy_entry(policy), policy, model))
         return cost
-    cost = compute_row(row, pricing=load_pricing())
+    doc = load_pricing()
+    entry = (doc.get("models") or {}).get(model)
+    cost = compute_row(row, pricing=doc)
     cost["source"] = "builtin"
     cost["source_at"] = None
     cost["backfilled"] = False
+    cost.update(_details_for(cost, entry, doc.get("meta"), model))
     return cost
 
 

@@ -1164,6 +1164,12 @@ def recent_usage(limit=100, realm=None, page=1):
     # where that price came from. cost_cny stays None for models the version
     # cannot price; cost_band is the index of the conditional band the row
     # landed in (None when the model has one flat price, or none matched).
+    # cost_rates / cost_unit / cost_currency / cost_usd_cny / cost_or_id /
+    # cost_via / cost_inherited_from / cost_override_from / cost_band_note /
+    # cost_via_derived are the same figure taken apart for the panel's hover
+    # card: which band's three unit prices, at which rate, matched how. They
+    # are all None when the row is unpriced - the panel must say so rather
+    # than show a made-up 0.
     for r in page_rows:
         cost = wb_pricing.cost_for_row(r)
         r["cost_cny"] = round(cost["cny"], 6) if cost["known"] else None
@@ -1173,6 +1179,19 @@ def recent_usage(limit=100, realm=None, page=1):
         r["cost_source"] = cost["source"] if cost["known"] else None
         r["cost_source_at"] = cost["source_at"] if cost["known"] else None
         r["cost_backfilled"] = bool(cost["backfilled"]) if cost["known"] else False
+        r["cost_rates"] = cost["rates"] if cost["known"] else None
+        r["cost_unit"] = cost["unit"] if cost["known"] else None
+        r["cost_currency"] = cost["currency"] if cost["known"] else None
+        r["cost_usd_cny"] = cost["usd_cny"] if cost["known"] else None
+        r["cost_or_id"] = cost["or_id"] if cost["known"] else None
+        r["cost_via"] = cost["via"] if cost["known"] else None
+        r["cost_inherited_from"] = (cost["inherited_from"] if cost["known"]
+                                    else None)
+        r["cost_override_from"] = (cost["override_from"] if cost["known"]
+                                   else None)
+        r["cost_band_note"] = cost["band_note"] if cost["known"] else None
+        r["cost_via_derived"] = (bool(cost["via_derived"]) if cost["known"]
+                                 else None)
     return {
         "total": total,
         "page": page,

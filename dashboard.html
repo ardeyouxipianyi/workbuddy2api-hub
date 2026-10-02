@@ -90,6 +90,19 @@ tbody tr:hover{background:rgba(241,245,249,.6)}
 .cool-pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;
   color:#b45309;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.35);white-space:nowrap}
 .empty{color:var(--dim);text-align:center;padding:28px 0;font-size:13px}
+/* 价格悬停气泡：自绘，才能对齐单价并截图验收；pointer-events:none 让它不会
+   抢走鼠标、把 hover 打断。 */
+.cost-cell{cursor:help}
+#costTip{position:fixed;z-index:80;display:none;max-width:min(480px,94vw);padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);
+  font-size:12px;line-height:1.7;box-shadow:0 14px 34px rgba(15,23,42,.28);pointer-events:none}
+#costTip .ct-h{color:var(--dim);font-size:11px;letter-spacing:.02em}
+#costTip .ct-line{margin-top:2px}
+#costTip .ct-row{display:flex;gap:18px;justify-content:space-between;margin-top:2px}
+#costTip .ct-k{color:var(--dim)}
+#costTip .ct-v{font-variant-numeric:tabular-nums;white-space:nowrap}
+#costTip .ct-note{color:var(--dim);font-size:11px;margin-top:4px}
+#costTip .ct-sep{height:1px;background:var(--line);margin:7px 0}
 .legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin-top:12px;flex-wrap:wrap}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -1651,17 +1664,177 @@ function setCostCurrency(cur){
   // 已经渲染出来的表格/卡片就地换算重画，不必等下一轮轮询。
   if(typeof refreshAllCostViews === 'function') refreshAllCostViews();
 }
-// 悬停里说清这个数是怎么来的：哪条定价策略算的、落在哪个条件档、是不是补算。
-function costTitle(r){
-  if(r.cost_cny == null) return '该模型暂无定价数据';
-  let out = '按 OpenRouter 公布的模型价折算的等价 token 花费';
-  if(r.cost_band != null) out += '；该模型按条件定价（输入长度阈值或时段），这条落在第 ' + (r.cost_band + 1) + ' 档';
-  if(r.cost_source === 'builtin') out += '；定价依据：出厂快照（还没有取到策略）';
-  else if(r.cost_source) out += '；定价依据：策略 ' + r.cost_source
-      + (r.cost_source_at ? '（' + new Date(r.cost_source_at * 1000).toLocaleString() + ' 首次取到）' : '');
-  if(r.cost_backfilled) out += '。这条请求发生在该策略取到之前，用之后第一次取到的价补算';
-  return out;
+// 悬停里说清这个数是怎么来的：哪条定价策略算的、三档单价多少、落在哪个条件
+// 档、这条价是怎么匹配到 OpenRouter 条目的、是不是补算。
+//
+// 用自绘气泡而不是原生 title：单价要按列对齐才好读，而且原生 tooltip 由浏览器
+// 绘制，截图验收时根本截不到。内容全部来自 /usage/recent 每行自带的 cost_* 字
+// 段，前端一个价都不重算。
+const COST_VIA_TEXT = {
+  direct: '直接匹配（归一化同名且唯一命中）',
+  override: '人工映射表 OVERRIDES',
+  variant: '变体后缀继承'
+};
+// 变体继承剥掉的后缀：基准名是原始名去掉尾部一段（剥的是后缀，留下的基准名
+// 就成了前缀），差值就是被剥的那截。
+function costVariantSuffix(r){
+  const base = r.cost_inherited_from;
+  const name = String(r.model || '');
+  return (base && name.length > base.length && name.slice(0, base.length) === base)
+    ? name.slice(base.length) : '';
 }
+// 每百万 token 的美元原价：按原样显示，不折算、不补齐。
+function fmtRate(v){
+  if(v == null || v === '') return '—';
+  const n = Number(v);
+  if(!isFinite(n)) return '—';
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
+}
+function costUnitLabel(r){
+  const n = Number(r.cost_unit);
+  return (isFinite(n) && n > 0) ? fmt(n) + ' token' : '百万 token';
+}
+// 气泡的结构化内容：{lines: 纯文字行, rates: 三档单价, notes: 补充说明}。
+// 文本与 HTML 两种渲染共用这一份，口径不会两处走样。
+function costTipModel(r){
+  if(!r || r.cost_cny == null){
+    return {lines: [], rates: [], notes: ['该模型暂无定价数据']};
+  }
+  const sym = (r.cost_currency === 'CNY') ? '￥' : '$';
+  const lines = [];
+  if(r.cost_source === 'builtin'){
+    lines.push('定价依据：出厂快照（还没有取到策略）');
+  } else if(r.cost_source){
+    lines.push('定价策略：' + r.cost_source
+      + (r.cost_source_at ? '（' + new Date(r.cost_source_at * 1000).toLocaleString() + ' 首次取到）' : ''));
+  }
+  const via = r.cost_via || 'direct';
+  if(via === 'override'){
+    lines.push('匹配来源：' + COST_VIA_TEXT.override
+      + (r.cost_via_derived ? '（策略早于该字段，按当前映射表推断）' : '')
+      + '：' + (r.cost_override_from || r.model) + ' → ' + (r.cost_or_id || '—'));
+  } else if(via === 'variant'){
+    const cut = costVariantSuffix(r);
+    lines.push('匹配来源：' + COST_VIA_TEXT.variant + '：' + r.model
+      + ' → ' + (r.cost_inherited_from || '—') + '（基准） → ' + (r.cost_or_id || '—'));
+    if(cut) lines.push('剥掉的后缀：' + cut);
+  } else {
+    lines.push('匹配来源：' + COST_VIA_TEXT.direct + '：' + (r.cost_or_id || '—'));
+  }
+  const rates = r.cost_rates || {};
+  const hit = rates.input_cache_hit;
+  const rows = [
+    {k: '输入（缓存未命中）', v: sym + fmtRate(rates.input_cache_miss)},
+    {k: '输入（缓存命中）', v: hit == null ? '未公布，按未命中价计' : sym + fmtRate(hit)},
+    {k: '输出', v: sym + fmtRate(rates.output)}
+  ];
+  const notes = [];
+  if(r.cost_usd_cny != null){
+    notes.push('汇率：1 USD = ' + fmtRate(r.cost_usd_cny) + ' CNY（策略记录的汇率，'
+      + '上面的美元单价按它折算成人民币）');
+  }
+  if(r.cost_band != null){
+    notes.push('条件档位：第 ' + (r.cost_band + 1) + ' 档'
+      + (r.cost_band_note ? ' · ' + r.cost_band_note : '') + '，本行按该档单价计');
+  }
+  if(r.cost_backfilled){
+    notes.push('补算：这条请求发生在该策略取到之前，用之后第一次取到的价补算');
+  }
+  return {lines: lines, rates: rows, notes: notes};
+}
+// 纯文本版（多行），给无气泡的场合与单元测试用。
+function costTitle(r){
+  const m = costTipModel(r);
+  const out = ['按 OpenRouter 公布的模型价折算的等价 token 花费'];
+  out.push.apply(out, m.lines);
+  if(m.rates.length){
+    out.push('单价（USD / ' + costUnitLabel(r) + '，OpenRouter 原始价，未折算）');
+    m.rates.forEach(row => out.push('　' + row.k + '：' + row.v));
+  }
+  out.push.apply(out, m.notes);
+  return out.join('\n');
+}
+function costTipHtml(r){
+  const m = costTipModel(r);
+  if(!m.rates.length && !m.lines.length){
+    return '<div class="ct-note">' + esc(m.notes.join('')) + '</div>';
+  }
+  let html = '<div class="ct-h">按 OpenRouter 公布的模型价折算的等价 token 花费</div>';
+  m.lines.forEach(line => {
+    html += '<div class="ct-line">' + esc(line) + '</div>';
+  });
+  html += '<div class="ct-sep"></div>'
+    + '<div class="ct-h">单价 · USD / ' + esc(costUnitLabel(r)) + ' · 原始价，未折算</div>';
+  m.rates.forEach(row => {
+    html += '<div class="ct-row"><span class="ct-k">' + esc(row.k)
+      + '</span><span class="ct-v">' + esc(row.v) + '</span></div>';
+  });
+  m.notes.forEach(note => {
+    html += '<div class="ct-note">' + esc(note) + '</div>';
+  });
+  return html;
+}
+// 气泡只此一个，挂在 body 上；行数据按本次渲染的 key 索引，重画后按 key 复位。
+let COST_TIP_EL = null;
+let COST_TIP_KEY = null;
+const COST_TIP_ROWS = new Map();
+function costRowKey(r, i){
+  return [r.at, r.model, r.account, r.prompt_tokens, r.completion_tokens,
+          r.cached_tokens, r.elapsed_ms, i].join('|');
+}
+function costTipEl(){
+  if(!COST_TIP_EL){
+    COST_TIP_EL = document.createElement('div');
+    COST_TIP_EL.id = 'costTip';
+    document.body.appendChild(COST_TIP_EL);
+  }
+  return COST_TIP_EL;
+}
+function hideCostTip(){
+  COST_TIP_KEY = null;
+  if(COST_TIP_EL) COST_TIP_EL.style.display = 'none';
+}
+function showCostTip(cell, r){
+  const el = costTipEl();
+  el.innerHTML = costTipHtml(r);
+  el.style.display = 'block';
+  const box = cell.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  // 贴着列尾右对齐，越界就往回收；放不下就翻到单元格下面。
+  let left = Math.max(8, Math.min(box.right - w, window.innerWidth - w - 8));
+  let top = box.top - h - 8;
+  if(top < 8) top = Math.min(box.bottom + 8, window.innerHeight - h - 8);
+  el.style.left = left + 'px';
+  el.style.top = Math.max(8, top) + 'px';
+}
+// 表格每 5 秒整体重画一次，重画后把气泡复位到同一行，别让它悬在旧位置。
+function reanchorCostTip(){
+  if(!COST_TIP_KEY) return;
+  const cells = document.querySelectorAll('[data-cost-key]');
+  for(let i = 0; i < cells.length; i++){
+    if(cells[i].getAttribute('data-cost-key') === COST_TIP_KEY){
+      const r = COST_TIP_ROWS.get(COST_TIP_KEY);
+      if(r){ showCostTip(cells[i], r); return; }
+    }
+  }
+  hideCostTip();
+}
+document.addEventListener('mouseover', e => {
+  const cell = e.target && e.target.closest ? e.target.closest('[data-cost-key]') : null;
+  if(!cell) return;
+  const key = cell.getAttribute('data-cost-key');
+  if(!key || key === COST_TIP_KEY) return;
+  const r = COST_TIP_ROWS.get(key);
+  if(!r) return;
+  COST_TIP_KEY = key;
+  showCostTip(cell, r);
+});
+document.addEventListener('mouseout', e => {
+  const cell = e.target && e.target.closest ? e.target.closest('[data-cost-key]') : null;
+  if(!cell) return;
+  if(e.relatedTarget && cell.contains(e.relatedTarget)) return;
+  hideCostTip();
+});
 function renderCostToggle(){
   document.querySelectorAll('.cost-toggle').forEach(el => {
     el.querySelectorAll('button').forEach(b => {
@@ -2480,9 +2653,13 @@ async function refreshInner(){
     const m = (t.accounts_map && t.accounts_map[uid]);
     return (m && m.nickname) ? m.nickname : String(uid).slice(0,8);
   };
+  COST_TIP_ROWS.clear();
   document.getElementById('recent').innerHTML = rows.length ?
     '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th style="color:var(--warn)">OpenRouter 价估算</th></tr></thead><tbody>'
-    + rows.map(r => '<tr>'
+    + rows.map((r, i) => {
+        const costKey = costRowKey(r, i);
+        COST_TIP_ROWS.set(costKey, r);
+        return '<tr>'
         + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
         + '<td class="mono" data-label="模型">' + esc(r.model) + '</td>'
         + '<td class="mono" style="font-size:11px;color:var(--dim)" data-label="账号" title="' + esc(r.account||'') + '">' + esc(acctName(r.account)) + '</td>'
@@ -2497,12 +2674,14 @@ async function refreshInner(){
         + '<td data-label="缓存">' + (r.cache_hit_pct!=null ? r.cache_hit_pct+'%' : '—') + '</td>'
         + '<td data-label="总 token"><b>' + fmt(r.total_tokens) + '</b></td>'
         + '<td data-label="积分" style="color:var(--accent2)">' + (r.credit != null ? Number(r.credit).toFixed(2) : '—') + '</td>'
-        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="' + costTitle(r) + '">'
+        + '<td data-label="OpenRouter 价估算" class="cost-cell" style="color:var(--warn)" data-cost-key="' + esc(costKey) + '">'
         +   fmtCost(r.cost_cny)
         +   (r.cost_backfilled ? '<span style="color:var(--dim)">*</span>' : '')
         + '</td>'
-      + '</tr>').join('') + '</tbody></table>'
+      + '</tr>';
+      }).join('') + '</tbody></table>'
     : '<div class="empty">还没有请求记录</div>';
+  reanchorCostTip();
 }
 
 (async function initDashboard(){
@@ -4274,7 +4453,7 @@ function renderPerfMatrix(usage, perf){
         + '<td data-label="端到端耗时">' + m_wall + '</td>'
         + '<td data-label="缓存命中">' + m_cache + '</td>'
         + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
-        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档">'
+        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
         +   ((m.cost_cny || 0) > 0 ? fmtCost(m.cost_cny) : '<span style="color:var(--dim)">—</span>')
         + '</td>'
         + '</tr>';
@@ -4432,7 +4611,7 @@ function renderAnalytics(data){
           + '<td><b style="color:var(--accent)">' + fmt(st.total_tokens || 0) + '</b></td>'
           + '<td><b style="color:var(--accent2)">' + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>'
           + '<td style="text-align:left;max-width:440px">' + pills + '</td>'
-          + '<td style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档">'
+          + '<td style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
           +   (st.cost_cny != null && st.cost_cny > 0 ? fmtCost(st.cost_cny) : '<span style="color:var(--dim)">—</span>')
           + '</td>'
           + '</tr>';

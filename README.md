@@ -126,7 +126,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 32 个套件：27 个 Python + 5 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 34 个套件：28 个 Python + 6 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。
 
@@ -189,7 +189,8 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 - **新增模型自动取价（无需改代码）**：取价的候选清单 = 内置目录 `wb_catalog.py` ∪ 网关**实时目录**里新增的模型（intl / cn 两个区域各自的实时目录一起并进来，与 `/v1/models` 走同一套过滤，别名与 `-sg`/`-x` 之类付费档位不进清单），所以上游新上架一个名字，5 分钟内就会进入取价并出现在策略表/时间线里；若它在这两次取价之间就被调用，**第一笔请求**也会带上价——按需补价用最近一次抓取留在内存里的目录登记策略，请求路径不发任何网络请求，命不中还是老老实实未定价。匹配顺序是「面板手填覆盖 → 人工覆盖表 `OVERRIDES` → 名字归一化后全等且唯一 → **变体后缀继承**（剥掉 `-lkeap`、`-taiji`、`-volc`、`-sg` 这类渠道/发行后缀，拿基名重走前三步，仍要求唯一命中）」，继承来的策略记 `via=variant` 与 `inherited_from`，面板能看出这条价不是同名匹配来的；`-f`/`-dev`/`-x` 故意不剥（它们是 hub 自己的档位，单价可能不同）。这条规则可在「设置 → 定价刷新 → 变体后缀继承」整体关掉，关掉即恢复「只有覆盖表与同名匹配才定价」。整套匹配仍然遵循「宁可漏也不错」：多轮都没命中的就不写价，费用列显示 `—`。
 - **未定价可见化与手填收口**：`/pricing` 返回未定价清单，每条带分类——`alias`（`default-model` 一类虚拟别名，不是模型，不计入缺口统计）、`or_missing`（OpenRouter 无对应）、`variant_unmatched`（剥后缀后仍无唯一基准），并给出相似度 top 3 候选（**仅建议，绝不自动采用**）。面板「设置 → 定价刷新」下可直接展开逐条查看，为某条模型手填一个 OpenRouter id 并「登记」：映射写进数据目录的 `pricing-overrides.json`（运行期覆盖，不改源码里的 `OVERRIDES`，升级镜像不丢），登记后立即触发一次取价；留空提交即删除该映射。
 - **`_fetch_pricing.py` 支持 `--extra-ids-file <path>`**（离线内置快照工具）：默认仍只读内置静态目录、不引入网络依赖，需要额外 id 时给一份「每行一个模型名」的文件即可，与运行时的并集输入同一条 `build_snapshot()` 路径。
-- **展示位置**：数据指标看板 KPI 卡片「OpenRouter 价估算」（跟随今日/本周/本月/全部区间切换）、各账号用量透视**最后一列**、模型性能与用量一览**最后一列**（含合计行）、网关与运维页「OpenRouter 价估算」卡片、最近请求**最后一列**（逐条金额，悬停显示价格版本与命中的档位；补算的金额后带 `*`）。
+- **展示位置**：数据指标看板 KPI 卡片「OpenRouter 价估算」（跟随今日/本周/本月/全部区间切换）、各账号用量透视**最后一列**、模型性能与用量一览**最后一列**（含合计行）、网关与运维页「OpenRouter 价估算」卡片、最近请求**最后一列**（逐条金额，悬停可看完整定价策略，见下条；补算的金额后带 `*`）。
+- **悬停即可看清单条请求的价是怎么来的**：最近请求最后一列的金额带一个自绘气泡，鼠标停上去给出——**三档原始单价**（缓存命中输入 / 缓存未命中输入 / 输出，USD / 每百万 token，按策略原样显示、不做折算）、版本里的汇率与折算说明、**匹配来源的完整证据链**（`direct` 给出命中的 OpenRouter id；`override` 给出「原名 → 映射到的 id」；`variant` 给出「原名 → 基准名 → OpenRouter id」并标明剥掉的后缀）、命中的**条件档位与该档三档价**、策略 id 与它首次取到的时刻、以及补算标记 `*`；没有定价的行仍只说「该模型暂无定价数据」，不编数字。这些字段由 `/usage/recent` 每行直接带出（`cost_rates`、`cost_unit`、`cost_currency`、`cost_usd_cny`、`cost_or_id`、`cost_via`、`cost_inherited_from`、`cost_override_from`、`cost_band_note`、`cost_via_derived`），面板不为展示再开接口，未定价整组为 `null`、与 `cost_cny` 同口径。气泡挂在 `body` 上且 `pointer-events: none`，不会抢走鼠标；表格每 5 秒整体重画，重画后按行键复位回同一行。**加这些字段没有动计价口径**：`policy_id` 的算法一字未改，全量 15176 行逐行的 `source` 与改动前 0 条失配，历史策略 id 逐条不变；早于 `via` 字段写下的策略行没有记录可查，气泡按当前映射表推断并明确标注是推断（`via_derived=true`），映射表改过或指不到就不认。
 - **人民币 / 美元一键切换**：金额按快照汇率换算，选择记在浏览器本地，刷新后保留；快照覆盖不到的模型显示 `—` 并计入「未覆盖」提示，不做猜测。当前未覆盖的只有 4 个真实名字：OpenRouter 尚未收录的 `kimi-k2.8-preview`、目录里对应 Claude-3.7/4.0-Sonnet 的 `default-1.1` / `default-1.2`（OpenRouter 无同名条目），以及 `kimi-k2-instruct-taiji`（剥掉 `-taiji` 后基名仍无唯一对应）；它们都在面板未定价区列出原因与候选，可按需手填映射。另有 5 个档位别名（`default-model` 等）本就不是真实模型，只在清单里标注、不计入缺口统计。
 
 ### 7. 本地网络工具（可选，默认关闭）
@@ -273,6 +274,7 @@ export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **未定价模型可见化，并可在面板手填 OpenRouter id 收口**：`GET /pricing` 新增未定价清单，每条带分类（`alias` 虚拟别名，不计入缺口 / `or_missing` OpenRouter 无对应 / `variant_unmatched` 剥后缀后仍无唯一基准）与相似度 top 3 候选（**仅建议，绝不自动采用**）；面板「设置 → 定价刷新」下新增未定价区域，可为某条模型直接填 OpenRouter id「登记」，映射写入数据目录的 `pricing-overrides.json`（运行期覆盖，不改源码 `OVERRIDES`，升级镜像不丢），提交后立即触发一次取价；留空提交即删除映射。新增 `POST /pricing/mapping`。
 - **修好「立即取价」按钮的 404**（顺带）：`POST /pricing/refresh` 此前从未注册进 `do_POST`（`is_account_route` 不覆盖 `/pricing`），面板点「立即取价」实际收到 404；现在与 `/pricing/mapping` 一起走面板会话鉴权的新分支。新增文本级回归测试钉住这两条路由必须在 `do_POST` 里出现。
 - 新增 `tests/_test_pricing_auto.py`（40 项）：并集输入、按需补价（含并发幂等与写路径计价）、变体后缀继承与否决项（`kimi-k2-instruct-taiji`、`kimi-k2.8-preview`、5 个别名保持未定价）、缺口分类与候选、面板映射端点与开关。整套增至 32 个套件（27 Python + 5 JS），全绿。
+- **悬停即可看清一条请求的价是怎么来的**：最近请求最后一列的金额加了自绘气泡，给出三档原始单价（缓存命中/未命中输入、输出，USD 每百万 token）、汇率与折算说明、匹配来源的证据链（`direct` / `override` / `variant`，`variant` 还会写出基准名与剥掉的后缀）、命中的条件档位与该档单价、策略 id 与首次取到时刻、补算标记；没有定价的行仍只说「暂无定价数据」，不编 0。`/usage/recent` 每行直接带上 `cost_rates` / `cost_unit` / `cost_currency` / `cost_usd_cny` / `cost_or_id` / `cost_via` / `cost_inherited_from` / `cost_override_from` / `cost_band_note` / `cost_via_derived`，不为展示再开接口。**没有动计价口径**：`policy_id` 的算法一字未改，全量 15176 行逐行 `source` 与改动前 0 条失配，历史策略 id 逐条不变，已固化成测试。早于 `via` 字段写下的策略行按当前映射表推断并标注是推断（`via_derived=true`），指不到就不认。新增 `tests/_test_pricing_tooltip.py` 与 `tests/_test_pricing_tooltip.js`（夹具取自 2026-10-02 的线上现场），整套增至 34 个套件（28 Python + 6 JS），全绿。
 
 ### v1.6.10
 
