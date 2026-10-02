@@ -37,6 +37,7 @@ import urllib.request
 import uuid
 import wb_accounts
 import wb_catalog
+import wb_pricing
 import wb_settings
 import wb_webtools
 import wb_identity
@@ -225,7 +226,8 @@ def identify_key(supplied):
 def _empty_stats():
     return {"requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
             "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
-            "credit": 0.0, "started": time.time(), "by_model": {},
+            "credit": 0.0, "cost_cny": 0.0, "cost_missing": {},
+            "started": time.time(), "by_model": {},
             # Same aggregation keyed by (model, realm), so the metrics table
             # can show one row per exit for a model that ran through both.
             "by_model_realm": {},
@@ -415,6 +417,10 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         row["account"] = account
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = acc.realm if acc else CURRENT_REALM
+    # The price policy this request is measured against, stored as a reference
+    # so the table can be de-duplicated and swept. A row written before the
+    # table existed has no reference and falls back to the timeline.
+    row["cost_policy"] = wb_pricing.current_policy_id(model)
     # Derived per-request rates (None-safe).
     if gen_ms and gen_ms > 0:
         row["tokens_per_sec"] = round(fields.get("completion_tokens", 0) / (gen_ms / 1000.0), 2)
@@ -884,6 +890,21 @@ def usage_snapshot(realm=None, ttl=None, range=None, since=None, until=None):
     return data
 
 
+def _fold_cost(bucket, cost, model):
+    """Fold one row's estimated cost into a stats bucket.
+
+    Unpriced models land in cost_missing (id -> count) instead of quietly
+    vanishing from the totals, so the panel can name what the price
+    snapshot does not cover yet.
+    """
+    if cost["known"]:
+        bucket["cost_cny"] = (bucket.get("cost_cny") or 0.0) + cost["cny"]
+    else:
+        missing = bucket.setdefault("cost_missing", {})
+        mid = model or "unknown"
+        missing[mid] = missing.get(mid, 0) + 1
+
+
 def _usage_snapshot_uncached(realm=None, since=None, until=None):
     # None means every realm; usage_snapshot() has already mapped "all"
     # onto it, so the filter below is simply skipped.
@@ -912,6 +933,10 @@ def _usage_snapshot_uncached(realm=None, since=None, until=None):
                 if until and at > until:
                     continue
                 outcome = row_outcome(row)
+                # Each row is priced against the version that was in force
+                # when it happened, so a later price change cannot rewrite
+                # yesterday's totals.
+                cost = wb_pricing.cost_for_row(row)
                 if outcome != "completed":
                     snap["errors"] += 1
                     # Credit is money already spent: a request that failed
@@ -922,27 +947,32 @@ def _usage_snapshot_uncached(realm=None, since=None, until=None):
                     # because its usage block is incomplete.
                     if outcome != "client_aborted":
                         snap["credit"] += (row.get("credit") or 0)
+                        _fold_cost(snap, cost, row.get("model"))
                 else:
                     snap["requests"] += 1
                     for k in USAGE_FIELDS:
                         if k in row:
                             snap[k] += (row[k] or 0)
+                    _fold_cost(snap, cost, row.get("model"))
                     m = row.get("model") or "unknown"
                     rr = row_realm(row)
-                    per = snap["by_model"].setdefault(m, {"requests": 0, "accounts": {}, **{k: 0 for k in USAGE_FIELDS}})
+                    per = snap["by_model"].setdefault(m, {"requests": 0, "accounts": {}, "cost_cny": 0.0, **{k: 0 for k in USAGE_FIELDS}})
                     per_realm = snap["by_model_realm"].setdefault(m, {}).setdefault(
-                        rr, {"requests": 0, "accounts": {}, **{k: 0 for k in USAGE_FIELDS}})
+                        rr, {"requests": 0, "accounts": {}, "cost_cny": 0.0, **{k: 0 for k in USAGE_FIELDS}})
                     acct_id = row.get("account")
                     acct_key = acct_id or "(unattributed)"
                     per_acct = (snap["by_model_acct"].setdefault(m, {})
                                 .setdefault(rr, {})
                                 .setdefault(acct_key, {"requests": 0, "accounts": {},
+                                                       "cost_cny": 0.0,
                                                        **{k: 0 for k in USAGE_FIELDS}}))
                     for bucket in (per, per_realm, per_acct):
                         bucket["requests"] += 1
                         for k in USAGE_FIELDS:
                             if k in row:
                                 bucket[k] += (row[k] or 0)
+                        if cost["known"]:
+                            bucket["cost_cny"] += cost["cny"]
                         if acct_id:
                             bucket["accounts"][acct_id] = bucket["accounts"].get(acct_id, 0) + 1
     except FileNotFoundError:
@@ -952,6 +982,9 @@ def _usage_snapshot_uncached(realm=None, since=None, until=None):
     snap["since"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("started", time.time())))
     snap["log_file"] = USAGE_LOG
     snap["realm"] = r or "all"
+    # Cost figures are CNY; the panel divides by this rate to show USD
+    # without a round trip.
+    snap["usd_cny"] = wb_pricing.usd_cny()
     snap["accounts_map"] = {a.uid: {"nickname": a.nickname, "realm": a.realm} for a in POOL.accounts} if POOL else {}
     snap["account"] = {
         "uid": (rep.uid if rep else ""),
@@ -1125,15 +1158,32 @@ def recent_usage(limit=100, realm=None, page=1):
     start_idx = (page - 1) * limit
     end_idx = start_idx + limit
     page_rows = matching[start_idx:end_idx]
+    # Equivalent-token cost per row at OpenRouter list prices, computed here
+    # so every consumer of /usage/recent gets the same number. Each row is
+    # priced against the version that was in force when it happened, and says
+    # where that price came from. cost_cny stays None for models the version
+    # cannot price; cost_band is the index of the conditional band the row
+    # landed in (None when the model has one flat price, or none matched).
+    for r in page_rows:
+        cost = wb_pricing.cost_for_row(r)
+        r["cost_cny"] = round(cost["cny"], 6) if cost["known"] else None
+        r["cost_band"] = cost["band"] if cost["known"] else None
+        # cost_policy stays as the row recorded it; cost_source is what the
+        # lookup actually resolved to (the same id, or "builtin").
+        r["cost_source"] = cost["source"] if cost["known"] else None
+        r["cost_source_at"] = cost["source_at"] if cost["known"] else None
+        r["cost_backfilled"] = bool(cost["backfilled"]) if cost["known"] else False
     return {
         "total": total,
         "page": page,
         "limit": limit,
         "total_pages": total_pages,
+        "usd_cny": wb_pricing.usd_cny(),
         "rows": page_rows
     }
 POOL = None
 SCHEDULER = None
+PRICING = None
 ACCOUNTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'accounts')
 def realm_state_file():
     """Path of the persisted realm switch.
@@ -1349,6 +1399,7 @@ def _new_analytics_stat():
             "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
             "cached_tokens": 0, "total_tokens": 0,
             "credit": 0.0,
+            "cost_cny": 0.0,
             "ttft_sum": 0.0, "ttft_n": 0,
             "speed_sum": 0.0, "speed_n": 0,
             "elapsed_sum": 0.0, "elapsed_n": 0,
@@ -1386,6 +1437,7 @@ def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None
                     if outcome == "client_aborted":
                         continue
                     is_err = outcome != "completed"
+                    cost = wb_pricing.cost_for_row(r)
                     at = r.get("at", 0)
                     # Same bounds as /usage and /usage/perf, so the three
                     # readers agree on what the selected range contains.
@@ -1408,6 +1460,8 @@ def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None
                         stat_obj["cached_tokens"] += (r.get("cached_tokens") or 0)
                         stat_obj["total_tokens"] += (r.get("total_tokens") or 0)
                         stat_obj["credit"] += (r.get("credit") or 0)
+                        if cost["known"]:
+                            stat_obj["cost_cny"] += cost["cny"]
                         if r.get("ttft_ms"):
                             stat_obj["ttft_sum"] += r["ttft_ms"]
                             stat_obj["ttft_n"] += 1
@@ -1435,15 +1489,19 @@ def _scan_usage_log(all_summary, window_summary, acct_map, model_map, since=None
                     if in_window:
                         feed(acct_map[acct_uid]["window"], is_err)
                     if not is_err:
-                        tm = acct_map[acct_uid]["all_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
+                        tm = acct_map[acct_uid]["all_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0, "cost_cny": 0.0})
                         tm["requests"] += 1
                         tm["tokens"] += (r.get("total_tokens") or 0)
                         tm["reasoning"] += (r.get("reasoning_tokens") or 0)
+                        if cost["known"]:
+                            tm["cost_cny"] += cost["cny"]
                         if in_window:
-                            tdm = acct_map[acct_uid]["window_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0})
+                            tdm = acct_map[acct_uid]["window_models"].setdefault(m_id, {"requests": 0, "tokens": 0, "reasoning": 0, "cost_cny": 0.0})
                             tdm["requests"] += 1
                             tdm["tokens"] += (r.get("total_tokens") or 0)
                             tdm["reasoning"] += (r.get("reasoning_tokens") or 0)
+                            if cost["known"]:
+                                tdm["cost_cny"] += cost["cny"]
                     if m_id not in model_map:
                         model_map[m_id] = {"model": m_id, "window": _new_analytics_stat(), "all_time": _new_analytics_stat()}
                     feed(model_map[m_id]["all_time"], is_err)
@@ -1515,6 +1573,8 @@ def _compute_usage_analytics_uncached(realm=None, since=None, until=None):
         # what the panel hoped it sent.
         "window": {"since": since, "until": until},
         "realm": realm or "all",
+        # Cost figures are CNY; the panel divides by this rate to show USD.
+        "usd_cny": wb_pricing.usd_cny(),
         "summary": {"window": window_summary, "all_time": all_summary},
         "accounts": accts_list,
         "models": models_list,
@@ -1547,6 +1607,7 @@ def runtime_settings_view():
         "api_keys": keys,
         "reserve_credits": wb_settings.reserve_credits(ACCOUNTS_DIR),
         "daily_token_limit": wb_settings.daily_token_limit(ACCOUNTS_DIR),
+        "pricing_refresh_minutes": wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
@@ -5437,6 +5498,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_tasks(query)
         if path == "/scheduler":
             return self._get_scheduler()
+        if path == "/pricing":
+            return self._get_pricing()
         if path == "/settings":
             return self._get_settings()
         if path == "/proxy/slots":
@@ -5647,6 +5710,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         return self._json(200, SCHEDULER.status() if SCHEDULER else {"enabled": False, "msg": "未运行"})
+
+    def _get_pricing(self):
+        if not self._authorized():
+            return
+        if PRICING:
+            return self._json(200, PRICING.status())
+        return self._json(200, {
+            "interval_minutes": 0.0, "enabled": False, "running": False,
+            "policies": 0, "models": 0, "current": {}, "logs": [],
+            "policies_file": wb_pricing.policies_path(),
+            "timeline": wb_pricing.timeline_path(), "msg": "未运行",
+        })
 
     def _get_settings(self):
         if not self._authorized():
@@ -5888,6 +5963,31 @@ class Handler(BaseHTTPRequestHandler):
             wb_settings.set_daily_token_limit(ACCOUNTS_DIR, limit)
             apply_daily_token_limit(refresh=True)
             reply["daily_token_limit"] = limit
+        if "pricing_refresh_minutes" in payload or "pricing_refresh_hours" in payload:
+            # The interval is in minutes. The old field name is still accepted
+            # (x60) so a panel page cached from the previous build cannot set
+            # the wrong unit; it is answered under the new name.
+            field = "pricing_refresh_minutes" \
+                if "pricing_refresh_minutes" in payload else "pricing_refresh_hours"
+            raw = payload.get(field)
+            if isinstance(raw, bool) or raw is None:
+                return self._error(400, "%s must be a number" % field,
+                                   "invalid_request_error")
+            try:
+                minutes = float(raw)
+            except (TypeError, ValueError):
+                return self._error(400, "%s must be a number" % field,
+                                   "invalid_request_error")
+            if field == "pricing_refresh_hours":
+                minutes *= 60.0
+            if minutes < 0:
+                return self._error(400, "pricing_refresh_minutes cannot be negative",
+                                   "invalid_request_error")
+            stored = wb_settings.set_pricing_refresh_minutes(ACCOUNTS_DIR, minutes)
+            if PRICING:
+                # A running wait picks the new interval up on the spot.
+                PRICING.set_interval(stored)
+            reply["pricing_refresh_minutes"] = stored
         if "auto_switch_product" in payload:
             # Strictly a JSON boolean: a string like "false" would be truthy and
             # silently switch the feature on, which is the one thing an operator
@@ -6056,6 +6156,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_scheduler_trigger(payload)
         if path == "/scheduler/toggle":
             return self._route_scheduler_toggle(payload)
+        if path == "/pricing/refresh":
+            return self._route_pricing_refresh(payload)
         if path == "/logs/clear":
             return self._route_logs_clear(payload)
         if path == "/realm":
@@ -6238,6 +6340,18 @@ class Handler(BaseHTTPRequestHandler):
             SCHEDULER.log(f"用户切换调度器状态为: {'启用' if SCHEDULER.enabled else '暂停'}")
             return self._json(200, SCHEDULER.status())
         return self._json(200, {"ok": False, "msg": "调度器未初始化"})
+
+    def _route_pricing_refresh(self, payload):
+        # Fetching takes tens of seconds, so it runs on its own thread and the
+        # panel polls /pricing for the outcome.
+        if not PRICING:
+            return self._json(200, {"ok": False, "msg": "价格刷新未运行"})
+        threading.Thread(target=PRICING.run_once, daemon=True,
+                         name="price-refresh-manual").start()
+        out = PRICING.status()
+        out["ok"] = True
+        out["msg"] = "已开始抓取，稍候刷新查看结果"
+        return self._json(200, out)
 
     def _route_logs_clear(self, payload):
         clear_logs()
@@ -7088,6 +7202,13 @@ def _bootstrap_runtime(args):
     from wb_scheduler import Scheduler
     SCHEDULER = Scheduler(POOL)
     SCHEDULER.start()
+    global PRICING
+    # The policy table and its timeline live beside the usage log, so one
+    # volume carries both and the request references resolve locally.
+    wb_pricing.set_data_dir(USAGE_DIR)
+    PRICING = wb_pricing.PriceRefresher(
+        wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR))
+    PRICING.start()
     return api_key_generated
 
 def _report_first_run(args):

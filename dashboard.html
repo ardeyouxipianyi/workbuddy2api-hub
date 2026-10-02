@@ -642,6 +642,11 @@ a:hover{text-decoration:underline}
         <div class="v" id="kpiReqCount">0 次</div>
         <div class="s" id="kpiReqSuccess">成功率 100% · 失败 0</div>
       </div>
+      <div class="card warn">
+        <div class="k">API 等价花费 <span id="kpiCostRange" style="font-size:11px;font-weight:400;color:var(--dim)"></span></div>
+        <div class="v" id="kpiCostValue">—</div>
+        <div class="s" id="kpiCostDetail">按 OpenRouter 模型价折算的等价 token 花费 <span id="kpiCostToggle"></span></div>
+      </div>
     </div>
 
     <!-- 表格 1：各账号用量透视与各模型消耗明细 -->
@@ -661,6 +666,7 @@ a:hover{text-decoration:underline}
               <th>消耗总 Token</th>
               <th>消耗积分 (全出口)</th>
               <th style="text-align:left">调用的模型分布明细 (请求数 · 消耗)</th>
+              <th style="color:var(--warn)">OpenRouter 价估算</th>
             </tr>
           </thead>
           <tbody id="analyticsAccountTbody"></tbody>
@@ -789,6 +795,27 @@ a:hover{text-decoration:underline}
                      style="width:170px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
             </div>
             <button onclick="saveDailyTokenLimit(this)">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">定价刷新 <em id="setPricingState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              网关每隔这段时间去 OpenRouter 取一次价：每个模型每份不同的价格存成一条<b>定价策略</b>（内容相同就复用同一条，不重复写），并声明「现在生效的是哪一条」。每条请求按它发生时生效的那一条计价，所以之后调价不会改写之前的数字；请求只记它引用的是哪条策略，不内嵌整份价格。取价时还没有价的模型，用之后第一次取到的价补算并标 <code>*</code>。没人引用、又已经不作数的策略会被清掉（每个模型至少留一条，刚取到的那批不动）。取价间隔以<b>分钟</b>计，默认 5 分钟；填 0 表示不自动刷新（仍可用「立即取价」手动取一次）。<span id="setPricingMeta"></span>
+            </div>
+            <div id="setPricingCurrent"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">刷新间隔（分钟）</div>
+              <input id="setPricingMinutes" type="number" min="0" step="1" value="5"
+                     style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button onclick="savePricingMinutes(this)">保存</button>
+            <button onclick="refreshPricingNow(this)">立即取价</button>
           </div>
         </div>
       </section>
@@ -1588,6 +1615,58 @@ const fmt = n => (n ?? 0).toLocaleString('en-US');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ms = v => v == null ? '—' : (v >= 1000 ? (v/1000).toFixed(2) + ' s' : Math.round(v) + ' ms');
 const pct = v => v == null ? '—' : v.toFixed(1) + '%';
+
+/* ---- OpenRouter 价估算（等价 token 花费） ---- */
+// 后端按权威定价快照把每条请求的 token 折算成人民币；这里只负责展示，
+// 展示货币默认人民币，可切美元（按接口返回的 usd_cny 折算，无需重新请求）。
+let costCurrency = 'CNY';
+try { if(localStorage.getItem('wb-cost-currency') === 'USD') costCurrency = 'USD'; } catch(e) {}
+// 汇率由 /usage、/usage/recent、/usage/analytics 的 usd_cny 字段更新。
+let costUsdRate = 7.1;
+function costSymbol(){ return costCurrency === 'USD' ? '$' : '￥'; }
+// 小额保留更多小数位，避免 0.00x 被显示成 0.00；与费用估算的展示口径一致。
+function fmtCost(cny){
+  if(cny == null || cny === '') return '—';
+  const raw = Number(cny) || 0;
+  const n = costCurrency === 'USD' ? raw / (costUsdRate || 1) : raw;
+  const a = Math.abs(n);
+  if(a > 0 && a < 0.01) return costSymbol() + n.toFixed(4);
+  if(a < 1) return costSymbol() + n.toFixed(3);
+  if(a < 1000) return costSymbol() + n.toFixed(2);
+  return costSymbol() + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function setCostCurrency(cur){
+  costCurrency = (cur === 'USD') ? 'USD' : 'CNY';
+  try { localStorage.setItem('wb-cost-currency', costCurrency); } catch(e) {}
+  renderCostToggle();
+  // 已经渲染出来的表格/卡片就地换算重画，不必等下一轮轮询。
+  if(typeof refreshAllCostViews === 'function') refreshAllCostViews();
+}
+// 悬停里说清这个数是怎么来的：哪条定价策略算的、落在哪个条件档、是不是补算。
+function costTitle(r){
+  if(r.cost_cny == null) return '该模型暂无定价数据';
+  let out = '按 OpenRouter 公布的模型价折算的等价 token 花费';
+  if(r.cost_band != null) out += '；该模型按条件定价（输入长度阈值或时段），这条落在第 ' + (r.cost_band + 1) + ' 档';
+  if(r.cost_source === 'builtin') out += '；定价依据：出厂快照（还没有取到策略）';
+  else if(r.cost_source) out += '；定价依据：策略 ' + r.cost_source
+      + (r.cost_source_at ? '（' + new Date(r.cost_source_at * 1000).toLocaleString() + ' 首次取到）' : '');
+  if(r.cost_backfilled) out += '。这条请求发生在该策略取到之前，用之后第一次取到的价补算';
+  return out;
+}
+function renderCostToggle(){
+  document.querySelectorAll('.cost-toggle').forEach(el => {
+    el.querySelectorAll('button').forEach(b => {
+      b.classList.toggle('active', b.dataset.cur === costCurrency);
+    });
+  });
+}
+// CNY/USD 二选一的切换按钮组；用于费用卡片与表格标题区。
+function costToggleHtml(){
+  return '<span class="cost-toggle" style="display:inline-flex;gap:4px">'
+    + '<button type="button" class="range-btn' + (costCurrency === 'CNY' ? ' active' : '') + '" data-cur="CNY" onclick="setCostCurrency(\'CNY\')">￥ 人民币</button>'
+    + '<button type="button" class="range-btn' + (costCurrency === 'USD' ? ' active' : '') + '" data-cur="USD" onclick="setCostCurrency(\'USD\')">$ 美元</button>'
+    + '</span>';
+}
 // 输入 / 输出 / 思考 三个数字，各自一色，斜杠分隔。思考为 0 也写出来，
 // 列的形状因此固定，不会因某个模型不推理就缩短。
 const tripleTokens = (inp, out, think) =>
@@ -2279,6 +2358,15 @@ async function refresh(){
   try { await refreshInner(); }
   finally { REFRESH_BUSY = false; }
 }
+// 展示货币切换后，把带费用的视图就地重画：各接口有服务端 TTL 缓存，
+// 重新拉取的代价很小，不必为每处维护一份数据副本。
+function refreshAllCostViews(){
+  refresh();
+  if(currentMainTab === 'analytics'){
+    loadAnalytics();
+    loadAnalyticsMatrix();
+  }
+}
 async function refreshInner(){
   let usage, recent, perf;
   try{
@@ -2329,11 +2417,14 @@ async function refreshInner(){
   const subCredit = totSize > 0 ? ('总积分 ' + fmt(totSize) + ' · 剩余 ' + pctRemain) : '当前账号正常';
   const succStr = perf.success_rate_pct != null ? pct(perf.success_rate_pct) : '100.0%';
   const errSub = perf.errors ? (perf.errors + ' 次异常拦截') : '服务运行平稳';
+  // 等价花费的汇率随 /usage 载荷更新（后端定价快照里的值）。
+  if(t.usd_cny) costUsdRate = Number(t.usd_cny) || costUsdRate;
 
   document.getElementById('cards').innerHTML =
     card('可用账号池', activeAccts + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">/ ' + totalAccts + ' 正常</span>', poolSub, 'accent') +
     card('积分余额', hasCreds ? (fmt(totRemain) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">积分</span>') : '正常可用', subCredit, 'accent2') +
     card('网关调用量', fmt(t.requests) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">次</span>', '本出口累计消耗 ' + fmt(t.total_tokens) + ' Token · ' + Number(t.credit || 0).toFixed(2) + ' 积分', '') +
+    card('OpenRouter 价估算', fmtCost(t.cost_cny), '按 OpenRouter 模型价折算的等价 token 花费' + costToggleHtml(), 'warn') +
     card('请求成功率', succStr, errSub, perf.errors ? 'warn' : 'accent2');
 
   const total = recent.total || 0;
@@ -2381,7 +2472,7 @@ async function refreshInner(){
     return (m && m.nickname) ? m.nickname : String(uid).slice(0,8);
   };
   document.getElementById('recent').innerHTML = rows.length ?
-    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th></tr></thead><tbody>'
+    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th style="color:var(--warn)">OpenRouter 价估算</th></tr></thead><tbody>'
     + rows.map(r => '<tr>'
         + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
         + '<td class="mono" data-label="模型">' + esc(r.model) + '</td>'
@@ -2397,6 +2488,10 @@ async function refreshInner(){
         + '<td data-label="缓存">' + (r.cache_hit_pct!=null ? r.cache_hit_pct+'%' : '—') + '</td>'
         + '<td data-label="总 token"><b>' + fmt(r.total_tokens) + '</b></td>'
         + '<td data-label="积分" style="color:var(--accent2)">' + (r.credit != null ? Number(r.credit).toFixed(2) : '—') + '</td>'
+        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="' + costTitle(r) + '">'
+        +   fmtCost(r.cost_cny)
+        +   (r.cost_backfilled ? '<span style="color:var(--dim)">*</span>' : '')
+        + '</td>'
       + '</tr>').join('') + '</tbody></table>'
     : '<div class="empty">还没有请求记录</div>';
 }
@@ -2633,6 +2728,15 @@ async function loadSettings(showToast){
         dailyTokState.textContent = dailyTokValue > 0 ? ('(每账号每天 ' + fmt(dailyTokValue) + ' token)') : '(不限)';
         dailyTokState.style.color = dailyTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
       }
+      const pricingMinutes = Number(data.pricing_refresh_minutes || 0);
+      const pricingInput = document.getElementById('setPricingMinutes');
+      if(pricingInput) pricingInput.value = String(pricingMinutes);
+      const pricingState = document.getElementById('setPricingState');
+      if(pricingState){
+        pricingState.textContent = pricingMinutes > 0 ? ('(每 ' + pricingMinutes + ' 分钟)') : '(未启用)';
+        pricingState.style.color = pricingMinutes > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
+      loadPricingStatus();
       const autoSwitch = data.auto_switch_product === true;
       const autoSwitchInput = document.getElementById('setAutoSwitch');
       if(autoSwitchInput) autoSwitchInput.checked = autoSwitch;
@@ -2737,6 +2841,69 @@ async function saveDailyTokenLimit(btn){
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function savePricingMinutes(btn){
+  const el = document.getElementById('setPricingMinutes');
+  const value = Number((el || {}).value || 0);
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正数（分钟）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {pricing_refresh_minutes: value});
+    toast(value > 0 ? ('已启用：每 ' + value + ' 分钟取一次价') : '已关闭自动取价（仍可手动取一次）', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function loadPricingStatus(){
+  const meta = document.getElementById('setPricingMeta');
+  const box = document.getElementById('setPricingCurrent');
+  if(!meta) return;
+  try {
+    const st = await getJSON('/pricing');
+    const bits = [];
+    if(st.current_at_label) bits.push('当前生效 ' + st.current_at_label + ' 那一份（' + (st.models || 0) + ' 个模型）');
+    else bits.push('还没取过价，暂用出厂快照');
+    if(st.last_run_label) bits.push('上次取价 ' + st.last_run_label);
+    if(st.enabled && st.next_run_label) bits.push('下次 ' + st.next_run_label);
+    bits.push('策略表 ' + (st.policies || 0) + ' 条');
+    if(st.last_error) bits.push('上次失败：' + st.last_error);
+    meta.textContent = '　' + bits.join('；');
+    meta.style.color = st.last_error ? 'var(--warn)' : 'var(--dim)';
+    if(box){
+      const cur = st.current || {};
+      const models = Object.keys(cur);
+      box.innerHTML = models.length
+        ? '<details><summary style="cursor:pointer">展开查看每个模型当前生效的策略</summary>'
+          + '<div style="margin-top:6px;max-height:260px;overflow:auto;font-family:monospace;line-height:1.7">'
+          + models.map(m => esc(m) + ' → ' + esc(cur[m].id || '') + (cur[m].label ? '（' + esc(cur[m].label) + ' 首次取到）' : '')).join('<br>')
+          + '</div></details>'
+        : '';
+    }
+  } catch(e) {
+    meta.textContent = '';
+    if(box) box.innerHTML = '';
+  }
+}
+
+async function refreshPricingNow(btn){
+  if(btn) btn.disabled = true;
+  try {
+    const st = await postJSON('/pricing/refresh', {});
+    toast(st.msg || '已开始抓取', 'ok');
+    // The fetch runs on the server's own thread, so come back for the result
+    // instead of holding the button.
+    setTimeout(loadPricingStatus, 4000);
+    setTimeout(loadPricingStatus, 15000);
+  } catch(e) {
+    toast('触发失败: ' + e.message, 'bad');
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -3859,16 +4026,18 @@ function renderPerfMatrix(usage, perf){
      * barely-used row cannot outvote a heavily-used one.
      */
     const filtering = !!(matrixAcctFilter || matrixModelFilter);
-    let sumReq, sumErr, sumTok, sumP, sumC, sumR, totTtft, totTps, totWall, totCache;
+    let sumReq, sumErr, sumTok, sumP, sumC, sumR, totTtft, totTps, totWall, totCache, sumCost;
     if(!filtering){
       sumReq = usage.requests; sumErr = perf.errors; sumTok = usage.total_tokens;
       sumP = usage.prompt_tokens; sumC = usage.completion_tokens; sumR = usage.reasoning_tokens;
+      // OpenRouter 价估算的合计：未筛选时取出口级汇总（与上面的数字同源）。
+      sumCost = usage.cost_cny || 0;
       totTtft = perf.ttft_ms ? (ms(perf.ttft_ms.avg) + " (P50 " + ms(perf.ttft_ms.p50) + ")") : "-";
       totTps = perf.tokens_per_sec ? (perf.tokens_per_sec.avg.toFixed(1) + " tok/s") : "-";
       totWall = perf.wall_ms ? ms(perf.wall_ms.avg) : "-";
       totCache = perf.cache_hit_pct ? (perf.cache_hit_pct.avg.toFixed(1) + "%") : "-";
     } else {
-      sumReq = 0; sumErr = 0; sumTok = 0; sumP = 0; sumC = 0; sumR = 0;
+      sumReq = 0; sumErr = 0; sumTok = 0; sumP = 0; sumC = 0; sumR = 0; sumCost = 0;
       let ttftW = 0, ttftN = 0, tpsW = 0, tpsN = 0, wallW = 0, wallN = 0, cacheW = 0, cacheN = 0;
       rowsData.forEach(m => {
         sumReq += m.requests || 0;
@@ -3876,6 +4045,7 @@ function renderPerfMatrix(usage, perf){
         sumP += m.prompt_tokens || 0;
         sumC += m.completion_tokens || 0;
         sumR += m.reasoning_tokens || 0;
+        sumCost += m.cost_cny || 0;
         const mp = ((perf && perf.by_model_realm) || {})[m.id] || {};
         const mpAcctAll = ((perf && perf.by_model_acct) || {})[m.id] || {};
         const mpRealm = m.realm ? (mp[m.realm] || null) : null;
@@ -3908,6 +4078,7 @@ function renderPerfMatrix(usage, perf){
       + '<td data-label="端到端耗时">' + totWall + '</td>'
       + '<td data-label="缓存命中">' + totCache + '</td>'
       + '<td data-label="用量占比">100%</td>'
+      + '<td data-label="OpenRouter 价估算" style="color:var(--warn)">' + fmtCost(sumCost) + '</td>'
       + '</tr>';
 
     const rows = rowsData.map(m => {
@@ -3989,6 +4160,9 @@ function renderPerfMatrix(usage, perf){
         + '<td data-label="端到端耗时">' + m_wall + '</td>'
         + '<td data-label="缓存命中">' + m_cache + '</td>'
         + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
+        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档">'
+        +   ((m.cost_cny || 0) > 0 ? fmtCost(m.cost_cny) : '<span style="color:var(--dim)">—</span>')
+        + '</td>'
         + '</tr>';
     }).join('');
 
@@ -4007,6 +4181,7 @@ function renderPerfMatrix(usage, perf){
       + '<th style="text-align:left">账号</th>'
       + '<th>请求数</th><th>失败</th><th>总 Token</th><th style="min-width:190px">输入 / 输出 / 思考</th>'
       + '<th>首字延迟 (TTFT)</th><th>生成速度</th><th>端到端耗时</th><th>缓存命中率</th><th>用量占比</th>'
+      + '<th style="color:var(--warn)">OpenRouter 价估算</th>'
       + '</tr></thead><tbody>' + summaryRow + rows + '</tbody></table>';
   }
 
@@ -4081,6 +4256,15 @@ function renderAnalytics(data){
   if(elReqCount) elReqCount.textContent = fmt(currentSum.requests || 0) + ' 次';
   if(elReqSuccess) elReqSuccess.textContent = '成功率 ' + successPct + '% · 失败 ' + (currentSum.errors || 0);
 
+  // KPI 6: API 等价花费（跟随范围切换；货币切换按钮挂在这里）
+  if(data.usd_cny) costUsdRate = Number(data.usd_cny) || costUsdRate;
+  const elCostRange = document.getElementById('kpiCostRange');
+  const elCostValue = document.getElementById('kpiCostValue');
+  const elCostDetail = document.getElementById('kpiCostDetail');
+  if(elCostRange) elCostRange.textContent = '(' + rangeLabel() + ')';
+  if(elCostValue) elCostValue.innerHTML = fmtCost(currentSum.cost_cny != null ? currentSum.cost_cny : 0);
+  if(elCostDetail) elCostDetail.innerHTML = '按 OpenRouter 模型价折算的等价 token 花费 ' + costToggleHtml();
+
   // Table 1: 账号透视表
   const acctTbody = document.getElementById('analyticsAccountTbody');
   const acctCountEm = document.getElementById('analyticsAcctCount');
@@ -4092,7 +4276,7 @@ function renderAnalytics(data){
 
   if(acctTbody){
     if(!accts.length){
-      acctTbody.innerHTML = '<tr><td colspan="7" class="empty">暂无账号用量数据</td></tr>';
+      acctTbody.innerHTML = '<tr><td colspan="8" class="empty">暂无账号用量数据</td></tr>';
     } else {
       acctTbody.innerHTML = accts.map(a => {
         // window 桶就是当前选中的范围，也就是这张表要展示的口径。
@@ -4134,6 +4318,9 @@ function renderAnalytics(data){
           + '<td><b style="color:var(--accent)">' + fmt(st.total_tokens || 0) + '</b></td>'
           + '<td><b style="color:var(--accent2)">' + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>'
           + '<td style="text-align:left;max-width:440px">' + pills + '</td>'
+          + '<td style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档">'
+          +   (st.cost_cny != null && st.cost_cny > 0 ? fmtCost(st.cost_cny) : '<span style="color:var(--dim)">—</span>')
+          + '</td>'
           + '</tr>';
       }).join('');
     }
