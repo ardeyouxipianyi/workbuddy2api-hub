@@ -806,7 +806,11 @@ a:hover{text-decoration:underline}
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               网关每隔这段时间去 OpenRouter 取一次价：每个模型每份不同的价格存成一条<b>定价策略</b>（内容相同就复用同一条，不重复写），并声明「现在生效的是哪一条」。每条请求按它发生时生效的那一条计价，所以之后调价不会改写之前的数字；请求只记它引用的是哪条策略，不内嵌整份价格。取价时还没有价的模型，用之后第一次取到的价补算并标 <code>*</code>。没人引用、又已经不作数的策略会被清掉（每个模型至少留一条，刚取到的那批不动）。取价间隔以<b>分钟</b>计，默认 5 分钟；填 0 表示不自动刷新（仍可用「立即取价」手动取一次）。<span id="setPricingMeta"></span>
             </div>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              取价输入 = 内置目录 <b>∪</b> 网关实时目录里新增的模型，上游新上架的名字无需改代码就会进入下一轮取价；两次取价之间就被调用的新模型，第一笔请求即按内存里的目录<b>按需补价</b>。名字带渠道后缀（如 <code>-lkeap</code>）的模型默认按<b>变体后缀继承</b>向基准模型取价（要求唯一命中，命不中照旧显示未定价）；关掉开关即恢复「只有覆盖表与同名匹配才定价」。
+            </div>
             <div id="setPricingCurrent"></div>
+            <div id="setPricingGaps"></div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div>
@@ -816,6 +820,11 @@ a:hover{text-decoration:underline}
             </div>
             <button onclick="savePricingMinutes(this)">保存</button>
             <button onclick="refreshPricingNow(this)">立即取价</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setPricingVariant" type="checkbox" style="width:16px;height:16px">
+              变体后缀继承
+            </label>
+            <button onclick="savePricingVariant(this)">保存</button>
           </div>
         </div>
       </section>
@@ -2736,6 +2745,9 @@ async function loadSettings(showToast){
         pricingState.textContent = pricingMinutes > 0 ? ('(每 ' + pricingMinutes + ' 分钟)') : '(未启用)';
         pricingState.style.color = pricingMinutes > 0 ? 'var(--accent2)' : 'var(--dim)';
       }
+      const variantOn = data.pricing_variant_inherit !== false;
+      const variantInput = document.getElementById('setPricingVariant');
+      if(variantInput) variantInput.checked = variantOn;
       loadPricingStatus();
       const autoSwitch = data.auto_switch_product === true;
       const autoSwitchInput = document.getElementById('setAutoSwitch');
@@ -2883,13 +2895,115 @@ async function loadPricingStatus(){
       box.innerHTML = models.length
         ? '<details><summary style="cursor:pointer">展开查看每个模型当前生效的策略</summary>'
           + '<div style="margin-top:6px;max-height:260px;overflow:auto;font-family:monospace;line-height:1.7">'
-          + models.map(m => esc(m) + ' → ' + esc(cur[m].id || '') + (cur[m].label ? '（' + esc(cur[m].label) + ' 首次取到）' : '')).join('<br>')
+          + models.map(m => esc(m) + ' → ' + esc(cur[m].id || '')
+              + (cur[m].via === 'variant' ? '（继承自 ' + esc(cur[m].inherited_from || '?') + '）' : '')
+              + (cur[m].label ? '　' + esc(cur[m].label) + ' 首次取到' : '')).join('<br>')
           + '</div></details>'
         : '';
     }
+    renderPricingGaps(st);
   } catch(e) {
     meta.textContent = '';
     if(box) box.innerHTML = '';
+  }
+}
+
+/* ---- unpriced models: what shows a dash, why, and a way to map it ---- */
+const PRICING_GAP_LABELS = {
+  or_missing: {text: 'OpenRouter 无对应', color: 'var(--warn)'},
+  variant_unmatched: {text: '变体名未命中基准', color: 'var(--warn)'},
+  alias: {text: '虚拟别名（非实体模型）', color: 'var(--dim)'},
+};
+
+function safeModelId(value){
+  // Model ids and OpenRouter ids are [A-Za-z0-9._/:-]; anything else is
+  // dropped before it reaches an attribute or an inline handler argument.
+  return String(value == null ? '' : value).replace(/[^A-Za-z0-9._/:\-]/g, '');
+}
+
+function renderPricingGaps(st){
+  const box = document.getElementById('setPricingGaps');
+  if(!box) return;
+  const gaps = Array.isArray(st.gaps) ? st.gaps : [];
+  const sum = st.gap_summary || {};
+  const head = '<div style="font-size:12px;color:var(--dim);margin-top:10px">'
+    + '<b>未定价模型</b>：' + fmt(sum.total || 0) + ' 个需要人工关注'
+    + (sum.or_missing ? '（无对应 ' + fmt(sum.or_missing) + '）' : '')
+    + (sum.variant_unmatched ? '（变体未命中 ' + fmt(sum.variant_unmatched) + '）' : '')
+    + (sum.aliases ? '；另有 ' + fmt(sum.aliases) + ' 个虚拟别名不参与统计' : '')
+    + (sum.variants_enabled === false ? '；变体继承当前已关闭' : '')
+    + '</div>';
+  if(!gaps.length){
+    box.innerHTML = head + '<div style="font-size:12px;color:var(--accent2);margin-top:4px">全部模型都有价。</div>';
+    return;
+  }
+  const rows = gaps.map(g => {
+    const model = safeModelId(g.model);
+    const label = PRICING_GAP_LABELS[g.reason] || {text: g.reason || '未定价', color: 'var(--dim)'};
+    const cands = (g.candidates || []).map(c =>
+      '<a href="javascript:void(0)" data-or-id="' + safeModelId(c)
+      + '" onclick="fillPricingMapping(this)" style="color:var(--accent2)">' + esc(c) + '</a>'
+    ).join('、');
+    const editable = g.reason !== 'alias';
+    const control = editable
+      ? '<input placeholder="vendor/model" style="width:190px;background:var(--panel2);'
+        + 'border:1px solid var(--line);border-radius:6px;padding:4px 8px;color:var(--fg);font:inherit;font-size:12px">'
+        + '<button onclick="savePricingMapping(this)" style="font-size:12px;padding:4px 10px">登记</button>'
+      : '<span style="color:var(--dim);font-size:12px">无需登记</span>';
+    return '<div data-model="' + model + '" style="display:flex;align-items:center;gap:8px;'
+      + 'flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--line)">'
+      + '<span class="mono" style="font-size:12px;min-width:180px">' + esc(g.model) + '</span>'
+      + '<span style="font-size:12px;color:' + label.color + '">' + esc(label.text) + '</span>'
+      + '<span style="font-size:12px;color:var(--dim)">' + (cands ? '候选：' + cands : '') + '</span>'
+      + control + '</div>';
+  }).join('');
+  box.innerHTML = head
+    + '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">展开逐条查看 / 手填 OpenRouter id</summary>'
+    + '<div style="margin-top:4px;max-height:320px;overflow:auto">' + rows + '</div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:6px">手填的映射存在数据目录的 pricing-overrides.json（不改源码），登记后立即触发一次取价；留空提交即删除该映射。候选只是字面相似度建议，不自动采用。</div>'
+    + '</details>';
+}
+
+function fillPricingMapping(link){
+  const row = link.closest('[data-model]');
+  const input = row && row.querySelector('input');
+  if(input) input.value = link.getAttribute('data-or-id') || '';
+}
+
+async function savePricingMapping(btn){
+  const row = btn.closest('[data-model]');
+  if(!row) return;
+  const model = row.getAttribute('data-model');
+  const input = row.querySelector('input');
+  const orId = (input && input.value || '').trim();
+  btn.disabled = true;
+  try {
+    const res = await postJSON('/pricing/mapping', {model: model, or_id: orId});
+    toast(res.msg || '已记录', res.known || !orId ? 'ok' : 'warn');
+    setTimeout(loadPricingStatus, 3000);
+    setTimeout(loadPricingStatus, 12000);
+  } catch(e) {
+    toast('登记失败: ' + e.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function savePricingVariant(btn){
+  const el = document.getElementById('setPricingVariant');
+  const value = !!(el && el.checked);
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/save', {pricing_variant_inherit: value});
+    toast(value
+      ? '已开启：带渠道后缀的模型按基准模型继承定价（仅在唯一命中时）'
+      : '已关闭变体继承：带后缀的名字不再自动取价', 'ok');
+    if(res.pricing_refresh_started) setTimeout(loadPricingStatus, 4000);
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
   }
 }
 

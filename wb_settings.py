@@ -30,6 +30,9 @@ LEGACY_PRICING_REFRESH_HOURS_KEY = "pricing_refresh_hours"
 PRICING_REFRESH_MINUTES_KEY = "pricing_refresh_minutes"
 # A month, the old cap converted: 720 hours = 43200 minutes.
 MAX_PRICING_REFRESH_MINUTES = 24 * 30 * 60
+# Whether a model name may inherit its price from a suffix-stripped base
+# (deepseek-r1-0528-lkeap → deepseek-r1-0528). Missing key reads as on.
+PRICING_VARIANT_INHERIT_KEY = "pricing_variant_inherit"
 
 _lock = threading.RLock()
 
@@ -475,6 +478,31 @@ def set_pricing_refresh_minutes(accounts_dir, value):
         data.pop(LEGACY_PRICING_REFRESH_HOURS_KEY, None)
         save(accounts_dir, data)
     return value
+
+
+def pricing_variant_inherit(accounts_dir):
+    """Whether a model name may inherit its price from a suffix-stripped base.
+
+    On unless the operator turns it off: a hub model carrying a channel suffix
+    (`deepseek-r1-0528-lkeap`) is the same entity as its base model upstream,
+    and without this the gateway would show "未定价" for a model it can price
+    exactly. Off restores the previous behaviour - only the override table and
+    an exact name match can price a model - so an install that wants the
+    strictest possible rule keeps it. A settings.json that predates the key
+    reads back as on, which is the default this ships with.
+    """
+    value = load(accounts_dir).get(PRICING_VARIANT_INHERIT_KEY)
+    return True if value is None else value is True
+
+
+def set_pricing_variant_inherit(accounts_dir, enabled):
+    """Persist the variant-inheritance switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_VARIANT_INHERIT_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
 
 
 def auto_switch_product(accounts_dir):

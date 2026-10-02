@@ -25,6 +25,17 @@ nothing points at are swept - except a model's live one, the batch just fetched,
 and a model's last row of all. All prices are per `unit` tokens (1M) and the
 result is CNY; callers divide by meta.usd_cny to show USD.
 
+A model the upstream adds is priced without a release. The fetch input is the
+bundled catalogue plus whatever the gateway's live catalogue lists beyond it, so
+a new name enters the next cycle on its own; a model called before that cycle
+is priced on demand from the index the last fetch left in memory (no network on
+the request path). A name carrying a channel suffix the base name does not
+(`deepseek-r1-0528-lkeap`) inherits from the suffix-stripped base, but only when
+that base matches OpenRouter uniquely - a guess is never written down. A model
+that still cannot be priced is listed by the panel with the reason and, where
+one exists, a hand-entered mapping that lives in the data folder rather than in
+this file.
+
 Only the Python standard library is required.
 """
 
@@ -33,6 +44,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.request
@@ -974,6 +986,12 @@ def usd_cny():
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 USD_CNY = 7.10
 
+# The realms whose live catalogue feeds the price input beyond the bundled
+# snapshot. fetch_remote_product_config() fetches per realm (it knows only
+# intl/cn), so both are asked: a model the picker offers on either tab must
+# be priced without a release.
+LIVE_CATALOG_REALMS = ("intl", "cn")
+
 # Names that differ from OpenRouter's, so the automatic matcher cannot find
 # them. Kept deliberately short: a model that matches by name must not be
 # listed here, or this becomes the maintenance burden it replaced.
@@ -995,6 +1013,38 @@ OVERRIDES = {
     "hunyuan-2.0-instruct": "tencent/hunyuan-a13b-instruct",
     "hunyuan-chat": "tencent/hunyuan-a13b-instruct",
 }
+
+# 变体后缀表：hub 的名字有时在上游同一实体模型后多带一个渠道/发行后缀。
+# 剥掉后缀后按基名重走完整解析链（面板手填覆盖 → 源码覆盖表 → 归一化全等
+# 唯一），仍然要求唯一命中，否则照旧算未定价。第二列是该后缀是否参与自动
+# 剥离——只放实测确认「同名字后缀 = 同一实体」的那些：
+#
+#   -lkeap       渠道后缀：实测 deepseek-r1-0528-lkeap / deepseek-v3-1-lkeap /
+#                deepseek-v3-0324-lkeap 都能落到同名基准（后两个经 OVERRIDES）
+#   -taiji       发行后缀：kimi-k2-instruct-taiji 剥掉后 OR 仍无同名基准，
+#                因此照样未定价——把「命不中就不定价」这条规则也钉住
+#   -volc        渠道后缀（火山）：deepseek-v3-*-volc 在 OVERRIDES 里已有更
+#                精确的写法，这里兜底未来新增的 -volc 变体
+#   -sg          节点后缀（新加坡）：同上，剥掉后仍要求唯一命中
+#   -f           不剥离：hub 用它区分免费档与付费档，上游 curation 也把它当
+#                独立档位；自动继承会抹掉这层语义
+#   -dev         不剥离：hub 的预览档后缀（目录里当前没有在用），语义是
+#                「另一份构建」而非「同一份价」
+#   -x           不剥离：hub 的加量档，实测 hy3-x 与 hy3 单价不同，继承会把
+#                价压低
+#
+# 关闭开关（设置 → 定价刷新 → 变体后缀继承）后，本表整体不参与解析。
+VARIANT_SUFFIXES = (
+    ("-lkeap", True),
+    ("-taiji", True),
+    ("-volc", True),
+    ("-sg", True),
+    ("-f", False),
+    ("-dev", False),
+    ("-x", False),
+)
+
+# 面板手填覆盖的路径由 data_dir() 决定，见 runtime_overrides()。
 
 # OpenRouter 用 UTC 星期名与 HHMM 表达时段档位。
 WEEKDAY_KEYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
@@ -1083,10 +1133,12 @@ def fetch_openrouter():
 
 
 def hub_model_ids():
-    """内置目录里的模型 id（国际版在前，保序去重）——取价的输入清单。
+    """内置目录里的模型 id（国际版在前，保序去重）——取价的静态基线。
 
     目录里新增模型后，这里就会多一个候选；非 chat 的档位别名（
     default-model 等）在 OpenRouter 里匹配不到，自然落进未定价清单。
+    本函数语义固定为「静态快照」；运行时取价还会并上网关 live 目录里
+    的新增模型，见 priced_model_ids()。
     """
     import wb_catalog
     ids, seen = [], set()
@@ -1098,6 +1150,79 @@ def hub_model_ids():
                 seen.add(mid)
                 ids.append(mid)
     return ids
+
+
+def priced_model_ids(extra_ids=None):
+    """取价输入清单：静态目录 ∪ 额外 id（去重保序，静态在前）。
+
+    extra_ids 是网关 live 目录里新增、静态快照还没有的模型，由调用方按
+    /v1/models 的同一套过滤整理好（见 PriceRefresher._live_ids）。别名不会
+    从这里进来：curate_remote_catalog 已把 default-model 一类剔除；静态
+    目录里本来就有别名，它们匹配不到 OpenRouter，被算作未定价但不计缺口。
+    """
+    ids, seen = [], set()
+    for mid in hub_model_ids():
+        if mid not in seen:
+            seen.add(mid)
+            ids.append(mid)
+    for raw in extra_ids or []:
+        mid = str(raw or "").strip()
+        if mid and mid not in seen:
+            seen.add(mid)
+            ids.append(mid)
+    return ids
+
+
+# ---- variant inheritance -----------------------------------------------------
+# hub 的新模型常带着渠道/发行后缀（-lkeap、-taiji ...），名字对不上任何
+# OpenRouter 条目时，按 VARIANT_SUFFIXES 剥掉后缀、拿基名重走解析链。继承
+# 来的价在策略里留 via / inherited_from，面板能看出它不来自同名条目。
+
+_settings_dir_override = None
+# 开关本身几乎不变，但 ensure_policy 会在每次「这个模型还没有价」的请求上走到
+# 这里；按 (path, mtime, size) 缓存一次，省掉热路径上的 settings.json 解析。
+_variant_cache = {"key": None, "value": True}
+_variant_lock = threading.Lock()
+
+
+def set_settings_dir(path):
+    """wb_proxy 指向自己的 accounts 目录，让开关与面板读写同一份设置。"""
+    global _settings_dir_override
+    _settings_dir_override = path
+
+
+def variant_inherit_enabled(accounts_dir=None):
+    """变体后缀继承是否打开。默认打开；读不到设置也不影响取价。"""
+    try:
+        import wb_settings
+        path = accounts_dir or _settings_dir_override or os.environ.get("ACCOUNTS_DIR")
+        if not path:
+            return True
+        try:
+            settings = wb_settings.settings_path(path)
+            key = (settings, os.path.getmtime(settings), os.path.getsize(settings))
+        except OSError:
+            key = (path, None, None)
+        with _variant_lock:
+            if _variant_cache["key"] == key:
+                return _variant_cache["value"]
+        value = wb_settings.pricing_variant_inherit(path)
+        with _variant_lock:
+            _variant_cache.update({"key": key, "value": value})
+        return value
+    except Exception:
+        return True
+
+
+def variant_bases(hub_id):
+    """去掉变体后缀后的候选基名，按表内顺序；没启用剥离时为空。"""
+    name = str(hub_id or "").strip()
+    for suffix, enabled in VARIANT_SUFFIXES:
+        if not enabled or not name.endswith(suffix):
+            continue
+        base = name[:-len(suffix)].strip()
+        if base:
+            yield base
 
 
 def normalize(name):
@@ -1121,24 +1246,83 @@ def auto_match(hub_id, by_norm):
     return cands[0] if len(cands) == 1 else None
 
 
-def resolve(hub_id, or_models, by_norm):
-    """(OpenRouter id, 是否来自人工覆盖)；匹配不到返回 (None, False)。"""
-    ref = OVERRIDES.get(hub_id)
-    if ref and ref in or_models:
-        return ref, True
+def _resolve_once(hub_id, or_models, by_norm):
+    """面板手填覆盖 → 源码覆盖表 → 归一化全等唯一，三层解析一次。"""
+    for table in (runtime_overrides(), OVERRIDES):
+        ref = table.get(hub_id)
+        if ref and ref in or_models:
+            return ref, True
     auto = auto_match(hub_id, by_norm)
     return (auto, False) if auto else (None, False)
 
 
-def build_snapshot(or_models, previous=None):
+def resolve(hub_id, or_models, by_norm, variants=None):
+    """(OpenRouter id, 是否来自人工覆盖)；匹配不到返回 (None, False)。
+
+    variants 为 None 时读设置开关（默认开）。剥后缀继承来的命中一律记作
+    人工覆盖，因为那不是名字碰巧相同，而是一次有据可查的判定。
+    """
+    if variants is None:
+        variants = variant_inherit_enabled()
+    ref, via_override = _resolve_once(hub_id, or_models, by_norm)
+    if ref or not variants:
+        return ref, via_override
+    for base in variant_bases(hub_id):
+        ref, via_override = _resolve_once(base, or_models, by_norm)
+        if ref:
+            return ref, True
+    return None, False
+
+
+def inherited_from(hub_id, or_models, by_norm):
+    """这条命中是不是剥后缀继承来的；是则返回基准模型名，否则 None。"""
+    if _resolve_once(hub_id, or_models, by_norm)[0]:
+        return None
+    for base in variant_bases(hub_id):
+        if _resolve_once(base, or_models, by_norm)[0]:
+            return base
+    return None
+
+
+def entry_for(hub_id, ref, or_models, inherited=None):
+    """一条 hub 模型 → OpenRouter 条目的快照记录（刷新与按需补价共用）。
+
+    inherited 非空时是剥后缀继承来的基准模型名，写进 via / inherited_from
+    留审计痕迹；这两个字段不参与 policy_id 的内容哈希，只作展示与追溯。
+    """
+    p = or_models.get(ref) or {}
+    entry = {
+        "display": hub_id,
+        "source": "openrouter",
+        "currency": "USD",
+        "unit": 1_000_000,
+        "or_id": ref,
+        "flat": rates_from(p),
+    }
+    bands = bands_from_overrides(p)
+    if bands:
+        entry["bands"] = bands
+    if inherited:
+        entry["via"] = "variant"
+        entry["inherited_from"] = inherited
+    return entry
+
+
+def build_snapshot(or_models, previous=None, extra_ids=None, variants=None):
     """(doc, unpriced, overridden)。
 
     or_models 为 None 表示这次抓取失败：结果沿用 previous 里的价（没有就
     留空），这样一次网络抖动不会把价格表清掉。
+
+    extra_ids 是要额外覆盖的模型（网关 live 目录里新增、静态快照还没有
+    的那些），与静态目录取并集后一起解析，去重保序。variants 覆盖变体继
+    承开关（None = 读设置，默认开）。
     """
+    if variants is None:
+        variants = variant_inherit_enabled()
     by_norm = index_openrouter(or_models) if or_models else {}
     models, unpriced, overridden = {}, [], []
-    for hub_id in hub_model_ids():
+    for hub_id in priced_model_ids(extra_ids):
         if or_models is None:
             old = (previous or {}).get(hub_id)
             if old:
@@ -1146,25 +1330,15 @@ def build_snapshot(or_models, previous=None):
             else:
                 unpriced.append(hub_id)
             continue
-        ref, via_override = resolve(hub_id, or_models, by_norm)
+        ref, via_override = resolve(hub_id, or_models, by_norm, variants=variants)
         if not ref:
             unpriced.append(hub_id)
             continue
         if via_override:
             overridden.append(hub_id)
-        p = or_models.get(ref) or {}
-        entry = {
-            "display": hub_id,
-            "source": "openrouter",
-            "currency": "USD",
-            "unit": 1_000_000,
-            "or_id": ref,
-            "flat": rates_from(p),
-        }
-        bands = bands_from_overrides(p)
-        if bands:
-            entry["bands"] = bands
-        models[hub_id] = entry
+        models[hub_id] = entry_for(hub_id, ref, or_models,
+                                   inherited_from(hub_id, or_models, by_norm)
+                                   if variants else None)
     doc = {
         "meta": {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1186,7 +1360,7 @@ def build_snapshot(or_models, previous=None):
 # than three. A request stores the *reference* to the policy that priced it, not
 # a copy of the rates, which is what lets an unreferenced policy be dropped.
 
-_policy_lock = threading.Lock()
+_policy_lock = threading.RLock()
 _policies_cache = {"key": None, "data": None}
 _timeline_cache = {"key": None, "data": None}
 _data_dir_override = None
@@ -1223,6 +1397,73 @@ def timeline_path():
 def usage_log_path():
     """The usage log, which wb_proxy keeps in the same folder."""
     return os.path.join(data_dir(), "usage.jsonl")
+
+
+def overrides_path():
+    """面板手填的 hub → OpenRouter id 映射文件。
+
+    与源码里的 OVERRIDES 分开：面板写的是运行期覆盖，落在 usage/ 数据目录
+    里，升级镜像不会丢，也不会被镜像覆盖。
+    """
+    return os.path.join(data_dir(), "pricing-overrides.json")
+
+
+_runtime_overrides_cache = {"key": None, "data": {}}
+
+
+def _read_runtime_overrides():
+    """The file's content, ignoring nothing but a missing/corrupt file."""
+    data = {}
+    try:
+        with open(overrides_path(), encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict):
+            for mid, ref in loaded.items():
+                mid, ref = str(mid or "").strip(), str(ref or "").strip()
+                if mid and ref:
+                    data[mid] = ref
+    except Exception:
+        data = {}
+    return data
+
+
+def runtime_overrides():
+    """{hub id: OpenRouter id}——面板手填、按 mtime 缓存的覆盖映射。"""
+    path = overrides_path()
+    try:
+        key = (path, os.path.getmtime(path), os.path.getsize(path))
+    except OSError:
+        return {}
+    with _policy_lock:
+        if _runtime_overrides_cache["key"] == key:
+            return _runtime_overrides_cache["data"]
+    data = _read_runtime_overrides()
+    with _policy_lock:
+        _runtime_overrides_cache.update({"key": key, "data": data})
+    return data
+
+
+def save_runtime_override(model, or_id):
+    """写入/清除一条面板手填映射；返回写后的整份映射。
+
+    or_id 为空表示删除这条映射（回到源码覆盖表与自动匹配）。
+    """
+    model = str(model or "").strip()
+    or_id = str(or_id or "").strip()
+    path = overrides_path()
+    with _policy_lock:
+        data = _read_runtime_overrides()
+        if or_id:
+            data[model] = or_id
+        else:
+            data.pop(model, None)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+        _runtime_overrides_cache.update({"key": None, "data": data})
+    return data
 
 
 def _file_key(path):
@@ -1311,9 +1552,216 @@ def current_assignment():
 
 
 def current_policy_id(model):
-    """The policy in force for this model, for wb_proxy to stamp on a row."""
+    """The policy in force for this model, for wb_proxy to stamp on a row.
+
+    A model with no policy yet is priced on demand from the OpenRouter index
+    the last fetch left in memory (never from the network - the request path
+    must not block on a fetch), so a model first called between two refreshes
+    still carries its price. A miss stays a miss and the row is stamped
+    without a reference, exactly as before.
+    """
     _at, assignment = current_assignment()
-    return assignment.get(model)
+    pid = assignment.get(model)
+    if pid:
+        return pid
+    return ensure_policy(model)
+
+
+# ---- on-demand pricing -------------------------------------------------------
+# The refresher keeps the last successful OpenRouter reading in memory. A model
+# that appears in it but has no policy yet - the upstream added it and the
+# gateway is called before the next cycle - is priced from that index right
+# when the request is logged, so the first row already carries a price.
+
+_live_lock = threading.Lock()
+_live_index = {"models": None, "by_norm": None, "at": None}
+
+
+def remember_live_index(or_models):
+    """Remember a successful fetch for the on-demand path (memory only).
+
+    A failed fetch never calls this, so the last good reading stays usable.
+    """
+    if not or_models:
+        return
+    by_norm = index_openrouter(or_models)
+    with _live_lock:
+        _live_index.update({"models": dict(or_models), "by_norm": by_norm,
+                            "at": time.time()})
+
+
+def live_index():
+    """(or_models, by_norm) from the last successful fetch; (None, {}) if none."""
+    with _live_lock:
+        return _live_index["models"], (_live_index["by_norm"] or {})
+
+
+# ---- gateway interop ---------------------------------------------------------
+# The gateway is usually imported, but the container starts it as a script
+# (`python wb_proxy.py`), which makes the running instance __main__. A plain
+# `import wb_proxy` would then execute the file a second time inside the same
+# process, and that twin has no account pool - so the live catalogue quietly
+# reads as empty - plus its own log buffer, so pricing lines never reach the
+# panel. Both were observed in production, so resolve the module that is
+# actually running; only fall back to a fresh import when none is loaded.
+
+def gateway_module():
+    """The live gateway module (or a fresh import when nothing is loaded)."""
+    main = sys.modules.get("__main__")
+    if main is not None and hasattr(main, "curated_live_sources"):
+        return main
+    module = sys.modules.get("wb_proxy")
+    if module is not None:
+        return module
+    import wb_proxy as module
+    return module
+
+
+def _log_pricing(msg):
+    """Mirror a line into the gateway log; pricing must not depend on it."""
+    try:
+        gateway_module().add_log_entry("[定价] %s" % msg, tag="pricing")
+    except Exception:
+        pass
+
+
+def ensure_policy(model):
+    """Register a policy for a model that has none, from the in-memory index.
+
+    Returns the policy id, or None when the index is cold, the name does not
+    resolve, or anything goes wrong - the caller then treats the row as
+    unpriced, which is the same answer as before this path existed. Never
+    touches the network, and repeated calls are idempotent because policies
+    are keyed by a content hash; only a genuinely new policy logs a line.
+    """
+    mid = str(model or "").strip()
+    if not mid:
+        return None
+    or_models, by_norm = live_index()
+    if not or_models:
+        return None
+    try:
+        inherited = inherited_from(mid, or_models, by_norm)
+        ref, _via = resolve(mid, or_models, by_norm)
+        if not ref:
+            return None
+        entry = entry_for(mid, ref, or_models, inherited=inherited)
+        doc = {"meta": {"base_currency": "CNY", "usd_cny": USD_CNY},
+               "models": {mid: entry}}
+        added, _changed, assignment = record_policies(doc, merge=True)
+        pid = assignment.get(mid)
+        if added:
+            _log_pricing("按需补价：%s → %s%s（策略 %s）"
+                         % (mid, ref, "（继承自 %s）" % inherited if inherited else "", pid))
+        return pid
+    except Exception as exc:
+        _log_pricing("按需补价失败（按未定价处理）：%s（%s）" % (mid, exc))
+        return None
+
+
+# ---- unpriced visibility -----------------------------------------------------
+# The panel has to be able to answer "which models would show a dash, and why"
+# instead of hiding that in the refresh log. Candidates are suggestions only -
+# nothing here changes a price.
+
+_ALIAS_FALLBACK = ("default-model", "fast-model", "balanced-model",
+                   "primary-model", "deep-model", "auto")
+
+
+def virtual_alias_names():
+    """The virtual-alias set (non-models). Read from the gateway when importable
+    so the two sides cannot drift; a local fallback keeps this usable alone."""
+    try:
+        names = getattr(gateway_module(), "VIRTUAL_ALIAS_MODELS", None)
+        if names:
+            return {str(n) for n in names}
+    except Exception:
+        pass
+    return set(_ALIAS_FALLBACK)
+
+
+def suggest_matches(hub_id, or_models, limit=3):
+    """Top OpenRouter ids that look like `hub_id` - suggestions, never applied.
+
+    Substring containment on the normalized names first (cheap and the way a
+    channel suffix usually shows up), then edit-distance ratio for the rest.
+    """
+    target = normalize(hub_id)
+    if len(target) < 3 or not or_models:
+        return []
+    scored = []
+    for mid in or_models:
+        if ":" in mid:
+            continue
+        leaf = normalize(mid.split("/")[-1])
+        if not leaf:
+            continue
+        if leaf in target or target in leaf:
+            score = 0.75 + 0.25 * min(len(leaf), len(target)) / max(len(leaf), len(target))
+        else:
+            score = _ratio(target, leaf)
+        if score >= 0.6:
+            scored.append((score, mid))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [mid for _score, mid in scored[:limit]]
+
+
+def _ratio(a, b):
+    """SequenceMatcher ratio with a cheap length filter in front."""
+    if not a or not b:
+        return 0.0
+    if abs(len(a) - len(b)) > max(len(a), len(b)) * 0.6:
+        return 0.0
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def gap_items(or_models, by_norm=None, extra_ids=None, variants=None, priced=()):
+    """(items, summary) - unpriced models, categorised, with suggestions.
+
+    A model counts as priced when a live/factory price covers it or the
+    in-memory index resolves it (the on-demand path would price it on first
+    use). What remains is a lasting gap and is reported:
+
+      - alias: a virtual entry (default-model ...), not a model at all; it is
+        not part of the gap count the panel shows;
+      - variant_unmatched: the name carries a variant suffix from the table,
+        but even the stripped base name matches nothing (or nothing unique);
+      - or_missing: OpenRouter lists no counterpart - the operator can map one
+        by hand from the panel, which is what the candidates are for.
+
+    Rows for aliases carry no candidates: there is nothing to map them to.
+    """
+    if variants is None:
+        variants = variant_inherit_enabled()
+    by_norm = by_norm if by_norm is not None else index_openrouter(or_models)
+    aliases = virtual_alias_names()
+    known = set(priced or ()) | set((load_pricing().get("models") or {}))
+    items, counts = [], {"alias": 0, "or_missing": 0, "variant_unmatched": 0}
+    for mid in priced_model_ids(extra_ids):
+        if mid in known:
+            continue
+        if or_models and resolve(mid, or_models, by_norm, variants=variants)[0]:
+            continue
+        if mid in aliases:
+            reason = "alias"
+        elif any(True for _ in variant_bases(mid)):
+            reason = "variant_unmatched"
+        else:
+            reason = "or_missing"
+        counts[reason] += 1
+        item = {"model": mid, "reason": reason}
+        if reason != "alias":
+            item["candidates"] = suggest_matches(mid, or_models)
+        items.append(item)
+    summary = {
+        "total": counts["or_missing"] + counts["variant_unmatched"],
+        "or_missing": counts["or_missing"],
+        "variant_unmatched": counts["variant_unmatched"],
+        "aliases": counts["alias"],
+        "variants_enabled": bool(variants),
+    }
+    return items, summary
 
 
 def policy_entry(policy):
@@ -1339,55 +1787,69 @@ def _doc_for(policy, model):
     }
 
 
-def record_policies(doc, at=None):
+def record_policies(doc, at=None, merge=False):
     """Register a fetched snapshot: table first, then the timeline.
 
     Returns (new policies, timeline appended, {model: id}). A price that is
     already in the table is not written again, and the timeline only grows
     when the assignment actually changes - so a steady price costs nothing per
     refresh no matter how often it is checked.
+
+    merge=True starts the timeline row from the assignment already in force
+    and overlays this doc, instead of replacing it. One on-demand
+    registration - a single model, recorded between two fetches - must not
+    make the panel's "in force now" view drop every other model.
+
+    The whole read-decide-append runs under one (reentrant) lock: two threads
+    pricing the same new model at once must append its policy row once, and
+    the timeline row they would both write must be written once.
     """
     stamp = time.time() if at is None else _as_float(at)
     models = doc.get("models") or {}
     usd = _as_float((doc.get("meta") or {}).get("usd_cny"), USD_CNY)
-    known = load_policies()
-    fresh, assignment = [], {}
-    for model, entry in models.items():
-        pid = policy_id(model, entry.get("flat"), entry.get("bands"), usd)
-        assignment[model] = pid
-        if pid in known:
-            continue
-        known[pid] = {
-            "id": pid,
-            "model": model,
-            "or_id": entry.get("or_id"),
-            "currency": entry.get("currency") or "USD",
-            "unit": entry.get("unit") or 1000000,
-            "usd_cny": usd,
-            "flat": entry.get("flat") or {},
-            "bands": entry.get("bands"),
-            "first_seen": stamp,
-        }
-        fresh.append(known[pid])
-    if fresh:
-        path = policies_path()
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with _policy_lock:
+    with _policy_lock:
+        known = load_policies()
+        fresh, assignment = [], {}
+        _previous_at, previous = current_assignment()
+        if merge:
+            assignment = dict(previous)
+        for model, entry in models.items():
+            pid = policy_id(model, entry.get("flat"), entry.get("bands"), usd)
+            assignment[model] = pid
+            if pid in known:
+                continue
+            known[pid] = {
+                "id": pid,
+                "model": model,
+                "or_id": entry.get("or_id"),
+                "currency": entry.get("currency") or "USD",
+                "unit": entry.get("unit") or 1000000,
+                "usd_cny": usd,
+                "flat": entry.get("flat") or {},
+                "bands": entry.get("bands"),
+                # 审计痕迹：这条价是直接匹配来的，还是从基准模型继承来的
+                # （via="variant" 时 inherited_from 给出基准名）。不进哈希。
+                "via": entry.get("via") or "direct",
+                "inherited_from": entry.get("inherited_from"),
+                "first_seen": stamp,
+            }
+            fresh.append(known[pid])
+        if fresh:
+            path = policies_path()
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
                 for row in fresh:
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             _policies_cache.update({"key": None, "data": None})
-    _previous_at, previous = current_assignment()
-    changed = False
-    if assignment and assignment != previous:
-        path = timeline_path()
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with _policy_lock:
+        changed = False
+        if assignment and assignment != previous:
+            path = timeline_path()
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": stamp, "policies": assignment},
                                     ensure_ascii=False) + "\n")
             _timeline_cache.update({"key": None, "data": None})
-        changed = True
+            changed = True
     return len(fresh), changed, assignment
 
 
@@ -1536,11 +1998,16 @@ class PriceRefresher(threading.Thread):
         self.last_run = None
         self.last_error = None
         self.last_models = 0
+        self.last_extra = 0
+        self._extra_ids = []
+        self.last_unpriced = []
         self.next_run = None
         self.logs = []
         self._stop_event = threading.Event()
         self._wake = threading.Event()
         self._run_lock = threading.Lock()
+        self._gap_lock = threading.Lock()
+        self._gap_cache = None
 
     def log(self, msg):
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1548,8 +2015,7 @@ class PriceRefresher(threading.Thread):
         if len(self.logs) > 40:
             self.logs = self.logs[-40:]
         try:
-            import wb_proxy
-            wb_proxy.add_log_entry("[定价] %s" % msg, tag="pricing")
+            gateway_module().add_log_entry("[定价] %s" % msg, tag="pricing")
         except Exception:
             pass
 
@@ -1566,6 +2032,42 @@ class PriceRefresher(threading.Thread):
         self._stop_event.set()
         self._wake.set()
 
+    def live_ids(self):
+        """The gateway's live catalogue ids, filtered the way /v1/models is.
+
+        These are the models the picker can offer but the bundled snapshot has
+        never heard of - exactly the ones this change exists for. Read through
+        the running gateway module so both sides apply one filter (is_chat_model
+        plus the variant/free-sibling rules in curate_remote_catalog), never a
+        second copy of the rules and never a second copy of the module: that
+        twin would have no account pool, and the live half would read empty.
+        Both realms are asked: the remote catalogue is fetched per realm
+        (fetch_remote_product_config only knows intl/cn), and a model the
+        picker shows on either tab belongs in the price input. Any failure
+        falls back to an empty list: the static catalogue must still be priced,
+        so live trouble can only ever leave a gap, never shrink the coverage.
+        """
+        try:
+            gateway = gateway_module()
+            known = set(hub_model_ids())
+            out, seen = [], set()
+            for realm in LIVE_CATALOG_REALMS:
+                try:
+                    entries, _extras = gateway.curated_live_sources(realm)
+                except Exception as exc:
+                    self.log("live 目录取不到（%s），该区域本轮只按内置目录：%s"
+                             % (realm, exc))
+                    continue
+                for mid, _meta in entries or []:
+                    mid = str(mid or "").strip()
+                    if mid and mid not in known and mid not in seen:
+                        seen.add(mid)
+                        out.append(mid)
+            return out
+        except Exception as exc:
+            self.log("live 目录取不到，本轮只覆盖内置目录：%s" % exc)
+            return []
+
     def run_once(self):
         """抓一次并入账。返回 (ok, message)。"""
         with self._run_lock:
@@ -1575,26 +2077,67 @@ class PriceRefresher(threading.Thread):
                 self.last_error = str(exc)
                 self.log("抓取失败，继续用上一版价格：%s" % exc)
                 return False, str(exc)
+            extra_ids = self.live_ids()
             previous = (load_pricing().get("models") or {})
-            doc, unpriced, overridden = build_snapshot(or_models, previous)
+            doc, unpriced, overridden = build_snapshot(or_models, previous, extra_ids)
             if not doc["models"]:
                 self.last_error = "抓到了模型列表，但一个都没匹配上"
                 self.log(self.last_error)
                 return False, self.last_error
             stamp = time.time()
             added, _changed, assignment = record_policies(doc, at=stamp)
+            # The on-demand path reads this index; published only after the
+            # fetch really succeeded, so a failed cycle keeps the last good one.
+            remember_live_index(or_models)
             self.last_run = stamp
             self.last_error = None
-            self.last_models = len(assignment)
+            self.last_models = len(doc["models"])
+            self.last_extra = len(extra_ids)
+            # Kept for the panel's gap report, which must show a live-only name
+            # that could not be priced too - that is the case the whole
+            # unpriced view exists for. Memory only, no network on that path.
+            self._extra_ids = list(extra_ids)
+            self.last_unpriced = list(unpriced)
+            self.invalidate_gaps()
             removed = []
             if added:
                 # Only a price never seen before can orphan an older one, so
                 # the sweep runs when there is something new - not every cycle.
                 removed = prune_policies(protect=set(assignment.values()))
-            self.log("已取价：%d 个模型（新增策略 %d，人工覆盖 %d，未定价 %d%s）"
+            self.log("已取价：%d 个模型（新增策略 %d，人工覆盖 %d，未定价 %d%s%s）"
                      % (self.last_models, added, len(overridden), len(unpriced),
+                        "，live 新增 %d" % self.last_extra if self.last_extra else "",
                         "，清理无用策略 %d" % len(removed) if removed else ""))
             return True, ""
+
+    # ---- unpriced visibility (panel) ----------------------------------------
+    def invalidate_gaps(self):
+        with self._gap_lock:
+            self._gap_cache = None
+
+    def gap_report(self, max_items=200, ttl=30.0):
+        """(items, summary) - which models show a dash, and why. Panel view.
+
+        Computed from the in-memory index and the stored policy table, plus the
+        live ids of the last good cycle - a model the upstream just added and
+        OpenRouter does not carry has to be visible here, that is the gap an
+        operator can close by hand. Cached for a moment because the settings
+        page polls it.
+        """
+        with self._gap_lock:
+            cached = self._gap_cache
+            if cached and time.time() - cached["at"] < ttl:
+                return cached["items"], cached["summary"]
+        or_models, by_norm = live_index()
+        _at, assignment = current_assignment()
+        items, summary = gap_items(or_models, by_norm, extra_ids=self._extra_ids,
+                                   variants=variant_inherit_enabled(),
+                                   priced=set(assignment))
+        if max_items and len(items) > max_items:
+            items = items[:max_items]
+        with self._gap_lock:
+            self._gap_cache = {"at": time.time(), "items": items, "summary": summary}
+        return items, summary
 
     def run(self):
         # First boot: with nothing fetched yet, take one reading right away so
@@ -1626,6 +2169,7 @@ class PriceRefresher(threading.Thread):
     def status(self):
         policies = load_policies()
         at, assignment = current_assignment()
+        gaps, gap_summary = self.gap_report()
         return {
             "interval_minutes": self.interval_minutes,
             "enabled": self.interval_minutes > 0,
@@ -1640,15 +2184,24 @@ class PriceRefresher(threading.Thread):
                                if self.next_run else None),
             "last_error": self.last_error,
             "last_models": self.last_models,
+            "last_extra": self.last_extra,
             "policies": len(policies),
             "models": len(assignment),
             "current_at": at,
             "current_at_label": (time.strftime("%Y-%m-%d %H:%M",
                                                time.localtime(at)) if at else None),
             # What is in force right now, model by model: the declaration the
-            # panel shows, and the answer to "which policy is live".
-            "current": {m: {"id": pid, "label": policy_label(policies.get(pid) or {})}
+            # panel shows, and the answer to "which policy is live". A variant
+            # says so, with the model it inherited its price from.
+            "current": {m: {"id": pid,
+                            "label": policy_label(policies.get(pid) or {}),
+                            "via": (policies.get(pid) or {}).get("via") or "direct",
+                            "inherited_from": (policies.get(pid) or {}).get("inherited_from")}
                         for m, pid in sorted(assignment.items())},
+            "gaps": gaps,
+            "gap_summary": gap_summary,
+            "variant_inherit": variant_inherit_enabled(),
+            "overrides_file": overrides_path(),
             "policies_file": policies_path(),
             "timeline": timeline_path(),
             "logs": list(self.logs),

@@ -1608,6 +1608,7 @@ def runtime_settings_view():
         "reserve_credits": wb_settings.reserve_credits(ACCOUNTS_DIR),
         "daily_token_limit": wb_settings.daily_token_limit(ACCOUNTS_DIR),
         "pricing_refresh_minutes": wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR),
+        "pricing_variant_inherit": wb_settings.pricing_variant_inherit(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
@@ -5719,6 +5720,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, {
             "interval_minutes": 0.0, "enabled": False, "running": False,
             "policies": 0, "models": 0, "current": {}, "logs": [],
+            "gaps": [], "gap_summary": {"total": 0, "or_missing": 0,
+                                        "variant_unmatched": 0, "aliases": 0,
+                                        "variants_enabled":
+                                            wb_settings.pricing_variant_inherit(ACCOUNTS_DIR)},
+            "variant_inherit": wb_settings.pricing_variant_inherit(ACCOUNTS_DIR),
+            "overrides_file": wb_pricing.overrides_path(),
             "policies_file": wb_pricing.policies_path(),
             "timeline": wb_pricing.timeline_path(), "msg": "未运行",
         })
@@ -5988,6 +5995,23 @@ class Handler(BaseHTTPRequestHandler):
                 # A running wait picks the new interval up on the spot.
                 PRICING.set_interval(stored)
             reply["pricing_refresh_minutes"] = stored
+        if "pricing_variant_inherit" in payload:
+            # Strictly a JSON boolean, like the other switches: "false" as a
+            # string would be truthy and silently keep the feature on.
+            raw = payload.get("pricing_variant_inherit")
+            if not isinstance(raw, bool):
+                return self._error(400, "pricing_variant_inherit must be true or false",
+                                   "invalid_request_error")
+            previous = wb_settings.pricing_variant_inherit(ACCOUNTS_DIR)
+            wb_settings.set_pricing_variant_inherit(ACCOUNTS_DIR, raw)
+            reply["pricing_variant_inherit"] = raw
+            if PRICING and previous != raw:
+                # The switch only takes effect on the next fetch - a refresh
+                # drops (off) or adds (on) the suffix-inherited assignments -
+                # so kick one off rather than waiting out the interval.
+                threading.Thread(target=PRICING.run_once, daemon=True,
+                                 name="price-refresh-inherit").start()
+                reply["pricing_refresh_started"] = True
         if "auto_switch_product" in payload:
             # Strictly a JSON boolean: a string like "false" would be truthy and
             # silently switch the feature on, which is the one thing an operator
@@ -6356,6 +6380,44 @@ class Handler(BaseHTTPRequestHandler):
     def _route_logs_clear(self, payload):
         clear_logs()
         return self._json(200, {"ok": True})
+
+    def _route_pricing_mapping(self, payload):
+        """面板手填一条「hub 模型 → OpenRouter id」映射。
+
+        写进 usage/pricing-overrides.json（运行期覆盖，不改源码里的
+        OVERRIDES，也不随镜像升级丢失），随后立刻触发一次取价，让这条映射
+        在几秒内生效。or_id 为空表示删除该映射。写入只认形状像 OpenRouter
+        id 的值，并在快照里有该条目时予以确认（没有也接受，但要如实说明，
+        因为上游随时可能刚上架而本地清单还没刷新）。
+        """
+        if PRICING is None:
+            return self._json(200, {"ok": False, "msg": "价格刷新未运行"})
+        model = str(payload.get("model") or "").strip()
+        or_id = str(payload.get("or_id") or "").strip()
+        if not model:
+            return self._error(400, "model is required", "invalid_request_error")
+        if or_id and not re.match(r"^[A-Za-z0-9._\-]+/[A-Za-z0-9._\-:]+$", or_id):
+            return self._error(400, "or_id must look like 'vendor/model'",
+                               "invalid_request_error")
+        or_models, _by_norm = wb_pricing.live_index()
+        known = bool(or_id) and or_id in (or_models or {})
+        wb_pricing.save_runtime_override(model, or_id)
+        PRICING.invalidate_gaps()
+        threading.Thread(target=PRICING.run_once, daemon=True,
+                         name="price-refresh-mapping").start()
+        if not or_id:
+            msg = "已删除 %s 的手填映射，下次取价起按自动匹配" % model
+        elif known:
+            msg = "已记录 %s → %s，正在重新取价" % (model, or_id)
+        else:
+            msg = ("已记录 %s → %s；本次快照里还没看到该条目，"
+                   "取价后仍可能显示未定价" % (model, or_id))
+        add_log_entry("[定价] 面板手填映射：%s → %s%s"
+                      % (model, or_id or "(清除)",
+                         "" if (known or not or_id) else "（快照暂无此条目）"),
+                      tag="pricing")
+        return self._json(200, {"ok": True, "model": model, "or_id": or_id,
+                                "known": known, "msg": msg})
 
     def _route_realm(self, payload):
         # Changing the exit affects every key that is not realm-bound, so
@@ -6844,6 +6906,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")
             return self._handle_settings_save()
+        if path in ("/pricing/refresh", "/pricing/mapping"):
+            # Panel-only management writes (the pricing table is the panel's
+            # own view of the estimate). Registered here because the generic
+            # dispatcher below only routes chat and account paths - POST
+            # /pricing/refresh used to 404, which made the panel's "立即取价"
+            # button fail silently behind its toast.
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            payload = self._payload_or_error()
+            if payload is None:
+                return
+            if path == "/pricing/mapping":
+                return self._route_pricing_mapping(payload)
+            return self._route_pricing_refresh(payload)
         if path.startswith("/proxy/"):
             if not self._panel_ok():
                 return self._error(
@@ -7206,6 +7282,9 @@ def _bootstrap_runtime(args):
     # The policy table and its timeline live beside the usage log, so one
     # volume carries both and the request references resolve locally.
     wb_pricing.set_data_dir(USAGE_DIR)
+    # The variant-inheritance switch lives in the panel settings; point the
+    # pricing side at the same settings.json the panel writes.
+    wb_pricing.set_settings_dir(ACCOUNTS_DIR)
     PRICING = wb_pricing.PriceRefresher(
         wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR))
     PRICING.start()
