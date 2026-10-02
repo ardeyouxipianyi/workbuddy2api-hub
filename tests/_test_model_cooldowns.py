@@ -129,6 +129,13 @@ class ModelCooldownTests(unittest.TestCase):
                 # picking; this stub only needs to answer the call.
                 return value or 0
 
+            def apply_daily_credit_limit(self, value=None, credits=None,
+                                         free_models=None):
+                return value or 0
+
+            def apply_model_daily_token_limit(self, value=None, per_model=None):
+                return value or 0
+
         old_pool, old_urlopen = proxy.POOL, accounts.urlopen
         old_parser = proxy.parse_rate_limit_reset
         proxy.POOL = Pool()

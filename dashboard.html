@@ -796,6 +796,44 @@ a:hover{text-decoration:underline}
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
+            <h2 style="margin:0">每日积分限额 <em id="setDailyCreditState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每日上限（积分）</div>
+              <input id="setDailyCreditLimit" type="number" min="0" step="1" value="0"
+                     style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button onclick="saveDailyCreditLimit(this)">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">按模型每日 Token 限额 <em id="setModelDailyTokenState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              账号在单个模型上当日消耗的 token 达到该值后，该模型自动切到其他账号（同一账号的其他模型不受影响）；本地时间 0 点后自动恢复。填 0 表示不限（默认）。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每模型每日上限（token）</div>
+              <input id="setModelDailyTokenLimit" type="number" min="0" step="1000000" value="0"
+                     style="width:190px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button onclick="saveModelDailyTokenLimit(this)">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
             <h2 style="margin:0">429 自动切换出站身分 <em id="setAutoSwitchState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               某账号在某模型上被上游限流（429）时，自动在 WB / VSC / CLI 之间换身分重试，每轮最多 4 次。三条身分走不同的配额通道，开启后 429 会少一些。默认关闭。
@@ -1731,6 +1769,19 @@ function coolPills(a){
   return pills.length ? '<div class="cool-list">' + pills.join('') + '</div>' : '';
 }
 
+// 按模型达日限额的模型清单（与冷却并列展示）：只影响列出的模型，其他模型照常。
+function modelLimitPills(a){
+  const limit = Number(a.modelDailyTokenLimit || 0);
+  if(limit <= 0 || !a.modelDailyTokens) return '';
+  const hit = Object.entries(a.modelDailyTokens)
+    .filter(([mid, v]) => Number(v) >= limit);
+  if(!hit.length) return '';
+  return '<div class="cool-list">' + hit.map(([mid, v]) =>
+    '<span class="cool-pill" title="该模型今日已达限额，仅此模型受限（本地 0 点恢复）">'
+      + esc(mid) + ' · ' + fmt(v) + ' tok 达限</span>'
+  ).join('') + '</div>';
+}
+
 function accountRow(a){
   const realmBadge = a.realm === 'cn'
     ? '<span class="realm-badge-cn">国内版</span>'
@@ -1744,10 +1795,12 @@ function accountRow(a){
   const state = !a.enabled ? '<span class="badge off">已停用</span>'
               : a.reserveBlocked ? '<span class="badge warn">保留积分</span>'
               : a.dailyLimitBlocked ? '<span class="badge warn" title="今日已用 ' + fmt(a.dailyTokensToday || 0) + ' / ' + fmt(a.dailyTokenLimit || 0) + ' token，暂停接单（本地 0 点恢复）">日限额</span>'
+              : a.creditLimitReached ? '<span class="badge warn" title="今日已消费 ' + Number(a.dailyCreditsToday || 0).toFixed(2) + ' / ' + (a.dailyCreditLimit || 0) + ' 积分，仅免费模型可用（本地 0 点恢复）">积分限额</span>'
               : a.inCooldown ? '<span class="badge warn">冷却 ' + (a.cooldownFor||0) + 's</span>'
               : a.expiresIn === 'expired' ? '<span class="badge bad">已过期</span>'
               : '<span class="badge ok">可用</span>';
   const pills = coolPills(a);
+  const limitPills = modelLimitPills(a);
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
     ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
   const cred = a.credits;
@@ -1758,7 +1811,7 @@ function accountRow(a){
     +   '<div style="font-weight:600;font-size:13px;color:var(--fg)">' + esc(a.nickname) + '</div>'
     + '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(a.uid.slice(0,8)) + ' · ' + esc(a.source) + ' · 到期 ' + esc(a.expiresIn || '?') + '</div>'
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
-    + err + pills + '</td>'
+    + err + pills + limitPills + '</td>'
     + '<td style="text-align:center" data-label="状态">' + state + '</td>'
     + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
     + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
@@ -2313,16 +2366,20 @@ async function refreshInner(){
   });
 
   // An account parked by the low-credit guard is enabled but not serving, so
-  // the pool card must not count it as "正常".
+  // the pool card must not count it as "正常". The same goes for an account
+  // capped by the daily credit guard: it still serves free models, but a
+  // paid request will rotate away from it.
   const accts = window.ACCOUNTS || [];
-  const activeAccts = accts.filter(a => a.enabled && !a.reserveBlocked && !a.dailyLimitBlocked).length;
+  const activeAccts = accts.filter(a => a.enabled && !a.reserveBlocked && !a.dailyLimitBlocked && !a.creditLimitReached).length;
   const totalAccts = accts.length;
   const parkedAccts = accts.filter(a => a.enabled && a.reserveBlocked).length;
   const disabledAccts = accts.filter(a => !a.enabled).length;
   const dailyAccts = accts.filter(a => a.enabled && a.dailyLimitBlocked).length;
+  const creditAccts = accts.filter(a => a.enabled && a.creditLimitReached && !a.dailyLimitBlocked).length;
   const poolNotes = [];
   if(parkedAccts) poolNotes.push(parkedAccts + ' 个保留积分');
   if(dailyAccts) poolNotes.push(dailyAccts + ' 个达日限额');
+  if(creditAccts) poolNotes.push(creditAccts + ' 个达积分限额');
   if(disabledAccts) poolNotes.push(disabledAccts + ' 个停用');
   const poolSub = poolNotes.length ? poolNotes.join(' · ') : '全部启用 · 状态健康';
   const pctRemain = totSize > 0 ? ((totRemain / totSize) * 100).toFixed(1) + '%' : '';
@@ -2633,6 +2690,22 @@ async function loadSettings(showToast){
         dailyTokState.textContent = dailyTokValue > 0 ? ('(每账号每天 ' + fmt(dailyTokValue) + ' token)') : '(不限)';
         dailyTokState.style.color = dailyTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
       }
+      const dailyCredValue = Number(data.daily_credit_limit || 0);
+      const dailyCredInput = document.getElementById('setDailyCreditLimit');
+      if(dailyCredInput) dailyCredInput.value = String(dailyCredValue);
+      const dailyCredState = document.getElementById('setDailyCreditState');
+      if(dailyCredState){
+        dailyCredState.textContent = dailyCredValue > 0 ? ('(每账号每天 ' + fmt(dailyCredValue) + ' 积分，超出后仅免费模型)') : '(已关闭)';
+        dailyCredState.style.color = dailyCredValue > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
+      const modelTokValue = Number(data.model_daily_token_limit || 0);
+      const modelTokInput = document.getElementById('setModelDailyTokenLimit');
+      if(modelTokInput) modelTokInput.value = String(modelTokValue);
+      const modelTokState = document.getElementById('setModelDailyTokenState');
+      if(modelTokState){
+        modelTokState.textContent = modelTokValue > 0 ? ('(每账号每模型每天 ' + fmt(modelTokValue) + ' token)') : '(不限)';
+        modelTokState.style.color = modelTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
       const autoSwitch = data.auto_switch_product === true;
       const autoSwitchInput = document.getElementById('setAutoSwitch');
       if(autoSwitchInput) autoSwitchInput.checked = autoSwitch;
@@ -2734,6 +2807,38 @@ async function saveDailyTokenLimit(btn){
   try {
     await postJSON('/settings/save', {daily_token_limit: value});
     toast(value > 0 ? ('已启用：账号当日超过 ' + fmt(value) + ' token 后暂停接单') : '已设为不限（0 = 不限额）', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveDailyCreditLimit(btn){
+  const el = document.getElementById('setDailyCreditLimit');
+  const value = Math.floor(Number((el || {}).value || 0));
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（积分）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {daily_credit_limit: value});
+    toast(value > 0 ? ('已启用：账号当日超过 ' + value + ' 积分后仅免费模型可用') : '已关闭每日积分限额', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveModelDailyTokenLimit(btn){
+  const el = document.getElementById('setModelDailyTokenLimit');
+  const value = Math.floor(Number((el || {}).value || 0));
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（token）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {model_daily_token_limit: value});
+    toast(value > 0 ? ('已启用：账号单模型当日超过 ' + fmt(value) + ' token 后该模型切走') : '已设为不限（0 = 不限额）', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');

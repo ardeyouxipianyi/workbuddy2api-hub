@@ -391,6 +391,65 @@ def set_daily_token_limit(accounts_dir, value):
     return value
 
 
+def daily_credit_limit(accounts_dir):
+    """Daily credit guard: an account that already spent this many credits
+    today serves free models only until local midnight, so a client that
+    would keep burning credits on paid models rotates to another account
+    instead of spending the whole balance.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    try:
+        value = int(load(accounts_dir).get("daily_credit_limit") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def set_daily_credit_limit(accounts_dir, value):
+    """Persist the daily credit threshold. Returns the stored value."""
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(0, value)
+    with _lock:
+        data = load(accounts_dir)
+        data["daily_credit_limit"] = value
+        save(accounts_dir, data)
+    return value
+
+
+def model_daily_token_limit(accounts_dir):
+    """Per-model daily guard: an account that already burned this many
+    tokens today on ONE model stops being handed out for that model until
+    local midnight, while every other model keeps working.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    try:
+        value = int(load(accounts_dir).get("model_daily_token_limit") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def set_model_daily_token_limit(accounts_dir, value):
+    """Persist the per-model daily token threshold. Returns the stored value."""
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(0, value)
+    with _lock:
+        data = load(accounts_dir)
+        data["model_daily_token_limit"] = value
+        save(accounts_dir, data)
+    return value
+
+
 def auto_switch_product(accounts_dir):
     """Whether an upstream 429 may rotate an account's outbound identity.
 

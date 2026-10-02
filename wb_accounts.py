@@ -251,12 +251,30 @@ class Account(object):
         # today stops being handed out, so a client that would burn the rest
         # of the day's quota rotates to another account instead of hitting
         # the upstream wall. Resolved from the global setting by
-        # AccountPool.apply_daily_token_limit(); 0 disables it.
+        # AccountPool.apply_daily_token_limit(); 0 disables the guard.
         # daily_tokens_today stays None until the proxy has folded the usage
         # log at least once, so a fresh process never parks anyone on an
         # unknown count.
         self.daily_token_limit = 0
         self.daily_tokens_today = None
+        # Daily credit guard: paid models only. Once today's counted spend
+        # reaches the limit the account keeps serving models the catalogue
+        # marks free ("x0.00") and is skipped for everything else, so the
+        # free tier never goes dark just because the balance is capped.
+        # Resolved from the global setting by
+        # AccountPool.apply_daily_credit_limit(); 0 disables the guard.
+        self.daily_credit_limit = 0
+        self.daily_credits_today = None
+        # The realm's free model ids, pushed by the same apply call. Empty
+        # until then, and an unknown model counts as paid, so the guard
+        # fails closed instead of leaking spend through unseen names.
+        self.free_models = frozenset()
+        # Per-model daily guard: once ONE model burned the configured tokens
+        # today the account stops being handed out for that model only -
+        # every other model keeps working. Resolved from the global setting
+        # by AccountPool.apply_model_daily_token_limit(); 0 disables it.
+        self.model_daily_token_limit = 0
+        self.model_daily_tokens = None
         # Serialise token refresh and file writes. Request threads, /health,
         # dashboard polls and the scheduler can all reach refresh()/save() for
         # the same account at once; without a lock the upstream rotates the
@@ -340,6 +358,16 @@ class Account(object):
                                  if isinstance(self.daily_tokens_today, int)
                                  else None),
             "dailyLimitBlocked": self.daily_limit_blocked(),
+            "dailyCreditLimit": int(self.daily_credit_limit or 0),
+            "dailyCreditsToday": (round(float(self.daily_credits_today), 2)
+                                  if isinstance(self.daily_credits_today, (int, float))
+                                  else None),
+            "creditLimitReached": self.credit_limit_reached(),
+            "modelDailyTokenLimit": int(self.model_daily_token_limit or 0),
+            "modelDailyTokens": ({str(k): int(v)
+                                  for k, v in self.model_daily_tokens.items()}
+                                 if isinstance(self.model_daily_tokens, dict)
+                                 else None),
             "lastCheckin": self.last_checkin,
             "lastDailyChat": self.last_daily_chat,
             "canCheckin": self.realm == "cn",
@@ -419,6 +447,82 @@ class Account(object):
         except (TypeError, ValueError):
             return False
 
+    def model_is_free(self, model):
+        """True when the realm catalogue marks `model` as a free one."""
+        return bool(model) and model in (self.free_models or ())
+
+    def credit_limit_reached(self):
+        """True when today's counted spend reached the daily credit limit.
+
+        The account-level fact, independent of which model is asked for:
+        ready() pairs it with model_is_free() so free models keep serving,
+        and the dashboard shows it as the guard's state.
+        """
+        try:
+            limit = int(self.daily_credit_limit or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0:
+            return False
+        used = self.daily_credits_today
+        if used is None:
+            return False
+        try:
+            return float(used) >= limit
+        except (TypeError, ValueError):
+            return False
+
+    def credit_limit_blocked(self, model=None):
+        """True when the credit guard should keep this account off `model`.
+
+        A free model stays available even after the cap is reached - that is
+        the point of the guard. Without a model to judge (model is None) the
+        account is not blocked here, because the caller cannot know whether
+        the request would spend anything.
+        """
+        if not model or self.model_is_free(model):
+            return False
+        return self.credit_limit_reached()
+
+    def model_token_limit_blocked(self, model=None):
+        """True when `model` already burned its daily token budget today.
+
+        Only the named model is refused; the account's other models keep
+        working, and an uncounted model never blocks.
+        """
+        try:
+            limit = int(self.model_daily_token_limit or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0 or not model:
+            return False
+        per = self.model_daily_tokens
+        if not isinstance(per, dict):
+            return False
+        used = per.get(model)
+        if used is None:
+            return False
+        try:
+            return int(used) >= limit
+        except (TypeError, ValueError):
+            return False
+
+    def blocked_model_names(self):
+        """The models currently out of budget, as a set.
+
+        Used by AccountPool.apply_model_daily_token_limit() to log only the
+        models whose state actually changed instead of one line per model
+        on every refresh.
+        """
+        per = self.model_daily_tokens
+        if not isinstance(per, dict):
+            return set()
+        out = set()
+        for mid, used in per.items():
+            if self.model_token_limit_blocked(mid):
+                out.add(mid)
+        return out
+
     def ready(self, model=None):
         if not self.enabled or not self.access_token:
             return False
@@ -431,6 +535,14 @@ class Account(object):
         # Today's token budget is spent: keep the seat for tomorrow instead
         # of letting the upstream answer 429 for the rest of the day.
         if self.daily_limit_blocked():
+            return False
+        # The day's credit spend reached the cap: paid models stop, free
+        # ones keep serving (see credit_limit_blocked).
+        if self.credit_limit_blocked(model):
+            return False
+        # One model out of budget does not take the account with it: only
+        # that model is refused here.
+        if self.model_token_limit_blocked(model):
             return False
         exp = self.expires_at or jwt_exp(self.access_token)
         if not exp:
@@ -1131,6 +1243,87 @@ class AccountPool(object):
                     else:
                         self.log("account %s resumed: daily token limit cleared"
                                  % str(account.uid)[:8])
+        return value
+
+    def apply_daily_credit_limit(self, value=None, credits=None, free_models=None):
+        """Re-resolve the daily credit guard for every account.
+
+        Same shape as apply_daily_token_limit(): settings.json holds the
+        limit, while `credits` (uid -> spent today) and `free_models`
+        (realm -> free model ids) come from the caller, because only the
+        proxy reads the usage log and the model catalogue. Passing None
+        keeps the last known values, so a settings change never turns them
+        into "unknown".
+        """
+        import wb_settings
+
+        if value is None:
+            value = wb_settings.daily_credit_limit(self.dir)
+        try:
+            value = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            value = 0
+        with self._lock:
+            for account in self.accounts:
+                was_blocked = account.credit_limit_reached()
+                account.daily_credit_limit = value
+                if credits is not None:
+                    try:
+                        account.daily_credits_today = float(
+                            credits.get(account.uid, 0) or 0)
+                    except (TypeError, ValueError):
+                        account.daily_credits_today = None
+                if free_models is not None:
+                    account.free_models = frozenset(
+                        free_models.get(account.realm) or ())
+                now_blocked = account.credit_limit_reached()
+                if now_blocked != was_blocked:
+                    if now_blocked:
+                        self.log("account %s capped: daily credit limit reached "
+                                 "(%s/%s credits today), free models only"
+                                 % (str(account.uid)[:8],
+                                    account.daily_credits_today, value))
+                    else:
+                        self.log("account %s resumed: daily credit limit cleared"
+                                 % str(account.uid)[:8])
+        return value
+
+    def apply_model_daily_token_limit(self, value=None, per_model=None):
+        """Re-resolve the per-model daily token guard for every account.
+
+        `per_model` is uid -> {model: tokens counted today}; None keeps the
+        last known counts. A blocked model never takes the whole account
+        with it - ready(model) refuses exactly the models that are out of
+        budget, and only their state changes are logged.
+        """
+        import wb_settings
+
+        if value is None:
+            value = wb_settings.model_daily_token_limit(self.dir)
+        try:
+            value = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            value = 0
+        with self._lock:
+            for account in self.accounts:
+                was_blocked = account.blocked_model_names()
+                account.model_daily_token_limit = value
+                if per_model is not None:
+                    raw = per_model.get(account.uid) or {}
+                    try:
+                        account.model_daily_tokens = {str(k): int(v)
+                                                      for k, v in raw.items()}
+                    except (TypeError, ValueError, AttributeError):
+                        account.model_daily_tokens = None
+                now_blocked = account.blocked_model_names()
+                for mid in sorted(now_blocked - was_blocked):
+                    self.log("account %s model %s parked: daily token limit "
+                             "reached (%s/%s tokens today)"
+                             % (str(account.uid)[:8], mid,
+                                (account.model_daily_tokens or {}).get(mid), value))
+                for mid in sorted(was_blocked - now_blocked):
+                    self.log("account %s model %s resumed: daily token limit "
+                             "cleared" % (str(account.uid)[:8], mid))
         return value
 
     def set_proxy_slot(self, uid, slot_id):

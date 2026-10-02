@@ -753,25 +753,43 @@ _STATS_TTL = float(os.environ.get("WB_STATS_TTL", 15))
 
 
 # ---------------------------------------------------------------------------
-# Daily token guard
+# Daily usage counters
 #
 # The upstream caps a free window at a fixed token budget (code 6004), and by
 # the time it answers 429 the window is already spent. This counter lets the
 # operator park an account at a threshold instead: usage.jsonl is folded into
-# uid -> tokens-since-local-midnight, AccountPool.apply_daily_token_limit()
-# copies the numbers onto the accounts and ready() refuses them, so the next
-# request rotates to another account. The scan is incremental (byte offset +
-# per-day totals), so the hot path only reads rows that arrived since the
-# last scan.
+# uid -> tokens-since-local-midnight, plus two sibling views of the same rows
+# - uid -> credit spent today (the daily credit guard) and
+# uid -> {model: tokens} (the per-model daily guard).
+# AccountPool.apply_daily_token_limit() / apply_daily_credit_limit() /
+# apply_model_daily_token_limit() copy the numbers onto the accounts and
+# ready() refuses them, so the next request rotates to another account. The
+# scan is incremental (byte offset + per-day totals), so the hot path only
+# reads rows that arrived since the last scan.
 # ---------------------------------------------------------------------------
-_daily_usage = {"day": "", "totals": None, "offset": 0, "at": 0.0}
+_daily_usage = {"day": "", "totals": None, "credits": None, "models": None,
+                "offset": 0, "at": 0.0}
 _daily_usage_lock = threading.Lock()
 
 
-def _scan_daily_tokens(offset, totals):
-    """Fold rows at/after today's local midnight into `totals`.
+def _daily_state_copy(source):
+    """Copy the cached per-account counters into a fresh scan state.
 
-    Returns (totals, new_offset). A line without its trailing newline is left
+    Three views of the same rows: uid -> total tokens, uid -> credit spent,
+    uid -> {model: tokens}. The copy keeps a later scan from mutating the
+    cached dicts in place while readers hold them.
+    """
+    return {
+        "tokens": dict(source.get("totals") or {}),
+        "credits": dict(source.get("credits") or {}),
+        "models": {k: dict(v) for k, v in (source.get("models") or {}).items()},
+    }
+
+
+def _scan_daily_usage(offset, state):
+    """Fold rows at/after today's local midnight into `state`.
+
+    Returns (state, new_offset). A line without its trailing newline is left
     for the next scan: rows are appended whole, so a partial tail only means
     this read raced the writer.
     """
@@ -784,7 +802,7 @@ def _scan_daily_tokens(offset, totals):
             if not line:
                 break
             if not line.endswith("\n"):
-                return totals, pos
+                return state, pos
             offset = fh.tell()
             line = line.strip()
             if not line:
@@ -802,8 +820,59 @@ def _scan_daily_tokens(offset, totals):
             uid = row.get("account")
             if not uid:
                 continue
-            totals[uid] = totals.get(uid, 0) + (row.get("total_tokens") or 0)
-    return totals, offset
+            tokens = row.get("total_tokens") or 0
+            state["tokens"][uid] = state["tokens"].get(uid, 0) + tokens
+            credit = row.get("credit") or 0
+            if credit:
+                state["credits"][uid] = state["credits"].get(uid, 0.0) + credit
+            mid = row.get("model")
+            if mid:
+                per = state["models"].setdefault(uid, {})
+                per[mid] = per.get(mid, 0) + tokens
+    return state, offset
+
+
+def daily_usage_stats(ttl=None):
+    """Today's per-account usage folded from the log, cached for `ttl` seconds.
+
+    Returns {"tokens": uid -> tokens, "credits": uid -> credit spent,
+    "models": uid -> {model: tokens}}, or None when the log could not be read
+    at all; callers keep that distinct from zero so a failed read never parks
+    an account.
+    """
+    ttl = _STATS_TTL if ttl is None else ttl
+    day = time.strftime("%Y-%m-%d")
+    now = time.time()
+    with _daily_usage_lock:
+        c = _daily_usage
+        if c["day"] == day and c["totals"] is not None and (now - c["at"]) < ttl:
+            return _daily_state_copy(c)
+        # A new day keeps the byte offset: everything past it is today's, and
+        # the midnight filter drops whatever old rows are still unread.
+        if c["day"] == day and c["totals"] is not None:
+            state = _daily_state_copy(c)
+        else:
+            state = {"tokens": {}, "credits": {}, "models": {}}
+        offset = int(c["offset"] or 0)
+        try:
+            size = os.path.getsize(USAGE_LOG)
+        except OSError:
+            size = 0
+        if offset > size:
+            state = {"tokens": {}, "credits": {}, "models": {}}
+            offset = 0
+        try:
+            state, offset = _scan_daily_usage(offset, state)
+        except Exception as exc:
+            log("daily token scan failed: %s" % exc)
+            _daily_usage.update({"day": day, "totals": None, "offset": 0,
+                                 "at": time.time()})
+            return None
+        _daily_usage.update({"day": day, "totals": state["tokens"],
+                             "credits": state["credits"],
+                             "models": state["models"], "offset": offset,
+                             "at": time.time()})
+        return _daily_state_copy(_daily_usage)
 
 
 def daily_tokens_by_account(ttl=None):
@@ -812,33 +881,10 @@ def daily_tokens_by_account(ttl=None):
     None means the log could not be read at all; callers keep that distinct
     from zero so a failed read never parks an account.
     """
-    ttl = _STATS_TTL if ttl is None else ttl
-    day = time.strftime("%Y-%m-%d")
-    now = time.time()
-    with _daily_usage_lock:
-        c = _daily_usage
-        if c["day"] == day and c["totals"] is not None and (now - c["at"]) < ttl:
-            return dict(c["totals"])
-        # A new day keeps the byte offset: everything past it is today's, and
-        # the midnight filter drops whatever old rows are still unread.
-        totals = dict(c["totals"] or {}) if c["day"] == day else {}
-        offset = int(c["offset"] or 0)
-        try:
-            size = os.path.getsize(USAGE_LOG)
-        except OSError:
-            size = 0
-        if offset > size:
-            totals, offset = {}, 0
-        try:
-            totals, offset = _scan_daily_tokens(offset, totals)
-        except Exception as exc:
-            log("daily token scan failed: %s" % exc)
-            _daily_usage.update({"day": day, "totals": None, "offset": 0,
-                                 "at": time.time()})
-            return None
-        _daily_usage.update({"day": day, "totals": totals, "offset": offset,
-                             "at": time.time()})
-        return dict(totals)
+    stats = daily_usage_stats(ttl=ttl)
+    if stats is None:
+        return None
+    return stats["tokens"]
 
 
 def seconds_until_local_midnight():
@@ -857,6 +903,80 @@ def apply_daily_token_limit(refresh=False):
     if limit > 0:
         usage = daily_tokens_by_account(ttl=0 if refresh else None)
     return POOL.apply_daily_token_limit(limit, usage)
+
+
+def apply_daily_credit_limit(refresh=False):
+    """Push the daily credit setting, today's spend and the free-model view
+    into the pool."""
+    if POOL is None:
+        return 0
+    limit = wb_settings.daily_credit_limit(ACCOUNTS_DIR)
+    credits = None
+    free_models = None
+    if limit > 0:
+        stats = daily_usage_stats(ttl=0 if refresh else None)
+        credits = stats["credits"] if stats is not None else None
+        free_models = free_models_by_realm()
+    return POOL.apply_daily_credit_limit(limit, credits, free_models)
+
+
+def apply_model_daily_token_limit(refresh=False):
+    """Push the per-model daily token setting and today's counts into the pool."""
+    if POOL is None:
+        return 0
+    limit = wb_settings.model_daily_token_limit(ACCOUNTS_DIR)
+    per_model = None
+    if limit > 0:
+        stats = daily_usage_stats(ttl=0 if refresh else None)
+        per_model = stats["models"] if stats is not None else None
+    return POOL.apply_model_daily_token_limit(limit, per_model)
+
+
+_free_models_cache = {"at": 0.0, "data": None}
+_FREE_MODELS_TTL = 60.0
+
+
+def credits_is_free(value):
+    """True when a catalogue credits string means "this one costs nothing".
+
+    The same test curate_remote_catalog() uses to pick free siblings; a
+    missing or unparsable value is NOT free, so an unknown model stays
+    under the credit guard instead of slipping past it.
+    """
+    return str(value or "").strip().lower() in ("x0.00", "x0", "0", "0.00")
+
+
+def free_models_by_realm():
+    """realm -> set of model ids the catalogue marks free ("x0.00").
+
+    Built from the bundled snapshot and the desktop cache file - both local
+    reads, no network - and cached for a minute so the request path pays
+    nothing. The daily credit guard uses it to tell paid models from free
+    ones, per realm: the same id can be free on one exit and paid on the
+    other.
+    """
+    now = time.time()
+    data = _free_models_cache.get("data")
+    if data is not None and (now - _free_models_cache.get("at", 0.0)) < _FREE_MODELS_TTL:
+        return data
+    out = {}
+    for realm, source in (("intl", getattr(wb_catalog, "STATIC_INTL_MODELS", [])),
+                          ("cn", getattr(wb_catalog, "STATIC_CN_MODELS", []))):
+        free = set()
+        for item in source or []:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "").strip()
+            if mid and credits_is_free(item.get("credits")):
+                free.add(mid)
+        cached = read_cached_remote_catalog(realm)
+        if cached:
+            for mid, item in (cached[1] or {}).items():
+                if isinstance(item, dict) and credits_is_free(item.get("credits")):
+                    free.add(str(mid))
+        out[realm] = free
+    _free_models_cache.update({"at": now, "data": out})
+    return out
 
 
 def usage_snapshot(realm=None, ttl=None, range=None, since=None, until=None):
@@ -1547,6 +1667,8 @@ def runtime_settings_view():
         "api_keys": keys,
         "reserve_credits": wb_settings.reserve_credits(ACCOUNTS_DIR),
         "daily_token_limit": wb_settings.daily_token_limit(ACCOUNTS_DIR),
+        "daily_credit_limit": wb_settings.daily_credit_limit(ACCOUNTS_DIR),
+        "model_daily_token_limit": wb_settings.model_daily_token_limit(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
@@ -3289,11 +3411,13 @@ def parse_rate_limit_reset(detail):
 
 
 def open_upstream(payload, session_key=None, target_realm=None):
-    # Refresh the daily token guard before picking. The scan underneath is
+    # Refresh the daily guards before picking. The scan underneath is
     # incremental and TTL-cached, so this is a stat() plus a cached dict on
-    # the hot path, and an account parked by the guard is skipped like any
-    # other unusable one.
+    # the hot path, and an account parked by any of the guards is skipped
+    # like any other unusable one.
     apply_daily_token_limit()
+    apply_daily_credit_limit()
+    apply_model_daily_token_limit()
     realm = target_realm or detect_model_realm(payload.get("model")) or CURRENT_REALM
     model = str(payload.get("model") or "")
     upstream_body = build_upstream_body(payload)
@@ -3447,6 +3571,19 @@ def open_upstream(payload, session_key=None, target_realm=None):
         reason = ("every usable account reached today's token limit (%s per "
                   "account); the pool resumes after local midnight"
                   % wb_settings.daily_token_limit(ACCOUNTS_DIR))
+        raise RateLimited(None, reason,
+                          wait=seconds_until_local_midnight(), message=reason)
+    if enabled and model and all(a.credit_limit_blocked(model) for a in enabled):
+        reason = ("every usable account reached today's credit limit (%s per "
+                  "account); paid models resume after local midnight, free "
+                  "models keep working"
+                  % wb_settings.daily_credit_limit(ACCOUNTS_DIR))
+        raise RateLimited(None, reason,
+                          wait=seconds_until_local_midnight(), message=reason)
+    if enabled and model and all(a.model_token_limit_blocked(model) for a in enabled):
+        reason = ("every usable account reached today's token limit for %s "
+                  "(%s per account); the model resumes after local midnight"
+                  % (model, wb_settings.model_daily_token_limit(ACCOUNTS_DIR)))
         raise RateLimited(None, reason,
                           wait=seconds_until_local_midnight(), message=reason)
     raise RuntimeError(f"no usable account for realm '{realm}': all are disabled, "
@@ -5543,6 +5680,8 @@ class Handler(BaseHTTPRequestHandler):
         # Fold the usage log before building the view, so the 日限额 badge and
         # the parked count describe right now instead of the last request.
         apply_daily_token_limit()
+        apply_daily_credit_limit()
+        apply_model_daily_token_limit()
         return self._json(200, {
             "accounts": account_views(realm=query.get('realm', [None])[0] or CURRENT_REALM),
             "storage": ACCOUNTS_DIR,
@@ -5888,6 +6027,38 @@ class Handler(BaseHTTPRequestHandler):
             wb_settings.set_daily_token_limit(ACCOUNTS_DIR, limit)
             apply_daily_token_limit(refresh=True)
             reply["daily_token_limit"] = limit
+        if "daily_credit_limit" in payload:
+            raw = payload.get("daily_credit_limit")
+            if isinstance(raw, bool) or raw is None:
+                return self._error(400, "daily_credit_limit must be a whole number",
+                                   "invalid_request_error")
+            try:
+                limit = int(raw)
+            except (TypeError, ValueError):
+                return self._error(400, "daily_credit_limit must be a whole number",
+                                   "invalid_request_error")
+            if limit < 0:
+                return self._error(400, "daily_credit_limit cannot be negative",
+                                   "invalid_request_error")
+            wb_settings.set_daily_credit_limit(ACCOUNTS_DIR, limit)
+            apply_daily_credit_limit(refresh=True)
+            reply["daily_credit_limit"] = limit
+        if "model_daily_token_limit" in payload:
+            raw = payload.get("model_daily_token_limit")
+            if isinstance(raw, bool) or raw is None:
+                return self._error(400, "model_daily_token_limit must be a whole number",
+                                   "invalid_request_error")
+            try:
+                limit = int(raw)
+            except (TypeError, ValueError):
+                return self._error(400, "model_daily_token_limit must be a whole number",
+                                   "invalid_request_error")
+            if limit < 0:
+                return self._error(400, "model_daily_token_limit cannot be negative",
+                                   "invalid_request_error")
+            wb_settings.set_model_daily_token_limit(ACCOUNTS_DIR, limit)
+            apply_model_daily_token_limit(refresh=True)
+            reply["model_daily_token_limit"] = limit
         if "auto_switch_product" in payload:
             # Strictly a JSON boolean: a string like "false" would be truthy and
             # silently switch the feature on, which is the one thing an operator
@@ -7083,6 +7254,8 @@ def _bootstrap_runtime(args):
     POOL.apply_proxy_slots()
     POOL.apply_reserve_credits()
     apply_daily_token_limit()
+    apply_daily_credit_limit()
+    apply_model_daily_token_limit()
     load_persisted_realm()
     global SCHEDULER
     from wb_scheduler import Scheduler
