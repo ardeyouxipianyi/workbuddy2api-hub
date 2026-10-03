@@ -18,6 +18,10 @@ const fs = require('fs');
 const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const activeHtml = html.replace(/<!--[\s\S]*?-->/g, '');
+for (const id of ['btnScanDesktop', 'btnCheckin', 'btnDailyChat', 'btnDailyChatWeb']) {
+  assert.ok(activeHtml.includes(`id="${id}"`), `missing account action: ${id}`);
+}
 
 // Inline attributes, e.g. onclick="setAnalyticsRange('today')".
 const HANDLER_ATTR = /\son(?:click|change|input|submit|keydown|keyup|blur|focus)\s*=\s*"([^"]*)"/g;
@@ -59,5 +63,29 @@ assert.ok(/onclick="openLoginModal\(\)"/.test(html),
   'the empty-state login button must call openLoginModal()');
 assert.ok(!/onclick="startLogin\(\)"/.test(html),
   'nothing may call the removed startLogin()');
+
+const scanStart = html.indexOf('function renderDesktopScan(');
+const scanEnd = html.indexOf('async function doImportDesktop(', scanStart);
+assert.ok(scanStart >= 0 && scanEnd > scanStart);
+const scanBody = {innerHTML: '', querySelectorAll: () => []};
+const scanWindow = {SCAN_POOL: new Set(['aabbccdd-current'])};
+const renderScan = new Function('window', 'document', 'esc',
+  html.slice(scanStart, scanEnd) + '\nreturn renderDesktopScan;')(
+    scanWindow, {getElementById: () => scanBody}, String);
+const encryptedCurrent = {uid: 'aabbccdd-current', valid: false, backup: false,
+  file: 'workbuddy-desktop.info', error: 'Encrypted credential; OAuth required'};
+renderScan([encryptedCurrent]);
+assert.ok(scanBody.innerHTML.includes('aabbccdd'));
+assert.ok(scanBody.innerHTML.includes('当前客户端登录'));
+assert.ok(scanBody.innerHTML.includes('已在网关中，无需重复导入'));
+assert.ok(!scanBody.innerHTML.includes('btn-import-desktop'));
+renderScan([encryptedCurrent, {uid: 'backup', valid: true, backup: true,
+  file: 'workbuddy-desktop.2030-10-03T00.info', realm: 'cn'}]);
+assert.ok(scanBody.innerHTML.indexOf('当前客户端登录') < scanBody.innerHTML.indexOf('历史登录备份'));
+assert.equal((scanBody.innerHTML.match(/class="primary mini btn-import-desktop"/g) || []).length, 1);
+scanWindow.SCAN_POOL.clear();
+renderScan([encryptedCurrent]);
+assert.ok(!scanBody.innerHTML.includes('已在网关中，无需重复导入'));
+assert.ok(scanBody.innerHTML.includes('OAuth required'));
 
 console.log(`dashboard handler assertions passed (${referenced.size} handlers checked)`);

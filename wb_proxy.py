@@ -14,10 +14,12 @@ Launchers: start-wb-proxy.bat / start-wb-proxy-lan.bat on Windows,
 start-wb-proxy.command (or ./start-wb-proxy.sh) on macOS/Linux.
 """
 import argparse
+import calendar
 import hashlib
 from collections import deque
 import re
 import json
+import math
 import os
 MAX_PAYLOAD_BYTES = int(os.environ.get("WB_MAX_PAYLOAD_BYTES", 50 * 1024 * 1024))  # 50MB limit
 # Upstream chat calls may hold a handler thread for up to 600s, and every
@@ -35,6 +37,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from email.utils import parsedate_to_datetime
 import wb_accounts
 import wb_catalog
 import wb_settings
@@ -102,6 +105,7 @@ def exclusive_realm(model_id):
         return "cn"
     return ""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.client import HTTPException
 from urllib.parse import urlparse, parse_qs
 def install_console_close_handler():
     """Release the port when the console window is closed by the user.
@@ -126,6 +130,8 @@ def install_console_close_handler():
         def _handler(event):
             if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
                 try:
+                    sys.stderr.write("[wb-proxy] console control event %d; exiting\n" % event)
+                    sys.stderr.flush()
                     sys.stdout.flush()
                 except Exception:
                     pass
@@ -414,6 +420,8 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     if account:
         row["account"] = account
     acc = POOL.get(account) if (account and POOL) else None
+    if acc:
+        acc._credits_dirty = True
     row["realm"] = acc.realm if acc else CURRENT_REALM
     # Derived per-request rates (None-safe).
     if gen_ms and gen_ms > 0:
@@ -511,6 +519,8 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
     if account:
         row["account"] = account
         acc = POOL.get(account) if POOL else None
+        if acc and (usage or outcome == "upstream_aborted"):
+            acc._credits_dirty = True
         row["realm"] = acc.realm if acc else CURRENT_REALM
     with _lock:
         _usage["errors"] += 1
@@ -1177,8 +1187,9 @@ API_KEY = None
 SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
 def import_desktop_accounts(realm=None):
     imported = []
-    for p, r in wb_accounts.desktop_credential_candidates():
-        if realm and r != realm:
+    for row in wb_accounts.scan_desktop_credentials():
+        p, r = row["path"], row["realm"]
+        if not row.get("valid") or (realm and r != realm):
             continue
         try:
             account = POOL.import_desktop_credential(path=p, realm=r)
@@ -1662,8 +1673,8 @@ def add_log_entry(msg, level=None, tag=None):
     return entry
 
 def log(msg, level=None, tag=None):
-    sys.stderr.write(f"[wb-proxy] {time.strftime('%H:%M:%S')} {msg}\n")
-    sys.stderr.flush()
+    sys.stdout.write(f"[wb-proxy] {time.strftime('%H:%M:%S')} {msg}\n")
+    sys.stdout.flush()
     add_log_entry(msg, level=level, tag=tag)
 
 def get_logs(limit=200, level="", tag="", search="", since_id=0):
@@ -3127,7 +3138,7 @@ class RateLimited(Exception):
     """Upstream throttled this model (429 / code 6004). Distinct from a dead
     pool: the credential is fine, only the model is cooling down for a while."""
 
-    def __init__(self, http_error=None, detail="", wait=60, message=""):
+    def __init__(self, http_error=None, detail="", wait=60, message="", error_type="rate_limit_error"):
         self.http_error = http_error
         self.detail = detail or ""
         self.wait = max(1, int(wait or 60))
@@ -3135,7 +3146,8 @@ class RateLimited(Exception):
         # daily token guard) carry their own text instead of the upstream
         # wording.
         self.message = message or ""
-        super().__init__("upstream rate limit: %s" % (self.detail[:200] or "429"))
+        self.error_type = error_type
+        super().__init__(message or "upstream rate limit: %s" % (self.detail[:200] or "429"))
 
 
 # ---------------------------------------------------------------------------
@@ -3252,6 +3264,13 @@ def is_transient(exc):
     Treating that as a dead account took the only intl account offline for 60s
     and turned one hiccup into a 502 storm.
     """
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, (ConnectionAbortedError, ConnectionResetError, TimeoutError)):
+        return True
+    if isinstance(reason, OSError) and (
+            getattr(reason, "winerror", None) in (10053, 10054, 10060)
+            or reason.errno in (10053, 10054, 10060)):
+        return True
     t = ("%s %s" % (type(exc).__name__, exc)).lower()
     markers = (
         "ssl", "unexpected_eof", "eof occurred", "remote end closed",
@@ -3282,10 +3301,21 @@ def parse_rate_limit_reset(detail):
         minutes = int(tz.group(2) or 0)
         offset = hours * 3600 + (minutes * 60 if hours >= 0 else -minutes * 60)
     try:
-        base = time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")) - time.timezone
+        base = calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M:%S"))
         return base - offset
     except Exception:
         return None
+
+
+def parse_retry_after(value):
+    try:
+        seconds = float(value)
+        return time.time() + seconds if math.isfinite(seconds) and seconds >= 0 else None
+    except (TypeError, ValueError):
+        try:
+            return parsedate_to_datetime(value).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def open_upstream(payload, session_key=None, target_realm=None):
@@ -3295,6 +3325,8 @@ def open_upstream(payload, session_key=None, target_realm=None):
     # other unusable one.
     apply_daily_token_limit()
     realm = target_realm or detect_model_realm(payload.get("model")) or CURRENT_REALM
+    if POOL and hasattr(POOL, "refresh_credits"):
+        POOL.refresh_credits(realm)
     model = str(payload.get("model") or "")
     upstream_body = build_upstream_body(payload)
     # PATCHED-BY-OPS: 客户端未提供会话标识时，用对话稳定前缀兜底。
@@ -3312,14 +3344,20 @@ def open_upstream(payload, session_key=None, target_realm=None):
     last_429 = None
     last_429_detail = ""
     last_403_detail = ""
+    last_quota_detail = ""
     transient_hits = 0
+    retry_account = None
+    auth_refresh_tried = False
     # Read once per request, not per attempt: this is a panel setting, and a
     # settings read on every retry would be pure overhead.
     auto_switch = auto_switch_product_enabled()
     max_attempts = max(2, total) + 1 + (MAX_PRODUCT_SWITCHES if auto_switch else 0)
     for _attempt in range(max_attempts):
-        account = POOL.pick_for_session(realm=realm, session_key=session_key,
-                                        exclude=tried, model=model) if POOL else None
+        account = retry_account if retry_account and retry_account.ready(model=model) else None
+        retry_account = None
+        if account is None:
+            account = POOL.pick_for_session(realm=realm, session_key=session_key,
+                                            exclude=tried, model=model) if POOL else None
         if account is None:
             if transient_hits and _attempt < max_attempts - 1:
                 tried.clear()
@@ -3351,10 +3389,29 @@ def open_upstream(payload, session_key=None, target_realm=None):
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
                 try:
-                    detail = exc.read(600).decode("utf-8", "replace")
+                    detail = exc.read(8192).decode("utf-8", "replace")
                 except Exception:
                     detail = ""
-                reset_at = parse_rate_limit_reset(detail)
+                try:
+                    parsed = json.loads(detail)
+                    error = parsed.get("error") or parsed
+                    code = str((error.get("data") or error).get("code", ""))
+                except (ValueError, AttributeError, TypeError):
+                    code = ""
+                if code == "14018":
+                    account.credits_exhausted = True
+                    account._credits_attempt_at = time.time()
+                    account._credits_dirty = False
+                    account._set_last_error("HTTP 429 / 14018: credits exhausted")
+                    log("account %s credits exhausted (14018), trying another account"
+                        % account.uid[:8], level="WARN")
+                    if session_key and POOL:
+                        POOL.affinity.unbind(session_key)
+                    last_error = exc
+                    last_quota_detail = detail
+                    continue
+                reset_at = parse_rate_limit_reset(detail) or parse_retry_after(
+                    exc.headers.get("Retry-After") if exc.headers else None)
                 wait = max(1.0, reset_at - time.time()) if reset_at else 60.0
                 # Model-scoped: only this model is throttled for this account,
                 # so sibling models stay serviceable on the same credential.
@@ -3391,6 +3448,14 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 last_403_detail = detail
                 break
             if exc.code == 401:
+                if not auth_refresh_tried:
+                    auth_refresh_tried = True
+                    if account.refresh():
+                        log("account %s token refreshed after HTTP 401, retrying same account once"
+                            % account.uid[:8])
+                        retry_account = account
+                        tried.discard(account.uid)
+                        continue
                 log("account %s rejected (HTTP 401), rotating" % account.uid[:8])
                 if session_key and POOL:
                     POOL.affinity.unbind(session_key)
@@ -3408,15 +3473,20 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 continue
             raise
         except Exception as exc:
-            if session_key and POOL:
-                POOL.affinity.unbind(session_key)
             if is_transient(exc):
                 transient_hits += 1
-                log("upstream connection hiccup for '%s' (%s), retrying"
-                    % (model, type(exc).__name__))
+                if transient_hits == 1:
+                    retry_account = account
+                elif session_key and POOL:
+                    POOL.affinity.unbind(session_key)
+                log("upstream connection hiccup for '%s' on account %s (%s), retrying %s"
+                    % (model, account.uid[:8], type(exc).__name__,
+                       "same account once" if retry_account else "another account"))
                 last_error = exc
                 time.sleep(min(0.6 * transient_hits, 2.0))
                 continue
+            if session_key and POOL:
+                POOL.affinity.unbind(session_key)
             account.note_error(str(exc)[:120], cooldown=60, single_account=(total <= 1))
             last_error = exc
             continue
@@ -3437,12 +3507,22 @@ def open_upstream(payload, session_key=None, target_realm=None):
             exc = ContentRejected(last_error, last_403_detail)
             exc.account_uid = last_uid
             raise exc
+        if last_quota_detail:
+            exc = RateLimited(last_error, last_quota_detail, wait=300,
+                              message="upstream credits exhausted (14018); add credits or enable another funded account",
+                              error_type="insufficient_quota")
+            exc.account_uid = last_uid
+            raise exc
         raise last_error
     throttled, wait = realm_model_throttled(realm, model)
     if throttled:
         raise RateLimited(None, "usage exceeds frequency limit", wait=wait)
     enabled = [a for a in POOL.accounts
                if a.realm == realm and a.enabled and a.access_token] if POOL else []
+    if enabled and all(a.credit_blocked() for a in enabled):
+        raise RateLimited(None, wait=300,
+                          message="all enabled accounts have exhausted credits; balances are rechecked every 5 minutes",
+                          error_type="insufficient_quota")
     if enabled and all(a.daily_limit_blocked() for a in enabled):
         reason = ("every usable account reached today's token limit (%s per "
                   "account); the pool resumes after local midnight"
@@ -3473,6 +3553,38 @@ def estimate_tokens(text):
     cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff' or '\u3400' <= c <= '\u4dbf')
     other = len(text) - cjk
     return cjk + max(1, int(other / 3.6)) if text else 0
+
+class UpstreamStreamError(RuntimeError):
+    pass
+
+
+def checked_upstream_stream(upstream):
+    """Keep read failures distinct from writes to a disconnected client."""
+    finished = False
+    try:
+        for raw in upstream:
+            data = strip_data_prefix(raw.decode("utf-8", "replace"))
+            if data == "[DONE]":
+                yield raw
+                return
+            try:
+                chunk = json.loads(data) if data else None
+            except (ValueError, TypeError):
+                chunk = None
+            if isinstance(chunk, dict):
+                error = chunk.get("error")
+                if error:
+                    detail = error.get("message") if isinstance(error, dict) else str(error)
+                    raise UpstreamStreamError(detail or "upstream returned an error event")
+                finished = finished or any(
+                    choice.get("finish_reason") is not None
+                    for choice in (chunk.get("choices") or []) if isinstance(choice, dict))
+            yield raw
+    except (OSError, HTTPException) as exc:
+        raise UpstreamStreamError("upstream read failed: %s" % exc) from exc
+    if not finished:
+        raise UpstreamStreamError("upstream stream ended without a completion marker")
+
 
 def aggregate_stream(raw_iter, model, resp_id):
     """Fold an SSE stream into one non-streaming chat.completion object."""
@@ -4517,6 +4629,7 @@ def stream_responses_events(upstream, model, holder):
     def ev(etype, payload):
         nonlocal seq
         seq += 1
+        holder["sequence_number"] = seq
         data = {"type": etype, "sequence_number": seq}
         data.update(payload)
         body = json.dumps(data, ensure_ascii=False)
@@ -4755,9 +4868,13 @@ def stream_responses_events(upstream, model, holder):
     # 只有第一輪開場。第二輪以後再送一次 response.created，客戶端會
     # 看到同一則回應被開了兩次。
     if not holder.get("suppress_lifecycle"):
+        holder["response_meta"] = resp_obj("in_progress")
         yield ev("response.created", {"response": resp_obj("in_progress")})
         yield ev("response.in_progress", {"response": resp_obj("in_progress")})
     for raw in upstream:
+        if raw.lstrip().startswith(b":"):
+            yield b": keepalive\n\n"
+            continue
         data = strip_data_prefix(raw.decode("utf-8", "replace"))
         if not data or data == "[DONE]":
             continue
@@ -5208,7 +5325,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps({
             "error": {
                 "message": text + detail,
-                "type": "rate_limit_error",
+                "type": getattr(exc, "error_type", "rate_limit_error"),
                 "code": 429,
                 "retry_after": wait,
             }
@@ -6622,7 +6739,7 @@ class Handler(BaseHTTPRequestHandler):
                 holder.pop("internal_calls", None)
                 holder.pop("suppress_completion", None)
                 holder["suppress_lifecycle"] = rounds > 0
-                for frame in stream_responses_events(upstream, model, holder):
+                for frame in stream_responses_events(checked_upstream_stream(upstream), model, holder):
                     if first_ms is None:
                         first_ms = int((time.time() - t_start) * 1000)
                     self.wfile.write(clean_responses_frame(frame))
@@ -6660,7 +6777,12 @@ class Handler(BaseHTTPRequestHandler):
                          gen_ms=(wall - first_ms) if first_ms is not None else None,
                          fp=fp, outcome="upstream_aborted")
             try:
-                self.wfile.write(b"data: [DONE]" + bytes([10, 10]))
+                failed = dict(holder.get("response_meta") or {})
+                failed.update(status="failed", error={"code": "upstream_stream_error", "message": str(exc)})
+                event = {"type": "response.failed", "response": failed,
+                         "sequence_number": holder.get("sequence_number", 0) + 1}
+                self.wfile.write(("event: response.failed\ndata: " +
+                                  json.dumps(event, ensure_ascii=False) + "\n\n").encode("utf-8"))
                 self.wfile.flush()
             except Exception:
                 pass
@@ -6690,7 +6812,7 @@ class Handler(BaseHTTPRequestHandler):
         web_tools = web_tools_active(base_body)
         while True:
             try:
-                chat_obj = aggregate_stream(upstream, model, None)
+                chat_obj = aggregate_stream(checked_upstream_stream(upstream), model, None)
             except Exception as exc:
                 record_error(model, 502, str(exc),
                              elapsed_ms=int((time.time() - t_start) * 1000),
@@ -6866,7 +6988,11 @@ class Handler(BaseHTTPRequestHandler):
             first_ms = None
             streamed_text = []
             try:
-                for line in upstream:
+                for line in checked_upstream_stream(upstream):
+                    if line.lstrip().startswith(b":"):
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
                     data = strip_data_prefix(line.decode("utf-8", "replace"))
                     if not data or data == "[DONE]" or data.startswith(":"):
                         continue
@@ -6912,7 +7038,9 @@ class Handler(BaseHTTPRequestHandler):
                             gen_ms=(wall - first_ms) if first_ms is not None else None,
                              fp=fp, outcome="upstream_aborted")
                 try:
-                    self.wfile.write(b"data: [DONE]\n\n")
+                    error = {"error": {"message": str(exc), "type": "upstream_stream_error"}}
+                    self.wfile.write(("data: " + json.dumps(error, ensure_ascii=False) +
+                                      "\n\ndata: [DONE]\n\n").encode("utf-8"))
                     self.wfile.flush()
                 except Exception:
                     pass
@@ -6942,7 +7070,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat_nonstream_response(self, upstream, model, fp, account, t_start):
         try:
-            result = aggregate_stream(upstream, model, None)
+            result = aggregate_stream(checked_upstream_stream(upstream), model, None)
         except Exception as exc:
             record_error(model, 502, str(exc), elapsed_ms=int((time.time() - t_start) * 1000),
                          account=account.uid)

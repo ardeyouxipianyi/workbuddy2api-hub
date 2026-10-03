@@ -24,6 +24,7 @@ desktop.ini
 .idea/
 
 usage/*.bak*
+wb-proxy-errors.log
 
 # Local Docker Compose override
 docker-compose.override.yml
