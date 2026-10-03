@@ -17,6 +17,23 @@
   --shadow-sm:0 1px 2px 0 rgba(15,23,42,.05);
   --shadow:0 1px 3px 0 rgba(15,23,42,.06),0 1px 2px -1px rgba(15,23,42,.04);
   --shadow-md:0 4px 6px -2px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);
+  --header-bg:rgba(255,255,255,.94);
+  color-scheme:light;
+}
+[data-theme="dark"]{
+  --bg:#0b0f19; --panel:#111827; --panel2:#1e293b; --panel3:#334155;
+  --line:#1f293d; --line-hover:#334155;
+  --fg:#f1f5f9; --dim:#94a3b8; --dim-light:#64748b;
+  --accent:#3b82f6; --accent-hover:#60a5fa; --accent-soft:rgba(59,130,246,.15);
+  --accent2:#22c55e; --accent2-soft:rgba(34,197,94,.15);
+  --warn:#f59e0b; --warn-soft:rgba(245,158,11,.15);
+  --think:#c084fc; --think-soft:rgba(192,132,252,.15);
+  --bad:#f87171; --bad-soft:rgba(248,113,113,.15);
+  --shadow-sm:0 1px 2px 0 rgba(0,0,0,.35);
+  --shadow:0 1px 3px 0 rgba(0,0,0,.45),0 1px 2px -1px rgba(0,0,0,.35);
+  --shadow-md:0 4px 6px -2px rgba(0,0,0,.55),0 2px 4px -2px rgba(0,0,0,.45);
+  --header-bg:rgba(11,15,25,.92);
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
@@ -24,7 +41,7 @@ body{margin:0;background:var(--bg);color:var(--fg);
   -webkit-font-smoothing:antialiased}
 header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;
   align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
-  position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
+  position:sticky;top:0;background:var(--header-bg);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
 h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;color:var(--fg)}
 h1 span{color:var(--dim);font-weight:400;font-size:13px;margin-left:8px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent2);
@@ -60,7 +77,7 @@ th:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
 th:last-child{border-top-right-radius:8px;border-bottom-right-radius:8px}
 th:first-child,td:first-child{text-align:left}
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover{background:rgba(241,245,249,.6)}
+tbody tr:hover{background:var(--panel2)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 /* 输入 / 输出 / 思考：三个数字应该在一行内读完，不拆行 */
 .triple{white-space:nowrap}
@@ -97,7 +114,7 @@ button{cursor:pointer;font:inherit;font-size:12px;font-weight:500;padding:6px 14
   border:1px solid var(--accent);background:var(--accent);color:#fff;box-shadow:var(--shadow-sm);transition:all .15s ease}
 button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 button:disabled{opacity:.45;cursor:not-allowed}
-button.sec{background:#fff;border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
+button.sec{background:var(--panel);border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
 button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
 button.danger{border-color:rgba(220,38,38,.3);background:rgba(220,38,38,.06);color:var(--bad)}
 button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
@@ -115,7 +132,7 @@ button.mini{padding:3px 9px;font-size:11px}
 .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
   backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px;z-index:100}
 .modal-mask.show{display:flex}
-.modal{background:#fff;border:1px solid var(--line);border-radius:14px;
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
   width:min(620px,100%);max-height:88vh;overflow:auto;box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.05)}
 .modal-hd{display:flex;align-items:center;justify-content:space-between;
   padding:16px 20px;border-bottom:1px solid var(--line)}
@@ -128,7 +145,7 @@ button.mini{padding:3px 9px;font-size:11px}
 .login-link{display:block;word-break:break-all;background:var(--panel2);
   border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;
   color:var(--accent);text-decoration:none;font-size:12px}
-.login-link:hover{border-color:var(--accent);background:#fff}
+.login-link:hover{border-color:var(--accent);background:var(--panel)}
 .hint{color:var(--dim);font-size:12px;margin:8px 0}
 .step{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
 .step .n{flex:0 0 20px;height:20px;border-radius:50%;background:var(--panel2);
@@ -145,19 +162,19 @@ a:hover{text-decoration:underline}
 .realm-pill:hover{color:var(--fg)}
 .realm-pill.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
 .key-card{
-  background:#ffffff;border:1px solid var(--line);border-radius:12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
   padding:16px 20px;margin-bottom:12px;box-shadow:var(--shadow);
   transition:all .15s ease;
 }
 .key-card:hover{border-color:var(--line-hover);box-shadow:var(--shadow-md)}
-.key-card.disabled{opacity:.75;background:rgba(241,245,249,.5)}
+.key-card.disabled{opacity:.75;background:var(--panel2)}
 .key-card-main{
   display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
 }
 .key-action-btn{
   display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:20px;
   font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--line);
-  background:#ffffff;color:var(--fg);transition:all .15s ease;box-shadow:var(--shadow-sm);
+  background:var(--panel);color:var(--fg);transition:all .15s ease;box-shadow:var(--shadow-sm);
 }
 .key-action-btn:hover{background:var(--panel2);border-color:var(--line-hover)}
 .key-action-btn.danger{
@@ -171,7 +188,7 @@ a:hover{text-decoration:underline}
 .badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:rgba(124,58,237,.12);color:var(--think);border:1px solid rgba(124,58,237,.3);font-weight:600}
 .realm-filter{display:inline-flex;gap:6px;margin-left:8px}
 .realm-filter button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:11px}
-.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:#fff}
+.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:var(--panel)}
 
 .realm-card{
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -180,7 +197,7 @@ a:hover{text-decoration:underline}
 }
 .realm-card:hover{border-color:var(--line-hover);transform:translateY(-1px);box-shadow:var(--shadow-md)}
 .realm-card.active{
-  border-color:var(--accent);background:#ffffff;
+  border-color:var(--accent);background:var(--panel);
   box-shadow:0 0 0 1px var(--accent), var(--shadow-md);
 }
 .realm-card.active#tabCn{
@@ -191,25 +208,73 @@ a:hover{text-decoration:underline}
 }
 .realm-card.gateway-ctrl:hover{transform:none;border-color:var(--line);box-shadow:var(--shadow)}
 .toggle-realm-btn{
-  background:#fff;border:1px solid var(--accent);color:var(--accent);
+  background:var(--panel);border:1px solid var(--accent);color:var(--accent);
   padding:8px 18px;font-size:13px;font-weight:600;border-radius:8px;box-shadow:var(--shadow-sm);cursor:pointer;
   transition:all .15s ease;
 }
-.toggle-realm-btn:hover{background:rgba(0,0,0,.04);box-shadow:var(--shadow-md)}
+.toggle-realm-btn:hover{background:var(--panel2);box-shadow:var(--shadow-md)}
 .realm-endpoint-info{font-size:12px;color:var(--dim)}
 
 .main-nav{display:inline-flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;border:1px solid var(--line)}
 .main-nav-btn{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s ease}
-.main-nav-btn:hover{color:var(--fg);background:#fff}
-.main-nav-btn.active{background:#fff;color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
+.main-nav-btn:hover{color:var(--fg);background:var(--panel)}
+.main-nav-btn.active{background:var(--panel);color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
 /* 项目仓库入口：与顶部导航同行，但不作为一个 Tab 标签。 */
 .gh-link{display:inline-flex;align-items:center;justify-content:center;
   width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
-  background:#fff;color:var(--dim);box-shadow:var(--shadow-sm);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
   transition:all .15s ease}
 .gh-link:hover{color:var(--fg);border-color:var(--line-hover);
   background:var(--panel2);text-decoration:none;box-shadow:var(--shadow-md)}
 .gh-link svg{width:17px;height:17px;display:block;fill:currentColor}
+
+/* 顶部右侧区域与主题切换组件 (黑白单色、极简线条Outline、符合规范) */
+.header-right{display:flex;align-items:center;gap:10px}
+.theme-dropdown-wrap{position:relative;display:inline-flex}
+.theme-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  cursor:pointer;padding:0;transition:all .15s ease;
+}
+.theme-btn:hover{
+  color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);box-shadow:var(--shadow-md);
+}
+.theme-btn-icon{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+.theme-btn-icon svg{width:16px;height:16px;display:block}
+.theme-dropdown{
+  display:none;position:absolute;top:calc(100% + 6px);right:0;
+  min-width:130px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:4px;box-shadow:var(--shadow-md);
+  z-index:100;backdrop-filter:blur(8px);
+}
+.theme-dropdown.open{display:block;animation:themePop .12s cubic-bezier(0,0,.2,1)}
+@keyframes themePop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.theme-option{
+  width:100%;display:flex;align-items:center;gap:8px;padding:7px 10px;
+  border-radius:6px;border:none;background:transparent;color:var(--fg);
+  font-size:12px;cursor:pointer;text-align:left;transition:background .12s ease;
+  box-shadow:none;
+}
+.theme-option:hover{background:var(--panel2)}
+.theme-opt-icon{width:14px;height:14px;flex-shrink:0;color:var(--dim)}
+.theme-option:hover .theme-opt-icon{color:var(--fg)}
+.theme-opt-text{flex:1;font-weight:500}
+.theme-opt-check{width:13px;height:13px;flex-shrink:0;opacity:0;color:var(--accent)}
+.theme-option.active .theme-opt-check{opacity:1}
+.theme-option.active{font-weight:600;color:var(--accent)}
+.theme-option.active .theme-opt-icon{color:var(--accent)}
+
+[data-theme="dark"] .badge.ok{color:#4ade80;background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.32)}
+[data-theme="dark"] .badge.s{color:#60a5fa;background:rgba(59,130,246,.16);border-color:rgba(59,130,246,.32)}
+[data-theme="dark"] .badge.off{color:#94a3b8;background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.22)}
+[data-theme="dark"] .badge.warn{color:#fbbf24;background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.35)}
+[data-theme="dark"] .badge.bad{color:#f87171;background:rgba(248,113,113,.16);border-color:rgba(248,113,113,.35)}
+[data-theme="dark"] .cool-pill{color:#fbbf24;background:rgba(245,158,11,.18);border-color:rgba(245,158,11,.38)}
+[data-theme="dark"] .realm-badge-intl{color:#38bdf8;background:rgba(2,132,199,.2);border-color:rgba(2,132,199,.4)}
+[data-theme="dark"] .realm-badge-cn{color:#f87171;background:rgba(220,38,38,.2);border-color:rgba(220,38,38,.4)}
+[data-theme="dark"] .modal-mask{background:rgba(0,0,0,.65)}
 /* The page sections are toggled by a class so the inline head script can
    choose one before the body is parsed, avoiding a flash of the wrong
    page on every reload. */
@@ -219,7 +284,7 @@ a:hover{text-decoration:underline}
 .range-btn:hover{color:var(--fg)}
 .range-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
 #analyticsKpiCards{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
-#analyticsKpiCards .card{padding:12px 16px;min-width:0;overflow:hidden;border-radius:12px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow)}
+#analyticsKpiCards .card{padding:12px 16px;min-width:0;overflow:hidden;border-radius:12px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
 #analyticsKpiCards .card .v{font-size:19px;font-weight:700;white-space:nowrap}
 #analyticsKpiCards .card .k{font-size:11px;white-space:nowrap;margin-bottom:3px;font-weight:600;color:var(--dim)}
 #analyticsKpiCards .card .s{font-size:10px;white-space:normal;line-height:1.35;margin-top:2px;color:var(--dim)}
@@ -244,13 +309,15 @@ a:hover{text-decoration:underline}
 /* ===== Phone: ≤640px ===== */
 @media (max-width: 640px){
   header{padding:10px 12px;gap:8px}
-  header > div:first-child{width:100%;gap:8px}
+  .header-left{width:auto;flex:1;gap:8px;min-width:0}
+  .header-right{display:flex;align-items:center;gap:6px;order:2}
   h1{font-size:15px;flex:1;min-width:0}
   h1 span{font-size:11px;margin-left:6px}
-  .gh-link{width:40px;height:40px;flex-shrink:0;order:2}
+  .gh-link{width:36px;height:36px;flex-shrink:0}
+  .theme-btn{width:36px;height:36px}
   .main-nav{display:flex;width:100%;gap:2px;padding:3px;order:3}
-  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
-  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
+  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:36px;white-space:nowrap}
+  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5;order:4}
   .meta .meta-secondary{display:none}
   /* Table → card */
   .table-wrap{overflow:visible}
@@ -337,6 +404,114 @@ a:hover{text-decoration:underline}
    first one painted. Kept inline and dependency-free on purpose: an
    external or deferred script would run too late to avoid the flash. */
 (function(){
+  var THEME_KEY = 'wb-theme';
+  var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function getPref(){
+    try { return localStorage.getItem(THEME_KEY) || 'system'; } catch(e){ return 'system'; }
+  }
+  function resolve(pref){
+    if(pref === 'dark' || pref === 'light') return pref;
+    return (mq && mq.matches) ? 'dark' : 'light';
+  }
+
+  // 1. 初始化主题（防止闪烁）
+  var savedTheme = getPref();
+  var resolvedTheme = resolve(savedTheme);
+  document.documentElement.setAttribute('data-theme', resolvedTheme);
+  document.documentElement.setAttribute('data-theme-pref', savedTheme);
+  document.documentElement.style.colorScheme = resolvedTheme;
+
+  // 2. 主题切换核心与UI同步逻辑
+  var svgSun = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>';
+  var svgMoon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>';
+  var svgMonitor = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
+
+  function updateThemeUI(pref, resolved){
+    var icon = document.getElementById('themeToggleIcon');
+    var btn = document.getElementById('themeToggleBtn');
+    if(!icon) return;
+    if(pref === 'dark'){
+      icon.innerHTML = svgMoon;
+    } else if(pref === 'light'){
+      icon.innerHTML = svgSun;
+    } else {
+      icon.innerHTML = svgMonitor;
+    }
+    ['light', 'dark', 'system'].forEach(function(val){
+      var opt = document.getElementById('themeOpt' + val.charAt(0).toUpperCase() + val.slice(1));
+      if(opt) opt.classList.toggle('active', pref === val);
+    });
+    var label = pref === 'dark' ? '深色' : (pref === 'light' ? '浅色' : '跟随系统 (' + (resolved === 'dark' ? '当前深色' : '当前浅色') + ')');
+    if(btn) btn.title = '颜色主题: ' + label;
+  }
+
+  window.applyTheme = function(pref){
+    var resolved = resolve(pref);
+    document.documentElement.setAttribute('data-theme', resolved);
+    document.documentElement.setAttribute('data-theme-pref', pref);
+    document.documentElement.style.colorScheme = resolved;
+    try { localStorage.setItem(THEME_KEY, pref); } catch(e){}
+    updateThemeUI(pref, resolved);
+  };
+
+  window.selectTheme = function(pref, evt){
+    if(evt){
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+    window.applyTheme(pref);
+    var menu = document.getElementById('themeDropdown');
+    var btn = document.getElementById('themeToggleBtn');
+    if(menu) menu.classList.remove('open');
+    if(btn) btn.setAttribute('aria-expanded', 'false');
+  };
+
+  window.toggleThemeMenu = function(evt){
+    if(evt){
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+    var menu = document.getElementById('themeDropdown');
+    var btn = document.getElementById('themeToggleBtn');
+    if(!menu) return;
+    var isOpen = menu.classList.toggle('open');
+    if(btn) btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  };
+
+  window.initThemeSystem = function(){
+    var curPref = getPref();
+    updateThemeUI(curPref, resolve(curPref));
+    if(mq && mq.addEventListener){
+      mq.addEventListener('change', function(){
+        if(getPref() === 'system'){
+          window.applyTheme('system');
+        }
+      });
+    }
+    document.addEventListener('click', function(e){
+      var wrap = document.getElementById('themeDropdownWrap');
+      if(wrap && !wrap.contains(e.target)){
+        var menu = document.getElementById('themeDropdown');
+        var btn = document.getElementById('themeToggleBtn');
+        if(menu && menu.classList.contains('open')){
+          menu.classList.remove('open');
+          if(btn) btn.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape'){
+        var menu = document.getElementById('themeDropdown');
+        var btn = document.getElementById('themeToggleBtn');
+        if(menu && menu.classList.contains('open')){
+          menu.classList.remove('open');
+          if(btn) btn.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+  };
+
+  // 3. Tab 初始化
   var TABS = ['gateway','analytics','logs','settings'];
   var pick = null;
   try {
@@ -345,6 +520,7 @@ a:hover{text-decoration:underline}
     pick = [q, s].find(function(t){ return TABS.indexOf(t) !== -1; }) || 'gateway';
   } catch(e) { pick = 'gateway'; }
   window.__MAIN_TAB__ = pick;
+
   document.addEventListener('DOMContentLoaded', function(){
     TABS.forEach(function(t){
       var page = document.getElementById('page' + t.charAt(0).toUpperCase() + t.slice(1));
@@ -352,13 +528,14 @@ a:hover{text-decoration:underline}
       var btn = document.getElementById('btnNav' + t.charAt(0).toUpperCase() + t.slice(1));
       if(btn) btn.classList.toggle('active', t === pick);
     });
+    window.initThemeSystem();
   });
 })();
 </script>
 </head>
 <body>
 <header>
-  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+  <div class="header-left" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
     <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关看板</h1>
     <nav class="main-nav">
       <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')">
@@ -374,14 +551,47 @@ a:hover{text-decoration:underline}
         设置
       </button>
     </nav>
-<a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
+    <a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
        title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
       </svg>
     </a>
   </div>
-  <div class="meta" id="meta"></div>
+  <div class="header-right">
+    <div class="meta" id="meta"></div>
+    <div class="theme-dropdown-wrap" id="themeDropdownWrap">
+      <button type="button" class="theme-btn" id="themeToggleBtn" onclick="toggleThemeMenu(event)" title="颜色主题" aria-label="切换颜色主题" aria-haspopup="true" aria-expanded="false">
+        <span id="themeToggleIcon" class="theme-btn-icon"></span>
+      </button>
+      <div class="theme-dropdown" id="themeDropdown" role="menu" aria-label="选择颜色主题">
+        <button type="button" class="theme-option" id="themeOptLight" onclick="selectTheme('light', event)" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+          <span class="theme-opt-text">浅色</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+        <button type="button" class="theme-option" id="themeOptDark" onclick="selectTheme('dark', event)" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+          <span class="theme-opt-text">深色</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+        <button type="button" class="theme-option" id="themeOptSystem" onclick="selectTheme('system', event)" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <span class="theme-opt-text">跟随系统</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+      </div>
+    </div>
+  </div>
 </header>
 <div id="panelGate" style="position:fixed;inset:0;z-index:600;display:none;
      align-items:center;justify-content:center;padding:20px;background:var(--bg)">
@@ -796,7 +1006,7 @@ a:hover{text-decoration:underline}
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
-            <h2 style="margin:0">429 自动切换出站身分 <em id="setAutoSwitchState"></em></h2>
+            <h2 style="margin:0">429 自动切换出站身份 <em id="setAutoSwitchState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               某账号在某模型上被上游限流（429）时，自动在 WB / VSC / CLI 之间换身分重试，每轮最多 4 次。三条身分走不同的配额通道，开启后 429 会少一些。默认关闭。
             </div>
@@ -1009,6 +1219,108 @@ a:hover{text-decoration:underline}
       <span style="flex:1"></span>
       <button class="sec" onclick="closeImport()">取消</button>
       <button id="btnImportCommit" class="primary" onclick="commitImport(this)" disabled>确认导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="creditsDetailModal" onclick="if(event.target===this) closeCreditsDetail()">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(960px,96vw);max-height:92vh;display:flex;flex-direction:column">
+    <div class="modal-hd">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2 id="creditsModalTitle">积分与套餐明细</h2>
+        <span id="creditsModalRealm" class="badge mini"></span>
+        <span id="creditsModalTier" class="badge mini" style="display:none"></span>
+      </div>
+      <button class="modal-x" onclick="closeCreditsDetail()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd" style="overflow-y:auto;flex:1">
+      <div id="creditsModalLoading" style="display:none;text-align:center;padding:30px 0">
+        <div class="hint">正在向上游同步最新积分与权益包明细…</div>
+      </div>
+      <div id="creditsModalContent">
+        <!-- 顶部指标卡片 (4 列卡片) -->
+        <div class="credits-stat-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:12px;margin-bottom:14px">
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">剩余可用积分</div>
+            <div id="cmMetricRemain" style="font-size:22px;font-weight:700;color:var(--accent2);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">已消耗积分</div>
+            <div id="cmMetricUsed" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">总额度容量</div>
+            <div id="cmMetricTotal" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">最近将过期</div>
+            <div id="cmExpiryValue" style="font-size:20px;font-weight:700;color:var(--warn);margin-top:4px">-</div>
+            <div id="cmExpirySub" style="font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="">-</div>
+          </div>
+        </div>
+
+        <!-- 进度条与利用率 -->
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:4px;flex-wrap:wrap;gap:4px">
+            <span>额度利用率: <b id="cmUsedPercent" style="color:var(--fg)">0.0%</b></span>
+            <span id="cmUpdatedText">更新时间: -</span>
+          </div>
+          <div style="height:6px;background:var(--panel2);border:1px solid var(--line);border-radius:3px;overflow:hidden">
+            <div id="cmProgressBar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease"></div>
+          </div>
+        </div>
+
+        <!-- 扩展状态（签到与会员信息） -->
+        <div id="cmCheckinCard" style="display:none;padding:10px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:14px;color:var(--fg)">
+          <div id="cmCheckinText"></div>
+        </div>
+
+        <!-- 套餐权益包筛选与排序控制条 -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-weight:600;font-size:13px;color:var(--fg)">套餐权益包明细</span>
+            <span id="cmPkgCountBadge" class="badge mini" style="font-size:11px">共 0 个</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <div class="realm-filter" style="margin:0">
+              <button type="button" class="active" data-filter="all" onclick="filterCreditsPackages('all', this)">全部</button>
+              <button type="button" data-filter="active" onclick="filterCreditsPackages('active', this)">有剩余</button>
+              <button type="button" data-filter="expiring" onclick="filterCreditsPackages('expiring', this)">即将到期</button>
+              <button type="button" data-filter="exhausted" onclick="filterCreditsPackages('exhausted', this)">已用完/过期</button>
+            </div>
+            <input id="cmPkgSearch" type="text" placeholder="搜索包名/代码/来源…" oninput="onCreditsSearchInput(this.value)" style="padding:3px 8px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);width:140px">
+            <select id="cmPkgSort" onchange="onCreditsSortChange(this.value)" style="padding:3px 6px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)">
+              <option value="expiry_asc">最快到期优先</option>
+              <option value="remain_desc">剩余额度最大</option>
+              <option value="used_desc">已用额度最多</option>
+              <option value="size_desc">总容量最大</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 套餐权益包明细表格 -->
+        <div style="overflow-x:auto;border:1px solid var(--line);border-radius:8px">
+          <table class="data-table" style="width:100%;margin:0;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:var(--panel2);border-bottom:1px solid var(--line)">
+                <th style="text-align:left;padding:8px 10px;min-width:180px">套餐包 / 来源与属性</th>
+                <th style="text-align:center;padding:8px 10px;min-width:140px">到期倒计时 / 有效期</th>
+                <th style="text-align:right;padding:8px 10px">总额度</th>
+                <th style="text-align:right;padding:8px 10px">已用</th>
+                <th style="text-align:right;padding:8px 10px">剩余可用</th>
+                <th style="text-align:center;padding:8px 10px;min-width:100px">利用率</th>
+              </tr>
+            </thead>
+            <tbody id="cmPackagesBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button id="btnRefreshCreditsDetail" class="sec" onclick="reloadCreditsDetail(this)">刷新明细</button>
+      <span style="flex:1"></span>
+      <button class="sec" onclick="closeCreditsDetail()">关闭</button>
     </div>
   </div>
 </div>
@@ -1751,7 +2063,26 @@ function accountRow(a){
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
     ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
   const cred = a.credits;
-  const credText = cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>';
+  let expBadge = '';
+  if(cred && cred.earliest_expiring && cred.earliest_expiring.days_left !== undefined && cred.earliest_expiring.days_left !== null){
+    const d = Number(cred.earliest_expiring.days_left);
+    if(d <= 3 && d >= 0){
+      expBadge = '<span class="badge mini bad" style="font-size:10px;padding:1px 4px" title="最近套餐包将于 ' + esc(cred.earliest_expiring.cycle_end_time.slice(5,10)) + ' 到期 (剩' + d.toFixed(1) + '天)">临期</span>';
+    } else if(d <= 7 && d >= 0){
+      expBadge = '<span class="badge mini warn" style="font-size:10px;padding:1px 4px" title="最近套餐包将于 ' + esc(cred.earliest_expiring.cycle_end_time.slice(5,10)) + ' 到期 (剩' + Math.ceil(d) + '天)">7天内到期</span>';
+    }
+  }
+  const credText = cred
+    ? ('<div style="display:inline-flex;align-items:center;gap:6px">'
+       + '<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b>'
+       + '<span style="color:var(--dim)">/ ' + fmt(cred.size) + '</span>'
+       + expBadge
+       + '<span class="badge mini" style="font-size:10px;padding:1px 5px;cursor:pointer" onclick="openCreditsDetail(&quot;' + uidAttr + '&quot;)" title="点击查看积分与套餐明细">明细</span>'
+       + '</div>')
+    : ('<div style="display:inline-flex;align-items:center;gap:6px">'
+       + '<span style="color:var(--dim)">未查询</span>'
+       + '<span class="badge mini" style="font-size:10px;padding:1px 5px;cursor:pointer" onclick="openCreditsDetail(&quot;' + uidAttr + '&quot;)" title="点击查询积分明细">查询</span>'
+       + '</div>');
   return '<tr>'
     + '<td style="text-align:center;white-space:nowrap" data-label="版本">' + realmBadge + '</td>'
     + '<td style="text-align:left" data-label="账号">'
@@ -1773,7 +2104,7 @@ function accountRow(a){
     +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>'
     +   '</div>'
     +   '<div class="acct-actions-row">'
-    +     '<div class="id-btn-group" title="出站身分：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
+    +     '<div class="id-btn-group" title="出站身份：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
     +       '<button class="id-btn' + ((!a.product || a.product === 'workbuddy') ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;workbuddy&quot;, this)">WB</button>'
     +       '<button class="id-btn' + (a.product === 'vscode' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;vscode&quot;, this)">VSC</button>'
     +       '<button class="id-btn' + (a.product === 'cli' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;cli&quot;, this)">CLI</button>'
@@ -1822,7 +2153,7 @@ function renderAccounts(){
     + '<th style="text-align:right;width:80px">缓存</th>'
     + '<th style="text-align:center;width:232px">操作</th>'
     + '</tr></thead><tbody>' + list.map(accountRow).join('') + '</tbody></table></div>'
-    + '<div class="legend"><span>出站身分：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
+    + '<div class="legend"><span>出站身份：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
     + '<div class="legend"><span>多个账号按会话粘性 + 轮询使用；某个账号被上游拒绝时自动切到下一个</span></div>';
 }
 
@@ -1882,7 +2213,7 @@ async function setAccountProduct(uid, prod, btn){
     'cli': '官方 CodeBuddy CLI (CLI)'
   };
   const label = names[prod] || prod;
-  if(!confirm('将该账号的出站身分切换为 ' + label + '？\n\n不同身分对应不同的出站指纹、端点和配额通道。')) return;
+  if(!confirm('将该账号的出站身份切换为 ' + label + '？\n\n不同身分对应不同的出站指纹、端点和配额通道。')) return;
   if(btn){ btn.disabled = true; }
   try {
     const r = await postJSON('/accounts/product', {uid: uid, product: prod});
@@ -2144,6 +2475,427 @@ async function scanDesktop(btn){
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '扫描桌面客户端账号'; }
   }
+}
+
+/* --------------------------- credits detail modal --------------------------- */
+let CURRENT_CREDIT_DETAIL_UID = null;
+let CURRENT_CREDITS_DATA = null;
+let CURRENT_PKG_FILTER = 'all';
+let CURRENT_PKG_SEARCH = '';
+let CURRENT_PKG_SORT = 'expiry_asc';
+
+async function openCreditsDetail(uid, forceRefresh = false){
+  CURRENT_CREDIT_DETAIL_UID = uid;
+  CURRENT_PKG_FILTER = 'all';
+  CURRENT_PKG_SEARCH = '';
+  CURRENT_PKG_SORT = 'expiry_asc';
+
+  const m = document.getElementById("creditsDetailModal");
+  if(m) m.classList.add("show");
+
+  const searchInput = document.getElementById("cmPkgSearch");
+  if(searchInput) searchInput.value = "";
+  const sortSelect = document.getElementById("cmPkgSort");
+  if(sortSelect) sortSelect.value = "expiry_asc";
+
+  // 重置过滤器按钮高亮
+  const filterBtns = document.querySelectorAll(".realm-filter button[data-filter]");
+  filterBtns.forEach(b => {
+    if(b.getAttribute("data-filter") === "all") b.classList.add("active");
+    else b.classList.remove("active");
+  });
+
+  const acct = (window.ACCOUNTS || []).find(a => a.uid === uid);
+  const titleEl = document.getElementById("creditsModalTitle");
+  const realmEl = document.getElementById("creditsModalRealm");
+  const tierEl = document.getElementById("creditsModalTier");
+  if(titleEl) titleEl.textContent = (acct ? (acct.nickname || acct.uid.slice(0,8)) : uid.slice(0,8)) + " · 积分明细";
+  if(realmEl && acct){
+    realmEl.className = acct.realm === 'cn' ? 'realm-badge-cn' : 'realm-badge-intl';
+    realmEl.textContent = acct.realm === 'cn' ? '国内版' : '国际版';
+  }
+  if(tierEl){
+    if(acct && acct.credits && acct.credits.is_paid_user !== undefined){
+      tierEl.style.display = "inline-block";
+      tierEl.className = acct.credits.is_paid_user ? "badge mini ok" : "badge mini";
+      tierEl.textContent = acct.credits.is_paid_user ? "付费用户" : "普通用户";
+    } else {
+      tierEl.style.display = "none";
+    }
+  }
+
+  // 检查已缓存的数据是否包含有效期字段，若包含且无需强制刷新，先秒开渲染本地已缓存数据
+  const cachedPkgs = (acct && acct.credits && Array.isArray(acct.credits.packages)) ? acct.credits.packages : [];
+  const hasExpiryData = cachedPkgs.length > 0 && cachedPkgs.some(p => p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime);
+  if(!forceRefresh && hasExpiryData){
+    CURRENT_CREDITS_DATA = acct.credits;
+    renderCreditsDetail(acct.credits, acct);
+    return;
+  }
+
+  await reloadCreditsDetail();
+}
+
+async function reloadCreditsDetail(btn){
+  if(!CURRENT_CREDIT_DETAIL_UID) return;
+  const btnEl = btn || document.getElementById("btnRefreshCreditsDetail");
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = "刷新中..."; }
+  const loadingEl = document.getElementById("creditsModalLoading");
+  const contentEl = document.getElementById("creditsModalContent");
+  if(loadingEl && (!contentEl || contentEl.style.display === 'none')) loadingEl.style.display = "block";
+
+  try {
+    const res = await postJSON("/accounts/credits/detail", { uid: CURRENT_CREDIT_DETAIL_UID, refresh: true });
+    if(res && res.ok && res.credits){
+      CURRENT_CREDITS_DATA = res.credits;
+      // 同步更新全局 window.ACCOUNTS 中的 credits
+      const acct = (window.ACCOUNTS || []).find(a => a.uid === CURRENT_CREDIT_DETAIL_UID);
+      if(acct){
+        acct.credits = res.credits;
+        renderAccounts();
+      }
+      renderCreditsDetail(res.credits, acct);
+    } else {
+      toast("拉取积分明细失败: " + ((res && res.error) || "请确认后端代理服务已重启以加载新代码"));
+    }
+  } catch(e) {
+    toast("网络异常: " + e.message);
+  } finally {
+    if(loadingEl) loadingEl.style.display = "none";
+    if(contentEl) contentEl.style.display = "block";
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = "刷新明细"; }
+  }
+}
+
+function filterCreditsPackages(filterType, btn){
+  CURRENT_PKG_FILTER = filterType;
+  const parent = btn && btn.parentNode;
+  if(parent){
+    parent.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+  }
+  renderCreditsPackagesTable();
+}
+
+function onCreditsSearchInput(val){
+  CURRENT_PKG_SEARCH = (val || "").trim().toLowerCase();
+  renderCreditsPackagesTable();
+}
+
+function onCreditsSortChange(val){
+  CURRENT_PKG_SORT = val || "expiry_asc";
+  renderCreditsPackagesTable();
+}
+
+function renderCreditsDetail(credits, acct){
+  if(!credits) return;
+  CURRENT_CREDITS_DATA = credits;
+  const remain = Number(credits.remain) || 0;
+  const used = Number(credits.used) || 0;
+  const size = Number(credits.size) || (remain + used);
+  const usedPct = credits.used_percent || (size > 0 ? (used / size * 100).toFixed(1) + '%' : '0.0%');
+
+  const elRemain = document.getElementById("cmMetricRemain");
+  const elUsed = document.getElementById("cmMetricUsed");
+  const elTotal = document.getElementById("cmMetricTotal");
+  const elUsedPct = document.getElementById("cmUsedPercent");
+  const elBar = document.getElementById("cmProgressBar");
+  const elUpdated = document.getElementById("cmUpdatedText");
+
+  if(elRemain) elRemain.textContent = fmt(remain);
+  if(elUsed) elUsed.textContent = fmt(used);
+  if(elTotal) elTotal.textContent = fmt(size);
+  if(elUsedPct) elUsedPct.textContent = usedPct;
+  if(elBar){
+    const frac = size > 0 ? Math.min(100, Math.max(0, (used / size) * 100)) : 0;
+    elBar.style.width = frac.toFixed(1) + "%";
+    elBar.style.background = frac >= 90 ? "var(--bad)" : frac >= 70 ? "var(--warn)" : "var(--accent)";
+  }
+  if(elUpdated) elUpdated.textContent = "更新时间: " + (credits.updated_iso || "刚刚");
+
+  // 会员等级徽章
+  const tierEl = document.getElementById("creditsModalTier");
+  if(tierEl){
+    if(credits.is_paid_user !== undefined){
+      tierEl.style.display = "inline-block";
+      tierEl.className = credits.is_paid_user ? "badge mini ok" : "badge mini";
+      tierEl.textContent = credits.is_paid_user ? "付费用户" : "普通用户";
+    } else {
+      tierEl.style.display = "none";
+    }
+  }
+
+  // 最近到期卡片（优先取后端计算的 earliest_expiring，缺失时前端自动推导）
+  const elExpVal = document.getElementById("cmExpiryValue");
+  const elExpSub = document.getElementById("cmExpirySub");
+  if(elExpVal && elExpSub){
+    let ep = credits.earliest_expiring;
+    if(!ep && Array.isArray(credits.packages)){
+      const candidates = [];
+      credits.packages.forEach(p => {
+        const rem = Number(p.remain ?? p.CycleCapacityRemain) || 0;
+        const eStr = p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime || '';
+        if(rem > 0 && eStr && eStr !== '-'){
+          try {
+            const clean = eStr.replace(/-/g, '/').replace('T', ' ');
+            const ts = new Date(clean).getTime();
+            if(!isNaN(ts)){
+              const d = Math.round((ts - Date.now()) / 86400000 * 10) / 10;
+              candidates.push({ name: p.name || '套餐包', remain: rem, cycle_end_time: eStr, days_left: d });
+            }
+          } catch(e){}
+        }
+      });
+      if(candidates.length){
+        candidates.sort((a, b) => a.days_left - b.days_left);
+        ep = candidates[0];
+      }
+    }
+
+    if(ep && ep.days_left !== undefined && ep.days_left !== null){
+      const days = Number(ep.days_left);
+      const endStr = String(ep.cycle_end_time || '');
+      if(days < 0){
+        elExpVal.textContent = "已有包过期";
+        elExpVal.style.color = "var(--bad)";
+        elExpSub.textContent = esc(ep.name) + " · 周期已过";
+      } else if(days <= 3){
+        elExpVal.textContent = "剩 " + days.toFixed(1) + " 天";
+        elExpVal.style.color = "var(--bad)";
+        elExpSub.textContent = esc(endStr.slice(5, 16)) + " · " + fmt(ep.remain) + " 积分即将到期";
+      } else if(days <= 7){
+        elExpVal.textContent = "剩 " + Math.ceil(days) + " 天";
+        elExpVal.style.color = "var(--warn)";
+        elExpSub.textContent = esc(endStr.slice(5, 10)) + " 到期 · " + fmt(ep.remain) + " 积分";
+      } else {
+        elExpVal.textContent = "剩 " + Math.floor(days) + " 天";
+        elExpVal.style.color = "var(--fg)";
+        elExpSub.textContent = esc(endStr.slice(5, 10)) + " 到期 · " + fmt(ep.remain) + " 积分";
+      }
+      elExpSub.title = (ep.name || "") + " (" + endStr + ")";
+    } else {
+      elExpVal.textContent = "长期有效";
+      elExpVal.style.color = "var(--accent2)";
+      elExpSub.textContent = "暂无临期生效套餐包";
+    }
+  }
+
+  // 扩展状态（签到与会员信息）
+  const checkinCard = document.getElementById("cmCheckinCard");
+  const checkinText = document.getElementById("cmCheckinText");
+  if(checkinCard && checkinText){
+    let items = [];
+    if(credits.checkin){
+      const c = credits.checkin;
+      const st = c.today_checked_in
+        ? '<span style="color:var(--accent2);font-weight:600">今日已签到</span>'
+        : '<span style="color:var(--warn);font-weight:600">今日未签到</span>';
+      items.push('每日签到: ' + st + ' (连续 ' + (c.streak_days || 0) + ' 天)');
+      if(c.daily_credit) items.push('签到奖励: ' + c.daily_credit + ' 积分');
+      if(c.today_credit) items.push('今日领取: ' + c.today_credit + ' 积分');
+    }
+    if(credits.is_paid_user !== undefined){
+      items.push('会员类型: ' + (credits.is_paid_user ? '<span class="badge ok mini">付费用户</span>' : '<span class="badge mini">普通/体验用户</span>'));
+    }
+    if(items.length){
+      checkinText.innerHTML = items.join(' · ');
+      checkinCard.style.display = "block";
+    } else {
+      checkinCard.style.display = "none";
+    }
+  }
+
+  // 渲染套餐权益包明细表格
+  renderCreditsPackagesTable();
+}
+
+function renderCreditsPackagesTable(){
+  const credits = CURRENT_CREDITS_DATA;
+  if(!credits) return;
+  const tbody = document.getElementById("cmPackagesBody");
+  if(!tbody) return;
+
+  const rawPkgs = Array.isArray(credits.packages) ? credits.packages : [];
+  const countBadge = document.getElementById("cmPkgCountBadge");
+  if(countBadge) countBadge.textContent = "共 " + rawPkgs.length + " 个";
+
+  // 统一预处理各套餐包的有效期与数值
+  const preparedPkgs = rawPkgs.map(p => {
+    const pSize = Number(p.size ?? p.total ?? p.CycleCapacitySize) || 0;
+    const pUsed = Number(p.used ?? p.CycleCapacityUsed) || 0;
+    const pRemain = Number(p.remain ?? p.CycleCapacityRemain) || 0;
+    const endTime = p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime || '';
+    const startTime = p.cycle_start_time || p.cycleStartTime || p.CycleStartTime || '';
+
+    let days = (p.days_left !== undefined && p.days_left !== null) ? Number(p.days_left) : null;
+    if(days === null && endTime && endTime !== '-'){
+      try {
+        const cleanStr = endTime.replace(/-/g, '/').replace('T', ' ');
+        const endTs = new Date(cleanStr).getTime();
+        if(!isNaN(endTs)){
+          days = Math.round((endTs - Date.now()) / 86400000 * 10) / 10;
+        }
+      } catch(e){}
+    }
+    const isExpired = p.is_expired !== undefined ? !!p.is_expired : (days !== null && days < 0);
+    return {
+      raw: p,
+      name: p.name || '套餐包',
+      package_code: p.package_code || p.packageCode || p.PackageCode || '',
+      resource_id: p.resource_id || p.resourceId || p.ResourceId || '',
+      grant_reason: p.grant_reason || p.grantReason || '',
+      sub_product_name: p.sub_product_name || p.subProductName || p.SubProductName || '',
+      in_usage: p.in_usage ?? p.inUsage ?? p.InUsage,
+      auto_renew: p.auto_renew ?? p.autoRenew ?? p.AutoRenewFlag,
+      size: pSize,
+      used: pUsed,
+      remain: pRemain,
+      cycle_start_time: startTime,
+      cycle_end_time: endTime,
+      days_left: days,
+      is_expired: isExpired
+    };
+  });
+
+  // 过滤
+  let pkgs = preparedPkgs.filter(p => {
+    const remain = p.remain;
+    const isExpired = p.is_expired;
+    const daysLeft = p.days_left;
+
+    if(CURRENT_PKG_FILTER === 'active'){
+      if(remain <= 0 || isExpired) return false;
+    } else if(CURRENT_PKG_FILTER === 'expiring'){
+      if(isExpired || remain <= 0) return false;
+      if(daysLeft === null || daysLeft > 7) return false;
+    } else if(CURRENT_PKG_FILTER === 'exhausted'){
+      if(remain > 0 && !isExpired) return false;
+    }
+
+    if(CURRENT_PKG_SEARCH){
+      const q = CURRENT_PKG_SEARCH;
+      const match = (p.name && p.name.toLowerCase().includes(q))
+        || (p.package_code && p.package_code.toLowerCase().includes(q))
+        || (p.grant_reason && p.grant_reason.toLowerCase().includes(q))
+        || (p.sub_product_name && p.sub_product_name.toLowerCase().includes(q))
+        || (p.resource_id && p.resource_id.toLowerCase().includes(q));
+      if(!match) return false;
+    }
+    return true;
+  });
+
+  // 排序
+  pkgs.sort((a, b) => {
+    if(CURRENT_PKG_SORT === 'expiry_asc'){
+      const inUseA = a.in_usage ? 0 : 1;
+      const inUseB = b.in_usage ? 0 : 1;
+      if(inUseA !== inUseB) return inUseA - inUseB;
+      const expA = a.is_expired ? 1 : 0;
+      const expB = b.is_expired ? 1 : 0;
+      if(expA !== expB) return expA - expB;
+      const daysA = a.days_left !== null ? a.days_left : 99999;
+      const daysB = b.days_left !== null ? b.days_left : 99999;
+      if(daysA !== daysB) return daysA - daysB;
+      return (b.remain || 0) - (a.remain || 0);
+    } else if(CURRENT_PKG_SORT === 'remain_desc'){
+      return (b.remain || 0) - (a.remain || 0);
+    } else if(CURRENT_PKG_SORT === 'used_desc'){
+      return (b.used || 0) - (a.used || 0);
+    } else if(CURRENT_PKG_SORT === 'size_desc'){
+      return (b.size || 0) - (a.size || 0);
+    }
+    return 0;
+  });
+
+  if(!pkgs.length){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty" style="text-align:center;padding:24px;color:var(--dim)">无符合条件的套餐权益包</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = pkgs.map(p => {
+    const pSize = p.size;
+    const pUsed = p.used;
+    const pRemain = p.remain;
+    const pct = pSize > 0 ? Math.min(100, (pUsed / pSize) * 100) : 0;
+    const days = p.days_left;
+
+    // 到期倒计时与周期格式化
+    let expiryBadge = '';
+    if(p.is_expired || (days !== null && days < 0)){
+      expiryBadge = '<span class="badge mini off">已过期</span>';
+    } else if(days !== null){
+      if(days <= 3){
+        expiryBadge = '<span class="badge mini bad">剩 ' + days.toFixed(1) + ' 天 (即将到期)</span>';
+      } else if(days <= 7){
+        expiryBadge = '<span class="badge mini warn">剩 ' + Math.ceil(days) + ' 天</span>';
+      } else if(days < 365){
+        expiryBadge = '<span class="badge mini ok">剩 ' + Math.floor(days) + ' 天</span>';
+      } else {
+        expiryBadge = '<span class="badge mini">长期有效</span>';
+      }
+    } else if(p.cycle_end_time){
+      expiryBadge = '<span class="badge mini">正常</span>';
+    }
+
+    const cycleEndTimeStr = p.cycle_end_time ? p.cycle_end_time.slice(0, 19) : '-';
+    const cycleStartTimeStr = p.cycle_start_time ? p.cycle_start_time.slice(0, 19) : '';
+
+    // 来源/原因/产品描述
+    const reasonParts = [];
+    if(p.grant_reason) reasonParts.push(esc(p.grant_reason));
+    if(p.sub_product_name && p.sub_product_name !== p.name) reasonParts.push(esc(p.sub_product_name));
+    const reasonLine = reasonParts.length ? ('<div style="font-size:11px;color:var(--dim);margin-top:2px">' + reasonParts.join(' · ') + '</div>') : '';
+
+    // 标识行
+    const idParts = [];
+    if(p.package_code) idParts.push(esc(p.package_code));
+    if(p.resource_id) idParts.push(esc(p.resource_id));
+    const idLine = idParts.length ? ('<div class="mono" style="font-size:10px;color:var(--dim);margin-top:2px">' + idParts.join(' · ') + '</div>') : '';
+
+    // 状态标签
+    let statusTags = '';
+    if(p.in_usage){
+      statusTags += '<span class="badge mini s" style="margin-left:4px;font-size:10px">生效中</span>';
+    }
+    if(p.auto_renew){
+      statusTags += '<span class="badge mini ok" style="margin-left:4px;font-size:10px">自动续费</span>';
+    }
+
+    const barColor = pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
+
+    return '<tr>'
+      + '<td style="text-align:left;padding:8px 10px">'
+      +   '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">'
+      +     '<span style="font-weight:600;color:var(--fg)">' + esc(p.name) + '</span>'
+      +     statusTags
+      +   '</div>'
+      +   reasonLine
+      +   idLine
+      + '</td>'
+      + '<td style="text-align:center;padding:8px 10px">'
+      +   (expiryBadge ? ('<div style="margin-bottom:3px">' + expiryBadge + '</div>') : '')
+      +   '<div class="mono" style="font-size:11px;color:var(--fg)" title="到期时间">' + esc(cycleEndTimeStr) + '</div>'
+      +   (cycleStartTimeStr ? ('<div class="mono" style="font-size:10px;color:var(--dim)" title="生效时间">自 ' + esc(cycleStartTimeStr.slice(0, 10)) + '</div>') : '')
+      + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;font-weight:600">' + fmt(pSize) + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;color:var(--dim)">' + fmt(pUsed) + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;color:var(--accent2);font-weight:700;font-size:13px">' + fmt(pRemain) + '</td>'
+      + '<td style="text-align:center;padding:8px 10px">'
+      +   '<div style="display:flex;align-items:center;justify-content:center;gap:6px">'
+      +     '<span style="font-size:11px;min-width:34px;text-align:right">' + pct.toFixed(1) + '%</span>'
+      +     '<div style="width:46px;height:5px;background:var(--line);border-radius:3px;overflow:hidden">'
+      +       '<div style="width:' + pct.toFixed(1) + '%;height:100%;background:' + barColor + '"></div>'
+      +     '</div>'
+      +   '</div>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function closeCreditsDetail(){
+  const m = document.getElementById("creditsDetailModal");
+  if(m) m.classList.remove("show");
+  CURRENT_CREDIT_DETAIL_UID = null;
 }
 
 function openDesktopScan(){
@@ -2748,7 +3500,7 @@ async function saveAutoSwitchProduct(btn){
   if(btn) btn.disabled = true;
   try {
     await postJSON('/settings/save', {auto_switch_product: value});
-    toast(value ? '已启用：429 时自动切换出站身分' : '已关闭自动切换出站身分', 'ok');
+    toast(value ? '已启用：429 时自动切换出站身份' : '已关闭自动切换出站身份', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
@@ -2832,7 +3584,7 @@ function renderKeyRows(){
       const options = REALM_CHOICES.map(([val, lbl]) =>
         '<option value="' + val + '"' + ((row.realm || '') === val ? ' selected' : '') + '>' + lbl + '</option>'
       ).join('');
-      return '<div class="key-card" style="border-color:var(--accent);background:#ffffff;box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
+      return '<div class="key-card" style="border-color:var(--accent);background:var(--panel);box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
         +   '<div style="font-size:14px;font-weight:700;color:var(--fg)">' + (row.id ? '编辑 API Key' : '新建 API Key') + '</div>'
         +   '<span class="badge s mini">设置出口</span>'

@@ -149,6 +149,10 @@ LOGIN_ACCOUNT_PATH = "/v2/plugin/login/account"
 REFRESH_PATH = "/v2/plugin/auth/token/refresh"
 CHECKIN_PATH = "/v2/billing/meter/daily-checkin"
 GET_RESOURCE_PATH = "/v2/billing/meter/get-user-resource"
+RESOURCE_SUMMARY_PATH = "/billing/meter/get-user-resource-summary"
+RESOURCE_FREE_PACKAGES_PATH = "/billing/meter/get-user-resource-free-packages"
+RESOURCE_PAID_PACKAGES_PATH = "/billing/meter/get-user-resource-paid-packages"
+CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status"
 
 LOGIN_PENDING = 11217
 LOGIN_TTL_SECONDS = 600
@@ -763,7 +767,213 @@ class Account(object):
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def fetch_credits(self):
+    def _parse_package_account(self, acc):
+        pkg_name = acc.get("PackageName") or "Package"
+        pkg_code = acc.get("PackageCode") or ""
+
+        def _val(*keys):
+            for k in keys:
+                v = acc.get(k)
+                if v is not None and v != "":
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        pass
+            return 0.0
+
+        size = _val("CycleCapacitySizePrecise", "CycleCapacitySize", "CapacitySizePrecise", "CapacitySize")
+        remain = _val("CycleCapacityRemainPrecise", "CycleCapacityRemain", "CapacityRemainPrecise", "CapacityRemain")
+        used = _val("CycleCapacityUsedPrecise", "CycleCapacityUsed", "CapacityUsedPrecise", "CapacityUsed")
+
+        if size > 0 and used <= 0 and remain <= size:
+            used = max(0.0, size - remain)
+        elif size > 0 and remain <= 0 and used < size:
+            remain = max(0.0, size - used)
+
+        # 提取发放原因（如“官方活动发放”、“拉新奖励”等）
+        grant_reason = ""
+        for attr in (acc.get("AccountAttributes") or []):
+            if isinstance(attr, dict) and attr.get("Key") == "grantReason":
+                grant_reason = str(attr.get("Value") or "")
+                break
+
+        # 提取创建时间（毫秒时间戳转换）
+        create_time = ""
+        raw_create = acc.get("CreateTime")
+        if raw_create:
+            try:
+                ts = float(raw_create)
+                if ts > 1e11:
+                    ts /= 1000.0
+                create_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+            except Exception:
+                create_time = str(raw_create)
+
+        end_time_str = acc.get("CycleEndTime") or acc.get("ExpiredTime") or ""
+        days_left = None
+        is_expired = False
+        if end_time_str:
+            try:
+                clean_time = end_time_str.replace("T", " ")[:19]
+                end_ts = time.mktime(time.strptime(clean_time, "%Y-%m-%d %H:%M:%S"))
+                diff_sec = end_ts - time.time()
+                days_left = round(diff_sec / 86400.0, 1)
+                is_expired = diff_sec < 0
+            except Exception:
+                pass
+
+        in_usage = bool(acc.get("InUsage"))
+        if not in_usage and not is_expired and remain > 0 and used > 0:
+            in_usage = True
+
+        return {
+            "name": pkg_name,
+            "package_code": pkg_code,
+            "product_name": acc.get("ProductName") or "",
+            "sub_product_name": acc.get("SubProductName") or "",
+            "grant_reason": grant_reason,
+            "resource_id": acc.get("ResourceId") or "",
+            "deal_name": acc.get("DealName") or "",
+            "create_time": create_time,
+            "remain": round(remain, 2),
+            "used": round(used, 2),
+            "size": round(size, 2),
+            "unit": acc.get("CapacityUnit") or "credits",
+            "in_usage": in_usage,
+            "auto_renew": bool(acc.get("AutoRenewFlag") or acc.get("SupportAutoRenew")),
+            "cycle_start_time": acc.get("CycleStartTime") or "",
+            "cycle_end_time": end_time_str,
+            "days_left": days_left,
+            "is_expired": is_expired,
+            "status": acc.get("Status", 0),
+        }
+
+    def _fetch_credits_cn_detailed(self):
+        cfg = get_realm_config(self.realm)
+        headers = self.headers(purpose="billing")
+        headers["X-Client-Platform"] = "web"
+        base_billing = cfg["billing_upstream"]
+
+        # 1. 套餐概览
+        summary_url = base_billing + RESOURCE_SUMMARY_PATH
+        s_res = http_json(summary_url, data=b"{}", method="POST", headers=headers,
+                          timeout=15, proxy=self.proxy)
+        if s_res.get("code") != 0:
+            return {"ok": False, "error": s_res.get("msg") or f"code {s_res.get('code')}"}
+        s_data = s_res.get("data") or {}
+        summary_pkgs = s_data.get("Packages") or []
+        pkg_codes = [p.get("PackageCode") for p in summary_pkgs if p.get("PackageCode")]
+
+        # 2. 免费包
+        free_accs = []
+        if pkg_codes:
+            free_url = base_billing + RESOURCE_FREE_PACKAGES_PATH
+            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0]}
+            try:
+                f_res = http_json(free_url, data=json.dumps(body).encode(), method="POST",
+                                  headers=headers, timeout=15, proxy=self.proxy)
+                free_accs = (f_res.get("data") or {}).get("Accounts") or []
+            except Exception:
+                pass
+
+        # 3. 付费包
+        paid_accs = []
+        if pkg_codes:
+            paid_url = base_billing + RESOURCE_PAID_PACKAGES_PATH
+            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0, 3], "NeedRenewInfo": True}
+            try:
+                p_res = http_json(paid_url, data=json.dumps(body).encode(), method="POST",
+                                  headers=headers, timeout=15, proxy=self.proxy)
+                paid_accs = (p_res.get("data") or {}).get("Accounts") or []
+            except Exception:
+                pass
+
+        # 4. 每日签到状态
+        checkin_info = None
+        try:
+            checkin_url = cfg.get("chat_upstream", "https://copilot.tencent.com") + CHECKIN_STATUS_PATH
+            c_res = http_json(checkin_url, data=b"{}", method="POST", headers=headers,
+                              timeout=10, proxy=self.proxy)
+            c_data = c_res.get("data") or {}
+            if c_data:
+                checkin_info = {
+                    "today_checked_in": c_data.get("today_checked_in", False),
+                    "streak_days": c_data.get("streak_days", 0),
+                    "daily_credit": c_data.get("daily_credit", 0),
+                    "today_credit": c_data.get("today_credit", 0),
+                    "active": c_data.get("active", True),
+                }
+        except Exception:
+            pass
+
+        packages = []
+        seen_account_ids = set()
+        for raw_acc in (free_accs + paid_accs):
+            acc_id = raw_acc.get("AccountId")
+            if acc_id and acc_id in seen_account_ids:
+                continue
+            if acc_id:
+                seen_account_ids.add(acc_id)
+            packages.append(self._parse_package_account(raw_acc))
+
+        tot_remain = sum(p["remain"] for p in packages)
+        tot_used = sum(p["used"] for p in packages)
+        tot_size = sum(p["size"] for p in packages)
+
+        # 若具体包为空且 summary 含有汇总容量，则使用 summaryPkgs
+        if not packages and summary_pkgs:
+            for sp in summary_pkgs:
+                tot_size += float(sp.get("CycleTotalCapacity") or 0)
+                tot_remain += float(sp.get("CycleRemainCapacity") or 0)
+                tot_used += float(sp.get("CycleUsedCapacity") or 0)
+
+        tot_remain = round(tot_remain, 2)
+        tot_used = round(tot_used, 2)
+        tot_size = round(tot_size, 2)
+
+        # 排序：使用中优先 -> 未过期中按到期时间升序 -> 已过期排最后
+        def _pkg_sort_key(p):
+            in_use_score = 0 if p.get("in_usage") else 1
+            expired_score = 1 if p.get("is_expired") else 0
+            days = p.get("days_left") if p.get("days_left") is not None else 99999
+            if days < 0:
+                days = 99999 + abs(days)
+            return (in_use_score, expired_score, days, -p.get("remain", 0))
+
+        packages.sort(key=_pkg_sort_key)
+
+        # 查找最早到期的有效包（有剩余积分且未过期）
+        active_pkgs = [p for p in packages if p.get("remain", 0) > 0 and not p.get("is_expired") and p.get("days_left") is not None]
+        active_pkgs.sort(key=lambda p: p["days_left"])
+        earliest_expiring = None
+        if active_pkgs:
+            ep = active_pkgs[0]
+            earliest_expiring = {
+                "name": ep["name"],
+                "package_code": ep.get("package_code", ""),
+                "remain": ep["remain"],
+                "cycle_end_time": ep["cycle_end_time"],
+                "days_left": ep["days_left"],
+            }
+
+        self.credits = {
+            "remain": tot_remain,
+            "used": tot_used,
+            "size": tot_size,
+            "used_percent": f"{(tot_used / tot_size * 100):.1f}%" if tot_size > 0 else "0.0%",
+            "remain_percent": f"{(tot_remain / tot_size * 100):.1f}%" if tot_size > 0 else "100.0%",
+            "is_paid_user": bool(s_data.get("IsPaidUser")),
+            "checkin": checkin_info,
+            "earliest_expiring": earliest_expiring,
+            "packages": packages,
+            "updated_at": time.time(),
+            "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if self.path and os.path.exists(os.path.dirname(self.path)):
+            self.save(os.path.dirname(self.path))
+        return {"ok": True, "credits": self.credits}
+
+    def _fetch_credits_fallback(self):
         cfg = get_realm_config(self.realm)
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         body = {
@@ -783,29 +993,46 @@ class Account(object):
             return {"ok": False, "error": str(exc)}
         data = res.get("data", {}).get("Response", {}).get("Data", {})
         accounts = data.get("Accounts") or []
-        tot_remain, tot_used, tot_size = 0, 0, 0
         packages = []
         for a in accounts:
-            pkg_name = a.get("PackageName") or "Package"
-            if a.get("CycleCapacitySize", 0) > 0:
-                remain = a.get("CycleCapacityRemain", 0)
-                size = a.get("CycleCapacitySize", 0)
-                used = max(0, size - remain)
-                if a.get("CycleCapacityUsed", 0) > used:
-                    used = a["CycleCapacityUsed"]
-                    remain = max(0, size - used)
-            else:
-                remain = a.get("CapacityRemain", 0)
-                used = a.get("CapacityUsed", 0)
-                size = a.get("CapacitySize", 0)
-            tot_remain += remain
-            tot_used += used
-            tot_size += size
-            packages.append({"name": pkg_name, "remain": remain, "used": used, "size": size})
+            packages.append(self._parse_package_account(a))
+
+        tot_remain = round(sum(p["remain"] for p in packages), 2)
+        tot_used = round(sum(p["used"] for p in packages), 2)
+        tot_size = round(sum(p["size"] for p in packages), 2)
+
+        def _pkg_sort_key(p):
+            in_use_score = 0 if p.get("in_usage") else 1
+            expired_score = 1 if p.get("is_expired") else 0
+            days = p.get("days_left") if p.get("days_left") is not None else 99999
+            if days < 0:
+                days = 99999 + abs(days)
+            return (in_use_score, expired_score, days, -p.get("remain", 0))
+
+        packages.sort(key=_pkg_sort_key)
+
+        active_pkgs = [p for p in packages if p.get("remain", 0) > 0 and not p.get("is_expired") and p.get("days_left") is not None]
+        active_pkgs.sort(key=lambda p: p["days_left"])
+        earliest_expiring = None
+        if active_pkgs:
+            ep = active_pkgs[0]
+            earliest_expiring = {
+                "name": ep["name"],
+                "package_code": ep.get("package_code", ""),
+                "remain": ep["remain"],
+                "cycle_end_time": ep["cycle_end_time"],
+                "days_left": ep["days_left"],
+            }
+
         self.credits = {
             "remain": tot_remain,
             "used": tot_used,
             "size": tot_size,
+            "used_percent": f"{(tot_used / tot_size * 100):.1f}%" if tot_size > 0 else "0.0%",
+            "remain_percent": f"{(tot_remain / tot_size * 100):.1f}%" if tot_size > 0 else "100.0%",
+            "is_paid_user": False,
+            "checkin": getattr(self, "credits", {}).get("checkin") if isinstance(getattr(self, "credits", None), dict) else None,
+            "earliest_expiring": earliest_expiring,
             "packages": packages,
             "updated_at": time.time(),
             "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -813,6 +1040,16 @@ class Account(object):
         if self.path and os.path.exists(os.path.dirname(self.path)):
             self.save(os.path.dirname(self.path))
         return {"ok": True, "credits": self.credits}
+
+    def fetch_credits(self):
+        if self.realm == "cn":
+            try:
+                res = self._fetch_credits_cn_detailed()
+                if res.get("ok"):
+                    return res
+            except Exception:
+                pass
+        return self._fetch_credits_fallback()
 
     def _set_last_error(self, message):
         """Record refresh errors alongside the state shown in the panel."""

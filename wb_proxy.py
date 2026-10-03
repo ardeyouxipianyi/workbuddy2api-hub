@@ -5419,6 +5419,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_v1_usage(query)
         if path == "/usage/recent":
             return self._get_usage_recent(query)
+        if path == "/accounts/credits/detail":
+            return self._get_account_credits_detail(query)
         if path == "/accounts/credits":
             return self._get_accounts_credits()
         if path == "/accounts":
@@ -5536,6 +5538,40 @@ class Handler(BaseHTTPRequestHandler):
         for a in (POOL.accounts if POOL else []):
             a.fetch_credits()
         return self._json(200, {"accounts": account_views()})
+
+    def _get_account_credits_detail(self, query):
+        if not self._authorized():
+            return
+        uid = (query.get("uid") or [""])[0]
+        refresh = (query.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+        if not POOL:
+            return self._json(200, {"ok": False, "error": "账号池未初始化"})
+        account = POOL.get(uid) if uid else None
+        if not account:
+            if POOL.accounts:
+                account = POOL.accounts[0]
+            else:
+                return self._json(200, {"ok": False, "error": "未找到指定账号"})
+
+        if refresh or not account.credits or not account.credits.get("packages"):
+            res = account.fetch_credits()
+            if not res.get("ok"):
+                return self._json(200, {
+                    "ok": False,
+                    "uid": account.uid,
+                    "nickname": account.nickname,
+                    "realm": account.realm,
+                    "credits": account.credits,
+                    "error": res.get("error", "获取积分明细失败")
+                })
+
+        return self._json(200, {
+            "ok": True,
+            "uid": account.uid,
+            "nickname": account.nickname,
+            "realm": account.realm,
+            "credits": account.credits
+        })
 
     def _get_accounts(self, query):
         if not self._authorized():
@@ -6048,6 +6084,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "expected a JSON object", "invalid_request_error")
         if path in ("/accounts/credits", "/accounts/credits/fetch"):
             return self._route_accounts_credits_fetch(payload)
+        if path == "/accounts/credits/detail":
+            return self._route_account_credits_detail(payload)
         if path == "/tasks/run":
             return self._route_tasks_run(payload)
         if path == "/tasks/travel":
@@ -6152,6 +6190,37 @@ class Handler(BaseHTTPRequestHandler):
             results.append({"uid": account.uid, "ok": res.get("ok", False),
                             "credits": account.credits, "error": res.get("error", "")})
         return self._json(200, {"results": results, "accounts": account_views()})
+
+    def _route_account_credits_detail(self, payload):
+        if not self._authorized():
+            return
+        uid = payload.get("uid")
+        refresh = payload.get("refresh", True)
+        if not POOL:
+            return self._json(200, {"ok": False, "error": "账号池未初始化"})
+        account = POOL.get(uid) if uid else None
+        if not account:
+            return self._json(200, {"ok": False, "error": "未找到指定账号"})
+
+        if refresh or not account.credits or not account.credits.get("packages"):
+            res = account.fetch_credits()
+            if not res.get("ok"):
+                return self._json(200, {
+                    "ok": False,
+                    "uid": account.uid,
+                    "nickname": account.nickname,
+                    "realm": account.realm,
+                    "credits": account.credits,
+                    "error": res.get("error", "获取积分明细失败")
+                })
+
+        return self._json(200, {
+            "ok": True,
+            "uid": account.uid,
+            "nickname": account.nickname,
+            "realm": account.realm,
+            "credits": account.credits
+        })
 
     def _route_tasks_run(self, payload):
         if not POOL:
