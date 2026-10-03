@@ -102,14 +102,35 @@ echo.
 
 rem Pass --api-key only when the user supplied one; otherwise the gateway
 rem mints a random key on first run and prints it below.
+set "ERRORLOG=%HERE%wb-proxy-errors.log"
+set "RESTARTS=0"
+
+:run_server
+echo [%DATE% %TIME%] starting proxy >> "%ERRORLOG%"
 if "%KEY%"=="" goto run_nokey
-"%PYEXE%" "%SCRIPT%" --port %PORT% --lan --api-key %KEY%
+"%PYEXE%" -u -X faulthandler "%SCRIPT%" --port %PORT% --lan --api-key "%KEY%" 2>> "%ERRORLOG%"
 goto after_run
 
 :run_nokey
-"%PYEXE%" "%SCRIPT%" --port %PORT% --lan
+"%PYEXE%" -u -X faulthandler "%SCRIPT%" --port %PORT% --lan 2>> "%ERRORLOG%"
 
 :after_run
+set "SERVER_EXIT=%ERRORLEVEL%"
+echo [%DATE% %TIME%] exit code %SERVER_EXIT% >> "%ERRORLOG%"
+echo [server exited: code %SERVER_EXIT%]
+echo Error log: %ERRORLOG%
+if "%SERVER_EXIT%"=="0" goto finished
+type "%ERRORLOG%"
+if "%SERVER_EXIT%"=="1" goto finished
+if "%SERVER_EXIT%"=="130" goto finished
+if "%SERVER_EXIT%"=="-1073741510" goto finished
+if %RESTARTS% GEQ 3 goto finished
+set /a RESTARTS+=1 >nul
+echo Restarting after unexpected exit, attempt %RESTARTS% of 3...
+timeout /t 3 /nobreak >nul
+goto run_server
+
+:finished
 echo.
-echo [server exited]
 pause
+exit /b %SERVER_EXIT%

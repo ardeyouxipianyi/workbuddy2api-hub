@@ -1,6 +1,7 @@
 import re
 import base64
 import json
+import math
 import os
 import ssl
 import sys
@@ -10,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
 from wb_fingerprint import derive_id, generate_request_id
 import wb_identity
 import wb_settings
@@ -187,6 +189,30 @@ def normalize_epoch(value):
         number /= 1000.0
     return int(number)
 
+
+def billing_epoch(value):
+    """Billing timestamps are milliseconds or ISO dates in UTC+8."""
+    try:
+        number = normalize_epoch(value)
+        if number:
+            return number
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone(timedelta(hours=8)))
+        return int(stamp.timestamp())
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def capacity_value(package, key):
+    raw = package.get(key + "Precise")
+    if raw in (None, ""):
+        raw = package.get(key, 0)
+    value = float(raw or 0)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("invalid billing capacity: %s" % key)
+    return value
+
 def detect_realm_from_token(token, domain=None):
     iss = jwt_issuer(token).lower()
     dom = str(domain or "").lower()
@@ -240,6 +266,10 @@ class Account(object):
         # Deliberately runtime-only (not persisted): see VOLATILE_FIELDS.
         self.model_cooldowns = {}
         self.credits = data.get("credits") or None
+        self.credits_exhausted = False
+        self._credits_dirty = False
+        self._credits_attempt_at = 0
+        self._credits_lock = threading.Lock()
         self.last_checkin = data.get("lastCheckin") or None
         self.last_daily_chat = data.get("lastDailyChat") or None
         # Low-credit guard: once the balance reaches this level the account
@@ -334,6 +364,8 @@ class Account(object):
             "file": os.path.basename(self.path) if self.path else None,
             "credits": self.credits,
             "reserveCredits": int(self.reserve_credits or 0),
+            "creditsExhausted": self.credit_blocked(),
+            "creditPriority": self.credit_priority(),
             "reserveBlocked": self.reserve_blocked(),
             "dailyTokenLimit": int(self.daily_token_limit or 0),
             "dailyTokensToday": (int(self.daily_tokens_today)
@@ -421,6 +453,8 @@ class Account(object):
 
     def ready(self, model=None):
         if not self.enabled or not self.access_token:
+            return False
+        if self.credit_blocked():
             return False
         if self.throttle_wait(model=model) > 0:
             return False
@@ -763,7 +797,37 @@ class Account(object):
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def fetch_credits(self):
+    def credit_blocked(self):
+        credits = self.credits or {}
+        return self.credits_exhausted or (
+            isinstance(credits.get("remain"), (int, float)) and credits["remain"] <= 0)
+
+    def credit_priority(self):
+        now = time.time()
+        packages = [p for p in (self.credits or {}).get("packages", [])
+                    if isinstance(p, dict) and isinstance(p.get("remain"), (int, float))
+                    and p["remain"] > 0 and (p.get("starts_at") or 0) <= now
+                    and isinstance(p.get("expires_at"), (int, float))
+                    and p["expires_at"] > now]
+        if not packages:
+            return None
+        # Group by UTC+8 calendar day, so smaller balances win on the same day.
+        day = min(int((p["expires_at"] + 28800) // 86400) for p in packages)
+        expiring = [p for p in packages
+                    if int((p["expires_at"] + 28800) // 86400) == day]
+        return {"day": day, "expiresAt": min(p["expires_at"] for p in expiring),
+                "remain": sum(p["remain"] for p in expiring)}
+
+    def fetch_credits(self, max_age=0):
+        with self._credits_lock:
+            if max_age and not self._credits_dirty and time.time() - self._credits_attempt_at < max_age:
+                return {"ok": bool(self.credits), "credits": self.credits}
+            self._credits_attempt_at = time.time()
+            self._credits_dirty = False
+            return self._fetch_credits(timeout=5 if max_age else 30,
+                                       retries=1 if max_age else 3)
+
+    def _fetch_credits(self, timeout=30, retries=3):
         cfg = get_realm_config(self.realm)
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         body = {
@@ -775,41 +839,50 @@ class Account(object):
             "PackageEndTimeRangeEnd": "2036-01-01 00:00:00",
         }
         url = cfg["billing_upstream"] + GET_RESOURCE_PATH
-        headers = self.headers(purpose="billing")
         try:
-            res = http_json(url, data=json.dumps(body).encode(), method="POST", headers=headers,
-                            timeout=30, proxy=self.proxy)
+            accounts = []
+            while True:
+                res = http_json(url, data=json.dumps(body).encode(), method="POST",
+                                headers=self.headers(purpose="billing"), timeout=timeout,
+                                retries=retries, proxy=self.proxy)
+                data = (res.get("data") or {}).get("Response", {}).get("Data")
+                if not isinstance(data, dict) or not isinstance(data.get("Accounts"), list):
+                    raise ValueError("billing returned no resource list; previous balance retained")
+                page = data["Accounts"]
+                accounts.extend(page)
+                if len(accounts) >= int(data.get("TotalCount", len(accounts))):
+                    break
+                if not page:
+                    raise ValueError("billing pagination incomplete; previous balance retained")
+                body["PageNumber"] += 1
+            packages = []
+            for a in accounts:
+                cyclic = capacity_value(a, "CycleCapacitySize") > 0
+                prefix = "CycleCapacity" if cyclic else "Capacity"
+                size = capacity_value(a, prefix + "Size")
+                remain = capacity_value(a, prefix + "Remain")
+                used = max(0, size - remain, capacity_value(a, prefix + "Used"))
+                remain = max(0, size - used)
+                ends = [billing_epoch(a.get("DeductionEndTime")),
+                        billing_epoch(a.get("CycleEndTime")) if cyclic else 0]
+                packages.append({"name": a.get("PackageName") or "Package",
+                                 "remain": remain, "used": used, "size": size,
+                                 "starts_at": billing_epoch(a.get("DeductionStartTime")),
+                                 "expires_at": min((v for v in ends if v > 0), default=0)})
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-        data = res.get("data", {}).get("Response", {}).get("Data", {})
-        accounts = data.get("Accounts") or []
-        tot_remain, tot_used, tot_size = 0, 0, 0
-        packages = []
-        for a in accounts:
-            pkg_name = a.get("PackageName") or "Package"
-            if a.get("CycleCapacitySize", 0) > 0:
-                remain = a.get("CycleCapacityRemain", 0)
-                size = a.get("CycleCapacitySize", 0)
-                used = max(0, size - remain)
-                if a.get("CycleCapacityUsed", 0) > used:
-                    used = a["CycleCapacityUsed"]
-                    remain = max(0, size - used)
-            else:
-                remain = a.get("CapacityRemain", 0)
-                used = a.get("CapacityUsed", 0)
-                size = a.get("CapacitySize", 0)
-            tot_remain += remain
-            tot_used += used
-            tot_size += size
-            packages.append({"name": pkg_name, "remain": remain, "used": used, "size": size})
         self.credits = {
-            "remain": tot_remain,
-            "used": tot_used,
-            "size": tot_size,
+            "remain": sum(p["remain"] for p in packages),
+            "used": sum(p["used"] for p in packages),
+            "size": sum(p["size"] for p in packages),
             "packages": packages,
             "updated_at": time.time(),
             "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        # Only a successful billing snapshot can reopen an exhausted account.
+        self.credits_exhausted = self.credits["remain"] <= 0
+        if not self.credits_exhausted and self.last_error == "HTTP 429 / 14018: credits exhausted":
+            self._set_last_error("")
         if self.path and os.path.exists(os.path.dirname(self.path)):
             self.save(os.path.dirname(self.path))
         return {"ok": True, "credits": self.credits}
@@ -1163,8 +1236,39 @@ class AccountPool(object):
             snapshot = [a for a in self.accounts if not realm or a.realm == realm]
         return sum(1 for a in snapshot if a.enabled and a.access_token and a.ready(model=model))
 
+    def refresh_credits(self, realm=None):
+        from concurrent.futures import ThreadPoolExecutor
+        with self._lock:
+            snapshot = [a for a in self.accounts if a.enabled and a.access_token
+                        and (not realm or a.realm == realm)]
+        if snapshot:
+            with ThreadPoolExecutor(max_workers=min(4, len(snapshot))) as executor:
+                for account, result in zip(snapshot, executor.map(
+                        lambda a: a.fetch_credits(max_age=300), snapshot)):
+                    if not result.get("ok"):
+                        self.log("account %s billing refresh failed: %s" % (
+                            account.uid[:8], result.get("error", "unknown error")))
+
+    def _priority_account(self, realm=None, exclude=None, model=None):
+        with self._lock:
+            snapshot = list(self.accounts)
+        candidates = []
+        for account in snapshot:
+            if ((realm and account.realm != realm) or account.uid in (exclude or ())
+                    or not account.ready(model=model)):
+                continue
+            priority = account.credit_priority()
+            if priority:
+                candidates.append((priority["day"], priority["remain"], account.uid, account))
+        return min(candidates, key=lambda item: item[:3])[-1] if candidates else None
+
     def pick_for_session(self, realm=None, session_key=None, exclude=None, model=None):
         exclude = exclude or set()
+        priority = self._priority_account(realm=realm, exclude=exclude, model=model)
+        if priority:
+            if session_key:
+                self.affinity.bind(session_key, priority.uid)
+            return priority
         if session_key:
             bound_uid = self.affinity.get(session_key)
             if bound_uid and bound_uid not in exclude:
@@ -1179,6 +1283,9 @@ class AccountPool(object):
 
     def pick(self, realm=None, exclude=None, model=None):
         exclude = exclude or set()
+        priority = self._priority_account(realm=realm, exclude=exclude, model=model)
+        if priority:
+            return priority
         with self._lock:
             snapshot = [a for a in self.accounts if not realm or a.realm == realm]
             start = self._cursor
@@ -1292,8 +1399,11 @@ class AccountPool(object):
     def import_desktop_credential(self, path=None, realm=None, source="desktop-app"):
         if not path:
             found = []
-            candidates = desktop_credential_candidates()
-            for p, r in candidates:
+            candidates = scan_desktop_credentials()
+            for item in candidates:
+                if not item["valid"]:
+                    continue
+                p, r = item["path"], item["realm"]
                 if realm and r != realm: continue
                 try:
                     acc = self.import_desktop_credential(path=p, realm=r, source=source)
@@ -1304,8 +1414,7 @@ class AccountPool(object):
             blob = json.load(fh)
         auth = blob.get("auth") or {}
         profile = blob.get("account") or {}
-        token = str(auth.get("accessToken") or "")
-        if not token: raise RuntimeError("no accessToken in %s" % path)
+        token = desktop_access_token(auth)
         detected_realm = realm or detect_realm_from_token(token, auth.get("domain"))
         cfg = get_realm_config(detected_realm)
         account = Account({
@@ -1361,10 +1470,28 @@ def desktop_credential_candidates():
         if not os.path.isdir(base): continue
         for name, realm in (("workbuddy-desktop-ai.info", "intl"),
                             ("workbuddy-desktop.info", "cn")):
-            path = os.path.join(base, name)
-            if os.path.isfile(path) and (path, realm) not in out:
-                out.append((path, realm))
+            backups = sorted((n for n in os.listdir(base)
+                              if re.match(re.escape(name[:-5]) + r"\.\d{4}-\d{2}-\d{2}T.*\.info$", n)),
+                             reverse=True)
+            for candidate in [name] + backups:
+                path = os.path.join(base, candidate)
+                if os.path.isfile(path) and (path, realm) not in out:
+                    out.append((path, realm))
     return out
+
+
+def desktop_access_token(auth):
+    token = auth.get("accessToken")
+    if isinstance(token, str):
+        token = token.strip()
+    if not token:
+        raise RuntimeError("凭证文件没有 accessToken")
+    if not isinstance(token, str) or "$wbEncrypted" in token:
+        raise RuntimeError("桌面凭证已加密，请使用“添加账号 (OAuth)”登录此账号")
+    refresh = auth.get("refreshToken")
+    if refresh and (not isinstance(refresh, str) or "$wbEncrypted" in refresh):
+        raise RuntimeError("桌面凭证已加密，请使用“添加账号 (OAuth)”登录此账号")
+    return token
 
 
 def scan_desktop_credentials():
@@ -1375,11 +1502,13 @@ def scan_desktop_credentials():
     silently adopts the desktop client's login.
     """
     found = []
+    seen = set()
     for path, realm in desktop_credential_candidates():
         cfg = get_realm_config(realm)
         item = {
             "path": path,
             "file": os.path.basename(path),
+            "backup": os.path.basename(path) not in ("workbuddy-desktop.info", "workbuddy-desktop-ai.info"),
             "realm": realm,
             "realmName": cfg["name"],
             "domain": cfg["domain"],
@@ -1395,17 +1524,25 @@ def scan_desktop_credentials():
                 blob = json.load(fh)
             auth = blob.get("auth") or {}
             profile = blob.get("account") or {}
-            token = str(auth.get("accessToken") or "")
             item["readable"] = True
-            if not token:
-                item["error"] = "no accessToken inside the file"
-                found.append(item)
-                continue
+            nickname = profile.get("nickname")
+            item.update({
+                "uid": str(profile.get("uid") or ""),
+                "nickname": nickname.strip() if isinstance(nickname, str) and "$wbEncrypted" not in nickname else "",
+                "domain": auth.get("domain") or cfg["domain"],
+            })
+            token = desktop_access_token(auth)
             exp = normalize_epoch(auth.get("expiresAt")) or jwt_exp(token) or 0
+            if item["backup"] and (not exp or exp <= time.time()):
+                continue
+            uid = item["uid"] or jwt_uid(token)
+            if (realm, uid) in seen:
+                continue
+            seen.add((realm, uid))
             item.update({
                 "valid": True,
-                "uid": profile.get("uid") or jwt_uid(token),
-                "nickname": profile.get("nickname") or "",
+                "uid": uid,
+                "nickname": item["nickname"],
                 "domain": auth.get("domain") or cfg["domain"],
                 "expiresAt": exp,
                 "expiresIn": _human_delta(exp - time.time()) if exp else None,
@@ -1534,9 +1671,11 @@ def normalise_import_row(row, realm=None):
                 return layer.get(key)
         return default
 
-    token = str(pick("accessToken") or "").strip()
-    if not token:
-        raise ValueError("no accessToken")
+    try:
+        token = desktop_access_token({"accessToken": pick("accessToken"),
+                                      "refreshToken": pick("refreshToken")})
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from exc
     if token.count(".") != 2:
         raise ValueError("accessToken is not a JWT")
 

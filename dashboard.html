@@ -483,10 +483,7 @@ a:hover{text-decoration:underline}
     <button class="sec" id="btnCheckin" onclick="doCheckin(this)" style="display:none">每日签到 (国内版)</button>
       <button class="sec" id="btnDailyChat" onclick="doDailyChat(this)" style="display:none">每日活跃打卡 (国际版)</button>
       <button class="sec" id="btnDailyChatWeb" onclick="doDailyChatWeb(this)" style="display:none">网页通道打卡 (国际版)</button>
-    <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
-         信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
-         打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
-    <!-- <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button> -->
+    <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button>
     <button class="sec" onclick="exportAccounts(this)">导出账号</button>
     <button class="sec" onclick="openImport()">导入账号</button>
     <button class="sec" onclick="fetchCredits(this)">刷新积分</button>
@@ -976,7 +973,7 @@ a:hover{text-decoration:underline}
     </div>
     <div class="modal-bd">
       <p class="hint" style="margin-top:0">
-        下面是本机桌面客户端里已登录的账号（只读检测，点击「导入」才会加入网关）。
+        检测当前登录凭证和仍在有效期内的历史登录备份（只读检测，点击「导入」才会加入网关）。
         国际版账号归入国际版列表，国内版账号归入国内版列表。
       </p>
       <div id="desktopScanBody"><p class="hint">正在检测…</p></div>
@@ -1556,7 +1553,7 @@ async function doDailyChat(btn){
   try {
     const r = await postJSON("/accounts/daily-chat", {});
     const res = r.results || [];
-    if(!res.length) toast("未发现国际版账号", "warn");
+    if(!res.length) toast("未发现已启用的国际版账号，请先启用要打卡的账号", "warn");
     else {
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? "活跃打卡成功" : (x.error||x.msg))).join("；");
       toast("每日活跃: " + summary, res.some(x => x.ok) ? "ok" : "warn");
@@ -1574,7 +1571,7 @@ async function doDailyChatWeb(btn){
   try {
     const r = await postJSON("/accounts/daily-chat-web", {});
     const res = r.results || [];
-    if(!res.length) toast("未发现国际版账号", "warn");
+    if(!res.length) toast("未发现已启用的国际版账号，请先启用要打卡的账号", "warn");
     else {
       const summary = res.map(x => (x.nickname||x.uid.slice(0,6)) + ": " + (x.ok ? ("已建会话 " + (x.conversation||"")) : (x.error||"失败"))).join("；");
       toast("网页通道打卡: " + summary, res.some(x => x.ok) ? "ok" : "warn");
@@ -1742,6 +1739,7 @@ function accountRow(a){
   const nameAttr = esc(String(a.nickname || '').replace(/["'\\<>]/g, ''));
   const usage = USAGE_BY_ACCOUNT[a.uid] || {};
   const state = !a.enabled ? '<span class="badge off">已停用</span>'
+              : a.creditsExhausted ? '<span class="badge warn">积分耗尽</span>'
               : a.reserveBlocked ? '<span class="badge warn">保留积分</span>'
               : a.dailyLimitBlocked ? '<span class="badge warn" title="今日已用 ' + fmt(a.dailyTokensToday || 0) + ' / ' + fmt(a.dailyTokenLimit || 0) + ' token，暂停接单（本地 0 点恢复）">日限额</span>'
               : a.inCooldown ? '<span class="badge warn">冷却 ' + (a.cooldownFor||0) + 's</span>'
@@ -1751,7 +1749,10 @@ function accountRow(a){
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
     ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
   const cred = a.credits;
-  const credText = cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>';
+  const priority = a.creditPriority;
+  const credText = (cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>')
+    + (priority ? '<div class="hint" title="按资源包到期日期、同日待消耗积分从少到多调度">最早到期：'
+      + esc(fmtCoolAt(priority.expiresAt)) + '<br>该日剩余：' + fmt(priority.remain) + '</div>' : '');
   return '<tr>'
     + '<td style="text-align:center;white-space:nowrap" data-label="版本">' + realmBadge + '</td>'
     + '<td style="text-align:left" data-label="账号">'
@@ -1823,7 +1824,7 @@ function renderAccounts(){
     + '<th style="text-align:center;width:232px">操作</th>'
     + '</tr></thead><tbody>' + list.map(accountRow).join('') + '</tbody></table></div>'
     + '<div class="legend"><span>出站身分：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
-    + '<div class="legend"><span>多个账号按会话粘性 + 轮询使用；某个账号被上游拒绝时自动切到下一个</span></div>';
+    + '<div class="legend"><span>优先使用资源包到期日期最近、同日待消耗积分较少的账号；缺少到期信息时按会话粘性与轮询选择</span></div>';
 }
 
 async function loadAccounts(){
@@ -2209,7 +2210,7 @@ function renderDesktopScan(list){
           + ' data-realm="' + esc(d.realm) + '">导入</button>';
       html += '<tr>'
         + '<td><b>' + esc(d.nickname || (d.uid||'').slice(0,8)) + '</b>'
-        + '<div class="mono" style="font-size:11px;color:var(--dim)">' + esc((d.uid||'').slice(0,8)) + ' · ' + esc(d.file) + '</div></td>'
+        + '<div class="mono" style="font-size:11px;color:var(--dim)">' + esc((d.uid||'').slice(0,8)) + ' · ' + (d.backup ? '历史登录备份 · ' : '当前客户端登录 · ') + esc(d.file) + '</div></td>'
         + '<td class="mono" style="font-size:11px">' + esc(d.domain || '-') + '</td>'
         + '<td>' + esc(d.expiresIn || '未知') + '</td>'
         + '<td style="text-align:right">' + act + '</td>'
@@ -2219,20 +2220,22 @@ function renderDesktopScan(list){
     return html;
   };
 
-  let html = section('国际版 (Global) · www.workbuddy.ai',
-                     valid.filter(d => d.realm !== 'cn'), '');
-  html += section('国内版 (China) · copilot.tencent.com',
-                  valid.filter(d => d.realm === 'cn'), '');
-
+  let html = '';
   if(bad.length){
-    html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">无法读取的凭证</div>';
+    html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">检测到但无法直接导入的账号</div>';
     html += '<table><tbody>';
     bad.forEach(d => {
-      html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
+      html += '<tr><td class="mono" style="font-size:11px"><b>' + esc(d.nickname || (d.uid||'').slice(0,8) || d.file) + '</b>'
+        + '<div>' + (d.backup ? '历史登录备份 · ' : '当前客户端登录 · ') + esc(d.file) + '</div>'
+        + (already.has(d.uid) ? '<div>已在网关中，无需重复导入</div>' : '') + '</td>'
         + '<td style="color:var(--warn);font-size:12px;text-align:right">' + esc(d.error || '未知原因') + '</td></tr>';
     });
     html += '</tbody></table>';
   }
+  html += section('国际版 (Global) · www.workbuddy.ai',
+                  valid.filter(d => d.realm !== 'cn'), '');
+  html += section('国内版 (China) · copilot.tencent.com',
+                  valid.filter(d => d.realm === 'cn'), '');
   body.innerHTML = html;
   // Wire the import buttons through event delegation (see renderDesktopScan).
   body.querySelectorAll('.btn-import-desktop').forEach(btn => {
