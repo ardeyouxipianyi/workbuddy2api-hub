@@ -1,15 +1,10 @@
-/* Every inline event handler in the dashboard must have a function behind it.
+/* The dashboard must stay free of inline event handlers.
  *
- * A handler name that no longer exists fails only in the browser, only when
- * that exact control is used, and only as a console error - no server-side
- * test can see it. The empty state's "登录新账号 (OAuth)" button shipped that
- * way for a month (issue #66): it still called startLogin(), which had been
- * replaced by openLoginModal() back in v1.1.0, so the first button a fresh
- * deployment puts in front of a new user did nothing at all.
- *
- * The sweep is textual on purpose: it reads the shipped dashboard.html, so it
- * covers every handler at once instead of the one that happened to be
- * reported, and it keeps working when the page is refactored.
+ * M4 D3 stage 2 moved every on* attribute to a data-action / data-on pair
+ * dispatched by the page's own delegated listener, so the CSP can drop
+ * 'unsafe-inline'. A control whose registry entry is missing fails only in
+ * the browser, only when that exact control is used - this sweep reads the
+ * shipped dashboard.html and checks the whole wiring statically.
  *
  * Run with Node: node tests/_test_dashboard_handlers.js
  */
@@ -19,45 +14,61 @@ const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
 
-// Inline attributes, e.g. onclick="setAnalyticsRange('today')".
-const HANDLER_ATTR = /\son(?:click|change|input|submit|keydown|keyup|blur|focus)\s*=\s*"([^"]*)"/g;
-// A plain call: `foo(` counts, `this.foo(` is a method and does not.
-const CALL = /(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
-// Keywords and browser builtins, which are not page functions.
-const NOT_PAGE_FUNCTIONS = new Set([
-  'if', 'for', 'while', 'switch', 'return', 'typeof', 'new', 'function',
-  'alert', 'confirm', 'prompt', 'setTimeout', 'setInterval', 'clearTimeout',
-  'parseInt', 'parseFloat', 'Number', 'String', 'Boolean', 'Date', 'Math',
-  'JSON', 'encodeURIComponent', 'decodeURIComponent',
-]);
+// 1. No inline event handlers may remain - the strict CSP depends on it.
+const inline = [...html.matchAll(
+  /\son(?:click|change|input|submit|keydown|keyup|blur|focus|scroll)\s*=\s*"/g)];
+assert.strictEqual(inline.length, 0,
+  `inline handlers must be gone, found ${inline.length}`);
 
-const referenced = new Set();
-for (const [, body] of html.matchAll(HANDLER_ATTR)) {
-  for (const [, name] of body.matchAll(CALL)) {
-    if (!NOT_PAGE_FUNCTIONS.has(name)) referenced.add(name);
-  }
+// 2. Every data-action must have an ACTION_HANDLERS entry.
+const actions = new Set();
+for (const [, name] of html.matchAll(/data-action="([A-Za-z_$][\w$]*)"/g)) actions.add(name);
+assert.ok(actions.size >= 70,
+  `only ${actions.size} data-action values found; the extraction broke, not the page`);
+
+const registryMatch = html.match(/const ACTION_HANDLERS = \{([\s\S]*?)\n\};/);
+assert.ok(registryMatch, 'ACTION_HANDLERS registry not found');
+const registry = new Map();
+for (const [, name, value] of
+     registryMatch[1].matchAll(/^\s*([A-Za-z_$][\w$]*):\s*(.*?),?\s*$/gm)) {
+  registry.set(name, value);
 }
+const missing = [...actions].filter(name => !registry.has(name)).sort();
+assert.deepStrictEqual(missing, [],
+  `data-action values with no handler: ${missing.join(', ')}`);
 
+// 3. Every registry body must call a function the page defines.
 const defined = new Set();
 for (const [, name] of html.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)) defined.add(name);
-for (const [, name] of html.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/g)) {
+for (const [, name] of html.matchAll(
+     /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/g)) {
   defined.add(name);
 }
+const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'return', 'typeof', 'new',
+                          'Number', 'String', 'Boolean', 'Math', 'JSON']);
+const unresolved = [];
+for (const [name, body] of registry) {
+  for (const [, called] of body.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+    if (!KEYWORDS.has(called) && !defined.has(called)) {
+      unresolved.push(`${name} -> ${called}`);
+    }
+  }
+}
+assert.deepStrictEqual(unresolved, [],
+  `registry calls functions the page never defines: ${unresolved.join(', ')}`);
 
-const missing = [...referenced].filter(name => !defined.has(name)).sort();
+// 4. Every data-on value must be one the dispatcher listens for.
+const ON_EVENTS = new Set(['click', 'change', 'input', 'keydown', 'scroll']);
+const badOn = [...html.matchAll(/data-on="([a-z]+)"/g)]
+  .map(m => m[1]).filter(value => !ON_EVENTS.has(value));
+assert.deepStrictEqual(badOn, [], `unknown data-on events: ${badOn.join(', ')}`);
+for (const type of ON_EVENTS) {
+  assert.ok(html.includes(`'${type}'`), `dispatcher must listen for ${type}`);
+}
 
-// A regex that stopped matching would let this test pass silently, so insist
-// it is still looking at a real page.
-assert.ok(referenced.size >= 30,
-  `the sweep found only ${referenced.size} handlers; the extraction broke, not the page`);
+// 5. The reported regression case, pinned directly (issue #66).
+assert.ok(/data-action="openLoginModal"/.test(html),
+  'the empty-state login button must dispatch openLoginModal');
+assert.ok(!/onclick=/.test(html), 'nothing may keep an onclick attribute');
 
-assert.deepStrictEqual(missing, [],
-  `inline handlers with no function behind them: ${missing.join(', ')}`);
-
-// The reported case, pinned directly so a rename cannot quietly reintroduce it.
-assert.ok(/onclick="openLoginModal\(\)"/.test(html),
-  'the empty-state login button must call openLoginModal()');
-assert.ok(!/onclick="startLogin\(\)"/.test(html),
-  'nothing may call the removed startLogin()');
-
-console.log(`dashboard handler assertions passed (${referenced.size} handlers checked)`);
+console.log(`dashboard handler assertions passed (${actions.size} actions, ${registry.size} handlers)`);

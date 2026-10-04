@@ -127,7 +127,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 51 个套件：45 个 Python + 6 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 52 个套件：45 个 Python + 7 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。推送 `v*` tag 时额外断言 **tag == 源码版本**（`wb_proxy.py` 里的两处版本串必须先一致，`-ci` 演练 tag 豁免）。
 
@@ -247,7 +247,7 @@ export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **账号池治理（M1）**：加权选号 + 成本分层 + 条件探索、软冷却指数退避、熔断、连败降权、单号在途租约、402 硬冷却至次日 04:00、session-dead ×3 才禁用、`credit_floor`、Upstash 粘性镜像（可选、默认关）。
 - **可靠性与会话（M2）**：SSE 首字节/流中空闲超时、`X-Device-Token` 文件兜底、工具调用配对与残参修复、每轮会话头族与 `gateway_hint`、`prompt.mode`（passthrough/custom/append）、Web 控制台昵称同步、国际版激活/地区完善/trial。
 - **任务农场（M3）**：任务中心扫描 + 并发执行队列、桌面事件链补全、连登管家（补签/礼包/兑换/抽奖）、每日 01:00 成长队列、mp 小程序任务。
-- **观测与安全（M4）**：请求归档与指标（TTFB p50/p95）、日志分频道环形缓冲、Token 时序与积分历史、安全响应头 + 保守 CSP、cockpit tools 导入兼容。
+- **观测与安全（M4）**：请求归档与指标（TTFB p50/p95）、日志分频道环形缓冲、Token 时序与积分历史、安全响应头 + **nonce CSP（零内联事件处理器）**、cockpit tools 导入兼容。
 - **模型目录与治理（M5）**：context/output 四级查找（上游 → 知识表 → `model.json` 缓存 → models.dev 异步）、真实输出上限探测（`scripts/probe_max_tokens.py` + 看板「钳制 N×」标注）、缓存 token 别名归一。
 - **工程（M6）**：Release 附 `checksums.txt`、CI `tag == 源码版本` 断言、Docker `HEALTHCHECK` 与 PUID/PGID 指引。
 

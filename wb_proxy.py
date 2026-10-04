@@ -28,6 +28,7 @@ MAX_PAYLOAD_BYTES = int(os.environ.get("WB_MAX_PAYLOAD_BYTES", 50 * 1024 * 1024)
 # forever.
 MAX_CONCURRENT_CHAT = int(os.environ.get("WB_MAX_CONCURRENT_CHAT", 32))
 CHAT_SLOT_WAIT_SECONDS = float(os.environ.get("WB_CHAT_SLOT_WAIT", 30))
+import secrets
 import socket
 import sys
 import threading
@@ -6490,15 +6491,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"id": wanted, "key": entry.get("key") or ""})
         return self._error(404, "no such key", "invalid_request_error")
 
-    def _send_security_headers(self):
-        """Conservative hardening headers for the dashboard page (M4 D3).
+    def _send_security_headers(self, script_nonce=None, allow_inline_scripts=False):
+        """Hardening headers for the dashboard page (M4 D3).
 
-        The dashboard is a single-file page with inline scripts/handlers, so
-        the CSP keeps 'unsafe-inline' for scripts and styles while locking
-        everything else down (no objects, no framing, no base-uri override).
-        Splitting dashboard.js and dropping the inline handlers is tracked as
-        a separate, higher-risk milestone.
+        Stage 2 (2026-10-05): the page has no inline event handlers and the
+        two inline <script> blocks are served with a per-response nonce, so
+        script-src no longer needs 'unsafe-inline'. Inline style attributes
+        stay allowed (style-src keeps 'unsafe-inline', matching the panel);
+        they cannot execute script. If the markup ever stops matching the
+        nonce injection exactly, _dashboard passes allow_inline_scripts=True
+        rather than serving a page whose scripts the browser would refuse.
         """
+        script_src = "'self'"
+        if script_nonce:
+            script_src += " 'nonce-%s'" % script_nonce
+        elif allow_inline_scripts:
+            script_src += " 'unsafe-inline'"
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -6506,10 +6514,11 @@ class Handler(BaseHTTPRequestHandler):
                          "geolocation=(), camera=(), microphone=()")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "default-src 'self'; script-src %s; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
             "font-src 'self' data:; connect-src 'self'; object-src 'none'; "
-            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            % script_src)
 
     def _dashboard(self):
         try:
@@ -6517,11 +6526,23 @@ class Handler(BaseHTTPRequestHandler):
                 body = fh.read()
         except Exception as exc:
             return self._error(500, f"dashboard.html unavailable: {exc}")
+        # M4 D3 stage 2: stamp the two inline <script> blocks with a fresh
+        # nonce. The count check is deliberate - a markup change that adds or
+        # removes a plain <script> tag must not silently ship a page whose
+        # scripts the CSP would block.
+        nonce = secrets.token_urlsafe(16)
+        text = body.decode("utf-8", "replace")
+        inline_scripts = text.count("<script>")
+        if inline_scripts == 2:
+            body = text.replace(
+                "<script>", '<script nonce="%s">' % nonce).encode("utf-8")
+        else:
+            nonce = None
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self._send_security_headers()
+        self._send_security_headers(nonce, allow_inline_scripts=inline_scripts != 2)
         self.end_headers()
         self.wfile.write(body)
     def _read_chunked_body(self, max_bytes=MAX_PAYLOAD_BYTES):

@@ -361,16 +361,16 @@ a:hover{text-decoration:underline}
   <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
     <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关看板</h1>
     <nav class="main-nav">
-      <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')">
+      <button class="main-nav-btn active" id="btnNavGateway"  data-action="switchMainTab" data-on="click" data-arg="gateway">
         网关与运维
       </button>
-      <button class="main-nav-btn" id="btnNavAnalytics" onclick="switchMainTab('analytics')">
+      <button class="main-nav-btn" id="btnNavAnalytics"  data-action="switchMainTab" data-on="click" data-arg="analytics">
         数据指标看板
       </button>
-      <button class="main-nav-btn" id="btnNavLogs" onclick="switchMainTab('logs')">
+      <button class="main-nav-btn" id="btnNavLogs"  data-action="switchMainTab" data-on="click" data-arg="logs">
         运行日志
       </button>
-      <button class="main-nav-btn" id="btnNavSettings" onclick="switchMainTab('settings')">
+      <button class="main-nav-btn" id="btnNavSettings"  data-action="switchMainTab" data-on="click" data-arg="settings">
         设置
       </button>
     </nav>
@@ -390,11 +390,11 @@ a:hover{text-decoration:underline}
     <div style="font-size:16px;font-weight:700;margin-bottom:6px">WorkBuddy 网关看板</div>
     <div style="font-size:12px;color:var(--dim);margin-bottom:18px">请输入面板访问密码</div>
     <input id="panelPwdInput" type="password" placeholder="面板密码" autocomplete="current-password"
-           onkeydown="if(event.key==='Enter') submitPanelLogin()"
+            data-action="submitPanelLoginOnEnter" data-on="keydown"
            style="width:100%;background:var(--panel2);border:1px solid var(--line);
                   border-radius:8px;padding:9px 12px;color:var(--fg);font:inherit">
     <div id="panelLoginMsg" style="font-size:12px;color:var(--bad);min-height:17px;margin:8px 0 12px"></div>
-    <button onclick="submitPanelLogin()" style="width:100%;padding:9px 12px;font-size:13px">进入面板</button>
+    <button  data-action="submitPanelLogin" data-on="click" style="width:100%;padding:9px 12px;font-size:13px">进入面板</button>
     <div id="panelDefaultHint" style="display:none;font-size:11px;color:var(--warn);margin-top:12px">
       当前仍在使用默认密码 <b>admin</b>，登录后请在「设置」中修改。
     </div>
@@ -406,7 +406,7 @@ a:hover{text-decoration:underline}
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px">
     
     <!-- 卡片 1: 国际版 (Global) -->
-    <div id="tabIntl" class="realm-card active" onclick="switchViewRealm('intl')">
+    <div id="tabIntl" class="realm-card active"  data-action="switchViewRealm" data-on="click" data-arg="intl">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="realm-badge-intl">国际版 (Global)</span>
@@ -425,7 +425,7 @@ a:hover{text-decoration:underline}
     </div>
 
     <!-- 卡片 2: 国内版 (China) -->
-    <div id="tabCn" class="realm-card" onclick="switchViewRealm('cn')">
+    <div id="tabCn" class="realm-card"  data-action="switchViewRealm" data-on="click" data-arg="cn">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="realm-badge-cn">国内版 (China)</span>
@@ -454,7 +454,7 @@ a:hover{text-decoration:underline}
         <span id="activeGatewayName" style="font-size:20px;font-weight:700;color:var(--accent);letter-spacing:-.4px">国际版 (Global)</span>
       </div>
       <div style="margin-top:auto">
-        <button class="toggle-realm-btn" id="btnToggleRealm" onclick="toggleActiveGatewayRealm()" style="cursor:pointer;width:100%;padding:7px 12px;font-size:12px">
+        <button class="toggle-realm-btn" id="btnToggleRealm"  data-action="toggleActiveGatewayRealm" data-on="click" style="cursor:pointer;width:100%;padding:7px 12px;font-size:12px">
           ⇄ 切换默认出口为【国内版】
         </button>
       </div>
@@ -469,8 +469,8 @@ a:hover{text-decoration:underline}
       <span style="color:var(--dim);font-size:11px" id="schedTimes"></span>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="sec mini" id="btnTriggerSched" onclick="triggerSchedulerNow(this)">立即巡检保活</button>
-      <button class="sec mini" id="btnToggleSched" onclick="toggleScheduler(this)">暂停调度</button>
+      <button class="sec mini" id="btnTriggerSched"  data-action="triggerSchedulerNow" data-on="click">立即巡检保活</button>
+      <button class="sec mini" id="btnToggleSched"  data-action="toggleScheduler" data-on="click">暂停调度</button>
     </div>
   </div>
 
@@ -479,20 +479,20 @@ a:hover{text-decoration:underline}
   <section>
     <h2>账号<em id="acctCount"></em></h2>
     <div class="toolbar">
-    <button onclick="openLoginModal()">+ 添加账号 (OAuth)</button>
-    <button class="sec" id="btnCheckin" onclick="doCheckin(this)" style="display:none">每日签到 (国内版)</button>
-      <button class="sec" id="btnDailyChat" onclick="doDailyChat(this)" style="display:none">每日活跃打卡 (国际版)</button>
-      <button class="sec" id="btnDailyChatWeb" onclick="doDailyChatWeb(this)" style="display:none">网页通道打卡 (国际版)</button>
+    <button  data-action="openLoginModal" data-on="click">+ 添加账号 (OAuth)</button>
+    <button class="sec" id="btnCheckin"  data-action="doCheckin" data-on="click" style="display:none">每日签到 (国内版)</button>
+      <button class="sec" id="btnDailyChat"  data-action="doDailyChat" data-on="click" style="display:none">每日活跃打卡 (国际版)</button>
+      <button class="sec" id="btnDailyChatWeb"  data-action="doDailyChatWeb" data-on="click" style="display:none">网页通道打卡 (国际版)</button>
     <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
          信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
          打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
-    <!-- <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端账号</button> -->
-    <button class="sec" onclick="exportAccounts(this)">导出账号</button>
-    <button class="sec" onclick="openImport()">导入账号</button>
-    <button class="sec" onclick="fetchCredits(this)">刷新积分</button>
-    <button class="sec" onclick="autoAssignSlots()" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">分配代理出口给未绑定账号</button>
-    <button class="sec" onclick="setAll(true, this)">全部启用</button>
-    <button class="sec" onclick="setAll(false, this)">全部停用</button>
+    <!-- <button class="sec" id="btnScanDesktop"  data-action="scanDesktop" data-on="click">扫描桌面客户端账号</button> -->
+    <button class="sec"  data-action="exportAccounts" data-on="click">导出账号</button>
+    <button class="sec"  data-action="openImport" data-on="click">导入账号</button>
+    <button class="sec"  data-action="fetchCredits" data-on="click">刷新积分</button>
+    <button class="sec"  data-action="autoAssignSlots" data-on="click" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">分配代理出口给未绑定账号</button>
+    <button class="sec"  data-action="setAll" data-on="click" data-arg="1">全部启用</button>
+    <button class="sec"  data-action="setAll" data-on="click" data-arg="0">全部停用</button>
     
   </div>
     <div id="accounts"></div>
@@ -507,10 +507,10 @@ a:hover{text-decoration:underline}
       <div style="display:inline-flex;align-items:center;gap:8px">
         <span style="font-size:12px;color:var(--dim)">显示条数:</span>
         <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
-          <button class="range-btn" id="btnRecentLimit10" onclick="setRecentLimit(10)">10</button>
-          <button class="range-btn" id="btnRecentLimit20" onclick="setRecentLimit(20)">20</button>
-          <button class="range-btn" id="btnRecentLimit50" onclick="setRecentLimit(50)">50</button>
-          <button class="range-btn" id="btnRecentLimit100" onclick="setRecentLimit(100)">100</button>
+          <button class="range-btn" id="btnRecentLimit10"  data-action="setRecentLimit" data-on="click" data-arg="10">10</button>
+          <button class="range-btn" id="btnRecentLimit20"  data-action="setRecentLimit" data-on="click" data-arg="20">20</button>
+          <button class="range-btn" id="btnRecentLimit50"  data-action="setRecentLimit" data-on="click" data-arg="50">50</button>
+          <button class="range-btn" id="btnRecentLimit100"  data-action="setRecentLimit" data-on="click" data-arg="100">100</button>
         </div>
       </div>
     </div>
@@ -518,9 +518,9 @@ a:hover{text-decoration:underline}
     <div id="recentPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex-wrap:wrap;gap:8px">
       <div id="recentPageInfo">第 1 / 1 页 · 共 0 条记录</div>
       <div style="display:inline-flex;gap:5px;align-items:center">
-        <button class="sec mini" id="btnRecentPrev" onclick="changeRecentPage(-1)">上一页</button>
+        <button class="sec mini" id="btnRecentPrev"  data-action="changeRecentPage" data-on="click" data-arg="-1">上一页</button>
         <div id="recentPageButtons" style="display:inline-flex;gap:3px;align-items:center"></div>
-        <button class="sec mini" id="btnRecentNext" onclick="changeRecentPage(1)">下一页</button>
+        <button class="sec mini" id="btnRecentNext"  data-action="changeRecentPage" data-on="click" data-arg="1">下一页</button>
       </div>
     </div>
   </section>
@@ -556,11 +556,11 @@ a:hover{text-decoration:underline}
         <div style="font-size:12px;color:var(--dim)">全自动批量接取、事件上报点亮并领取官方成长积分 (+1450分)，以及猫猫日常与打卡</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select id="growthAcctSelect" onchange="switchGrowthAccount(this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
+        <select id="growthAcctSelect"  data-action="switchGrowthAccount" data-on="change" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--fg);font-family:inherit">
           <option value="all">全部国内账号 (批量)</option>
         </select>
-        <button class="primary" id="btnRunTasks" onclick="runGrowthTasks(this)">一键做任务领积分</button>
-        <button id="btnCatTravel" onclick="triggerCatTravel(this)">猫猫旅行</button>
+        <button class="primary" id="btnRunTasks"  data-action="runGrowthTasks" data-on="click">一键做任务领积分</button>
+        <button id="btnCatTravel"  data-action="triggerCatTravel" data-on="click">猫猫旅行</button>
       </div>
     </div>
 
@@ -577,8 +577,8 @@ a:hover{text-decoration:underline}
           <span id="taskQueueSummary" style="color:var(--dim);margin-left:8px">未扫描</span>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="sec mini" onclick="scanTaskQueue(this)">扫描待办</button>
-          <button class="sec mini" onclick="runTaskQueue(this)">运行队列</button>
+          <button class="sec mini"  data-action="scanTaskQueue" data-on="click">扫描待办</button>
+          <button class="sec mini"  data-action="runTaskQueue" data-on="click">运行队列</button>
         </div>
       </div>
       <div id="taskQueueList" style="margin-top:8px;max-height:220px;overflow:auto;display:none"></div>
@@ -613,17 +613,17 @@ a:hover{text-decoration:underline}
         <div style="font-size:12px;color:var(--dim);margin-top:4px">全维度统计输入/输出/推理 Token、缓存节省效益与各账号各模型用量</div>
       </div>
       <div style="display:flex;gap:4px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
-        <button id="btnRangeToday" class="range-btn active" onclick="setAnalyticsRange('today')">今日数据 (Today)</button>
-        <button id="btnRangeWeek" class="range-btn" onclick="setAnalyticsRange('week')">本周 (This Week)</button>
-        <button id="btnRangeMonth" class="range-btn" onclick="setAnalyticsRange('month')">本月 (This Month)</button>
-        <button id="btnRangeAll" class="range-btn" onclick="setAnalyticsRange('all')">全部历史 (All Time)</button>
-        <button id="btnRangeCustom" class="range-btn" onclick="setAnalyticsRange('custom')">自定义 (Custom)</button>
+        <button id="btnRangeToday" class="range-btn active"  data-action="setAnalyticsRange" data-on="click" data-arg="today">今日数据 (Today)</button>
+        <button id="btnRangeWeek" class="range-btn"  data-action="setAnalyticsRange" data-on="click" data-arg="week">本周 (This Week)</button>
+        <button id="btnRangeMonth" class="range-btn"  data-action="setAnalyticsRange" data-on="click" data-arg="month">本月 (This Month)</button>
+        <button id="btnRangeAll" class="range-btn"  data-action="setAnalyticsRange" data-on="click" data-arg="all">全部历史 (All Time)</button>
+        <button id="btnRangeCustom" class="range-btn"  data-action="setAnalyticsRange" data-on="click" data-arg="custom">自定义 (Custom)</button>
         <span id="rangeCustomBox" style="display:none;align-items:center;gap:6px;font-size:12px;color:var(--dim)">
           <input type="datetime-local" id="rangeCustomSince" class="slot-select" style="padding:4px 6px"
-                 onchange="onRangeCustomChange()">
+                  data-action="onRangeCustomChange" data-on="change">
           <span>~</span>
           <input type="datetime-local" id="rangeCustomUntil" class="slot-select" style="padding:4px 6px"
-                 onchange="onRangeCustomChange()">
+                  data-action="onRangeCustomChange" data-on="change">
           <span style="font-size:11px">留空表示不限</span>
         </span>
       </div>
@@ -678,7 +678,7 @@ a:hover{text-decoration:underline}
           <h2 style="margin:0;font-size:16px;color:var(--fg)">积分扣减历史</h2>
           <div style="font-size:12px;color:var(--dim)">最近消耗积分的请求（credit &gt; 0），来自请求归档。</div>
         </div>
-        <button class="sec mini" onclick="loadCreditHistory(this)">刷新</button>
+        <button class="sec mini"  data-action="loadCreditHistory" data-on="click">刷新</button>
       </div>
       <div style="overflow-x:auto;max-height:260px">
         <table class="data-cards" id="creditHistoryTable">
@@ -720,14 +720,14 @@ a:hover{text-decoration:underline}
         <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
           账号
           <select id="matrixAcctFilter" class="slot-select" style="min-width:150px"
-                  onchange="matrixAcctFilter = this.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf);">
+                   data-action="onMatrixAcctFilterChange" data-on="change">
             <option value="">全部账号</option>
           </select>
         </label>
         <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
           模型
           <select id="matrixModelFilter" class="slot-select" style="min-width:170px"
-                  onchange="matrixModelFilter = this.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf);">
+                   data-action="onMatrixModelFilterChange" data-on="change">
             <option value="">全部模型</option>
           </select>
         </label>
@@ -764,7 +764,7 @@ a:hover{text-decoration:underline}
           <input id="setPwdNew" type="password" placeholder="至少 4 位"
                  style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
         </div>
-        <button onclick="savePanelPassword(this)">修改密码</button>
+        <button  data-action="savePanelPassword" data-on="click">修改密码</button>
       </div>
     </section>
 
@@ -776,7 +776,7 @@ a:hover{text-decoration:underline}
             为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。
           </div>
         </div>
-        <button onclick="addApiKeyRow()">+ 添加 API Key</button>
+        <button  data-action="addApiKeyRow" data-on="click">+ 添加 API Key</button>
       </div>
       <div id="keyList"></div>
     </section>
@@ -790,9 +790,9 @@ a:hover{text-decoration:underline}
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="sec" onclick="discoverProxySlots(this)">自动发现 mihomo 端口</button>
-          <button class="sec" onclick="addProxySlotRow()">+ 添加槽位</button>
-          <button onclick="saveProxySlots(this)">保存槽位</button>
+          <button class="sec"  data-action="discoverProxySlots" data-on="click">自动发现 mihomo 端口</button>
+          <button class="sec"  data-action="addProxySlotRow" data-on="click">+ 添加槽位</button>
+          <button  data-action="saveProxySlots" data-on="click">保存槽位</button>
         </div>
       </div>
       <div id="slotList"></div>
@@ -813,7 +813,7 @@ a:hover{text-decoration:underline}
             <input id="setReserveCredits" type="number" min="0" step="1" value="0"
                    style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
           </div>
-            <button onclick="saveReserveCredits(this)">保存</button>
+            <button  data-action="saveReserveCredits" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -832,7 +832,7 @@ a:hover{text-decoration:underline}
               <input id="setDailyTokenLimit" type="number" min="0" step="1000000" value="0"
                      style="width:170px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
             </div>
-            <button onclick="saveDailyTokenLimit(this)">保存</button>
+            <button  data-action="saveDailyTokenLimit" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -853,7 +853,7 @@ a:hover{text-decoration:underline}
               <input id="setAutoSwitch" type="checkbox" style="width:16px;height:16px">
               启用自动切换
             </label>
-            <button onclick="saveAutoSwitchProduct(this)">保存</button>
+            <button  data-action="saveAutoSwitchProduct" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -874,7 +874,7 @@ a:hover{text-decoration:underline}
               <input id="setDailyChatWeb" type="checkbox" style="width:16px;height:16px">
               走网页通道
             </label>
-            <button onclick="saveDailyChatWeb(this)">保存</button>
+            <button  data-action="saveDailyChatWeb" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -895,7 +895,7 @@ a:hover{text-decoration:underline}
               <input id="setLocalWebTools" type="checkbox" style="width:16px;height:16px">
               由网关代跑
             </label>
-            <button onclick="saveLocalWebTools(this)">保存</button>
+            <button  data-action="saveLocalWebTools" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -911,8 +911,8 @@ a:hover{text-decoration:underline}
         </tbody>
       </table>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="sec" onclick="loadSettings(true)">刷新</button>
-        <button class="sec" onclick="panelLogout()">退出面板登录</button>
+        <button class="sec"  data-action="loadSettings" data-on="click" data-arg="1">刷新</button>
+        <button class="sec"  data-action="panelLogout" data-on="click">退出面板登录</button>
       </div>
     </section>
   </div>
@@ -925,36 +925,36 @@ a:hover{text-decoration:underline}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span id="logStatsBadge" style="font-size:12px;color:var(--dim);margin-right:6px">加载中...</span>
-        <button class="sec mini" onclick="fetchNewLogs(true)" title="立即拉取最新日志">刷新</button>
-        <button class="sec mini" id="btnToggleLogAuto" onclick="toggleLogAuto()" style="color:var(--accent2);font-weight:600">实时监听中</button>
-        <button class="sec mini" id="btnToggleLogScroll" onclick="toggleLogScroll()">自动滚屏: 开</button>
-        <button class="sec mini" onclick="copyFilteredLogs()" title="复制当前视图显示的日志">复制</button>
-        <button class="sec mini" onclick="exportLogsFile()" title="下载为 .log 文件">导出</button>
-        <button class="danger mini" onclick="clearServerLogs()" title="清空所有日志">清空</button>
+        <button class="sec mini"  data-action="fetchNewLogs" data-on="click" data-arg="1" title="立即拉取最新日志">刷新</button>
+        <button class="sec mini" id="btnToggleLogAuto"  data-action="toggleLogAuto" data-on="click" style="color:var(--accent2);font-weight:600">实时监听中</button>
+        <button class="sec mini" id="btnToggleLogScroll"  data-action="toggleLogScroll" data-on="click">自动滚屏: 开</button>
+        <button class="sec mini"  data-action="copyFilteredLogs" data-on="click" title="复制当前视图显示的日志">复制</button>
+        <button class="sec mini"  data-action="exportLogsFile" data-on="click" title="下载为 .log 文件">导出</button>
+        <button class="danger mini"  data-action="clearServerLogs" data-on="click" title="清空所有日志">清空</button>
       </div>
     </div>
 
     <!-- 筛选控制工具栏 -->
     <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;box-shadow:var(--shadow)">
       <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
-        <button class="range-btn active" id="btnLogLvlAll" onclick="setLogFilterLevel('')">全部级别</button>
-        <button class="range-btn" id="btnLogLvlInfo" onclick="setLogFilterLevel('INFO')">INFO</button>
-        <button class="range-btn" id="btnLogLvlWarn" onclick="setLogFilterLevel('WARN')">WARN</button>
-        <button class="range-btn" id="btnLogLvlError" onclick="setLogFilterLevel('ERROR')">ERROR</button>
+        <button class="range-btn active" id="btnLogLvlAll"  data-action="setLogFilterLevel" data-on="click" data-arg="">全部级别</button>
+        <button class="range-btn" id="btnLogLvlInfo"  data-action="setLogFilterLevel" data-on="click" data-arg="INFO">INFO</button>
+        <button class="range-btn" id="btnLogLvlWarn"  data-action="setLogFilterLevel" data-on="click" data-arg="WARN">WARN</button>
+        <button class="range-btn" id="btnLogLvlError"  data-action="setLogFilterLevel" data-on="click" data-arg="ERROR">ERROR</button>
       </div>
 
       <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
-        <button class="range-btn active" id="btnLogTagAll" onclick="setLogFilterTag('')">全部模块</button>
-        <button class="range-btn" id="btnLogTagChat" onclick="setLogFilterTag('chat')">对话</button>
-        <button class="range-btn" id="btnLogTagTasks" onclick="setLogFilterTag('tasks')">任务福利</button>
-        <button class="range-btn" id="btnLogTagSched" onclick="setLogFilterTag('scheduler')">调度器</button>
-        <button class="range-btn" id="btnLogTagAcct" onclick="setLogFilterTag('accounts')">账号</button>
-        <button class="range-btn" id="btnLogTagSys" onclick="setLogFilterTag('system')">系统</button>
+        <button class="range-btn active" id="btnLogTagAll"  data-action="setLogFilterTag" data-on="click" data-arg="">全部模块</button>
+        <button class="range-btn" id="btnLogTagChat"  data-action="setLogFilterTag" data-on="click" data-arg="chat">对话</button>
+        <button class="range-btn" id="btnLogTagTasks"  data-action="setLogFilterTag" data-on="click" data-arg="tasks">任务福利</button>
+        <button class="range-btn" id="btnLogTagSched"  data-action="setLogFilterTag" data-on="click" data-arg="scheduler">调度器</button>
+        <button class="range-btn" id="btnLogTagAcct"  data-action="setLogFilterTag" data-on="click" data-arg="accounts">账号</button>
+        <button class="range-btn" id="btnLogTagSys"  data-action="setLogFilterTag" data-on="click" data-arg="system">系统</button>
       </div>
 
       <div style="flex:1;min-width:180px;position:relative">
         <input id="logSearchInput" type="text" placeholder="过滤关键字 (如 deepseek, 11128, 401, error)..."
-               oninput="onLogSearchInput()"
+                data-action="onLogSearchInput" data-on="input"
                style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;color:var(--fg);outline:none">
       </div>
     </div>
@@ -970,7 +970,7 @@ a:hover{text-decoration:underline}
         </div>
         <div id="logTerminalStatus" style="font-size:11px;color:#64748b;font-family:monospace">就绪</div>
       </div>
-      <div id="logTerminalBody" style="height:620px;overflow-y:auto;padding:10px 12px;background:#090d16;color:#cbd5e1" onscroll="handleLogTerminalScroll()">
+      <div id="logTerminalBody" style="height:620px;overflow-y:auto;padding:10px 12px;background:#090d16;color:#cbd5e1"  data-action="handleLogTerminalScroll" data-on="scroll">
         <div class="log-empty">正在拉取网关日志...</div>
       </div>
     </div>
@@ -994,7 +994,7 @@ a:hover{text-decoration:underline}
             <option value="200" selected>200 条</option>
             <option value="500">500 条</option>
           </select>
-          <button class="sec" onclick="loadRequestArchive(this)">刷新归档</button>
+          <button class="sec"  data-action="loadRequestArchive" data-on="click">刷新归档</button>
         </div>
       </div>
       <div class="cards" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
@@ -1020,18 +1020,18 @@ a:hover{text-decoration:underline}
   <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-hd">
       <h2>添加 WorkBuddy 账号 (OAuth 授权)</h2>
-      <button class="modal-x" onclick="closeLogin()" aria-label="关闭">×</button>
+      <button class="modal-x"  data-action="closeLogin" data-on="click" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
       <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px">
         <div style="font-size:12px;color:var(--dim);margin-bottom:8px;font-weight:600">选择要登录的版本：</div>
         <div style="display:flex;gap:18px;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
-            <input type="radio" name="loginRealm" value="cn" id="radioCn" onchange="switchLoginRealm(this.value)">
+            <input type="radio" name="loginRealm" value="cn" id="radioCn"  data-action="switchLoginRealm" data-on="change">
             <span><b>国内版</b> (copilot.tencent.com)</span>
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
-            <input type="radio" name="loginRealm" value="intl" id="radioIntl" onchange="switchLoginRealm(this.value)">
+            <input type="radio" name="loginRealm" value="intl" id="radioIntl"  data-action="switchLoginRealm" data-on="change">
             <span><b>国际版</b> (www.workbuddy.ai)</span>
           </label>
         </div>
@@ -1043,8 +1043,8 @@ a:hover{text-decoration:underline}
       <p class="hint" id="loginStatus" style="font-weight:500"></p>
     </div>
     <div class="modal-ft">
-      <button class="sec" onclick="closeLogin()">关闭</button>
-      <button onclick="restartLogin()">重新生成链接</button>
+      <button class="sec"  data-action="closeLogin" data-on="click">关闭</button>
+      <button  data-action="restartLogin" data-on="click">重新生成链接</button>
     </div>
   </div>
 </div>
@@ -1053,7 +1053,7 @@ a:hover{text-decoration:underline}
   <div class="modal" role="dialog" aria-modal="true" style="width:min(720px,100%)">
     <div class="modal-hd">
       <h2>本机桌面客户端账号</h2>
-      <button class="modal-x" onclick="closeDesktopScan()" aria-label="关闭">×</button>
+      <button class="modal-x"  data-action="closeDesktopScan" data-on="click" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
       <p class="hint" style="margin-top:0">
@@ -1063,8 +1063,8 @@ a:hover{text-decoration:underline}
       <div id="desktopScanBody"><p class="hint">正在检测…</p></div>
     </div>
     <div class="modal-ft">
-      <button class="sec" onclick="refreshDesktopScan(this)">重新扫描</button>
-      <button class="sec" onclick="closeDesktopScan()">关闭</button>
+      <button class="sec"  data-action="refreshDesktopScan" data-on="click">重新扫描</button>
+      <button class="sec"  data-action="closeDesktopScan" data-on="click">关闭</button>
     </div>
   </div>
 </div>
@@ -1073,7 +1073,7 @@ a:hover{text-decoration:underline}
   <div class="modal" role="dialog" aria-modal="true" style="width:min(720px,100%)">
     <div class="modal-hd">
       <h2>导入账号</h2>
-      <button class="modal-x" onclick="closeImport()" aria-label="关闭">×</button>
+      <button class="modal-x"  data-action="closeImport" data-on="click" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
       <p class="hint" style="margin-top:0">
@@ -1088,8 +1088,8 @@ a:hover{text-decoration:underline}
         覆盖同 UID 账号
       </label>
       <span style="flex:1"></span>
-      <button class="sec" onclick="closeImport()">取消</button>
-      <button id="btnImportCommit" class="primary" onclick="commitImport(this)" disabled>确认导入</button>
+      <button class="sec"  data-action="closeImport" data-on="click">取消</button>
+      <button id="btnImportCommit" class="primary"  data-action="commitImport" data-on="click" disabled>确认导入</button>
     </div>
   </div>
 </div>
@@ -1990,21 +1990,21 @@ function accountRow(a){
     + '<td class="acct-actions" style="text-align:center;white-space:nowrap;vertical-align:middle">'
     + '<div class="acct-actions-col">'
     +   '<div class="acct-actions-row">'
-    +     '<button class="sec mini" onclick="toggleAccount(&quot;' + uidAttr + '&quot;,' + (!a.enabled) + ', this)">' + (a.enabled ? '停用' : '启用') + '</button>'
-    +     '<button class="sec mini" onclick="testAccount(&quot;' + uidAttr + '&quot;, this)">测试</button>'
-    +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>'
-    +     '<button class="sec mini" onclick="syncProfile(&quot;' + uidAttr + '&quot;, this)" title="从 Web 控制台同步最新昵称（改名后免重登）">同步昵称</button>'
-    +     (a.realm === 'intl' ? ('<button class="sec mini" onclick="activateGlobal(&quot;' + uidAttr + '&quot;, this)" title="补注册地区并激活国际版账号（幂等）">激活</button>'
-    +       '<button class="sec mini" onclick="claimTrial(&quot;' + uidAttr + '&quot;, this)" title="领取一次性 trial 加油包（幂等）">Trial</button>') : '')
+    +     '<button class="sec mini"  data-action="toggleAccount" data-on="click" data-uid="' + uidAttr + '" data-arg="' + (!a.enabled ? '1' : '0') + '">' + (a.enabled ? '停用' : '启用') + '</button>'
+    +     '<button class="sec mini"  data-action="testAccount" data-on="click" data-uid="' + uidAttr + '">测试</button>'
+    +     '<button class="sec mini"  data-action="refreshOne" data-on="click" data-uid="' + uidAttr + '">刷新凭证</button>'
+    +     '<button class="sec mini"  data-action="syncProfile" data-on="click" data-uid="' + uidAttr + '" title="从 Web 控制台同步最新昵称（改名后免重登）">同步昵称</button>'
+    +     (a.realm === 'intl' ? ('<button class="sec mini"  data-action="activateGlobal" data-on="click" data-uid="' + uidAttr + '" title="补注册地区并激活国际版账号（幂等）">激活</button>'
+    +       '<button class="sec mini"  data-action="claimTrial" data-on="click" data-uid="' + uidAttr + '" title="领取一次性 trial 加油包（幂等）">Trial</button>') : '')
     +   '</div>'
     +   '<div class="acct-actions-row">'
     +     '<div class="id-btn-group" title="出站身分：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
-    +       '<button class="id-btn' + ((!a.product || a.product === 'workbuddy') ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;workbuddy&quot;, this)">WB</button>'
-    +       '<button class="id-btn' + (a.product === 'vscode' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;vscode&quot;, this)">VSC</button>'
-    +       '<button class="id-btn' + (a.product === 'cli' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;cli&quot;, this)">CLI</button>'
+    +       '<button class="id-btn' + ((!a.product || a.product === 'workbuddy') ? ' active' : '') + '"  data-action="setAccountProduct" data-on="click" data-uid="' + uidAttr + '" data-arg="workbuddy">WB</button>'
+    +       '<button class="id-btn' + (a.product === 'vscode' ? ' active' : '') + '"  data-action="setAccountProduct" data-on="click" data-uid="' + uidAttr + '" data-arg="vscode">VSC</button>'
+    +       '<button class="id-btn' + (a.product === 'cli' ? ' active' : '') + '"  data-action="setAccountProduct" data-on="click" data-uid="' + uidAttr + '" data-arg="cli">CLI</button>'
     +     '</div>'
-    +     '<button class="sec mini" onclick="exportOne(&quot;' + uidAttr + '&quot;)">导出</button>'
-    +     '<button class="danger mini" onclick="deleteAccount(&quot;' + uidAttr + '&quot;,&quot;' + nameAttr + '&quot;, this)">删除</button>'
+    +     '<button class="sec mini"  data-action="exportOne" data-on="click" data-uid="' + uidAttr + '">导出</button>'
+    +     '<button class="danger mini"  data-action="deleteAccount" data-on="click" data-uid="' + uidAttr + '" data-name="' + nameAttr + '">删除</button>'
     +   '</div>'
     + '</div>'
     + '</td></tr>';
@@ -2030,7 +2030,7 @@ function renderAccounts(){
       + '<div style="color:var(--dim);font-size:13px;margin-bottom:18px">'
       +   '请先登录或导入一个 ' + viewName + ' 账号，之后相关请求都会走该账号'
       + '</div>'
-      + '<button onclick="openLoginModal()" style="font-size:14px;padding:10px 22px">'
+      + '<button  data-action="openLoginModal" data-on="click" style="font-size:14px;padding:10px 22px">'
       +   '登录新账号 (OAuth)'
       + '</button>'
       + '</div>';
@@ -2623,7 +2623,7 @@ async function refreshInner(){
         return '<span style="color:var(--dim);padding:0 3px">…</span>';
       }
       const active = (p === RECENT_PAGE);
-      return '<button class="range-btn' + (active ? ' active' : '') + '" style="min-width:26px;padding:3px 6px;font-size:11px" onclick="gotoRecentPage(' + p + ')">' + p + '</button>';
+      return '<button class="range-btn' + (active ? ' active' : '') + '" style="min-width:26px;padding:3px 6px;font-size:11px"  data-action="gotoRecentPage" data-on="click" data-arg="' + p + '">' + p + '</button>';
     }).join('');
   }
 
@@ -3126,13 +3126,13 @@ function renderKeyRows(){
         +     '<div style="display:flex;gap:8px">'
         +       '<input type="text" id="editKeyValue_' + i + '" value="' + esc(row.key || '') + '" placeholder="' + (row.masked ? '留空表示保持原 Key 不变' : '输入自定义密钥，或点击右侧生成') + '" '
         +         'style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;color:var(--fg)">'
-        +       '<button class="sec mini" style="white-space:nowrap;border-radius:8px;padding:7px 14px" onclick="generateKeyForEdit(' + i + ')">随机生成</button>'
+        +       '<button class="sec mini" style="white-space:nowrap;border-radius:8px;padding:7px 14px"  data-action="generateKeyForEdit" data-on="click" data-arg="' + i + '">随机生成</button>'
         +     '</div>'
         +   '</div>'
         + '</div>'
         + '<div style="display:flex;gap:8px;justify-content:flex-end">'
-        +   '<button class="sec mini" style="border-radius:8px;padding:6px 16px" onclick="cancelEditKey(' + i + ')">取消</button>'
-        +   '<button class="mini" style="border-radius:8px;padding:6px 18px" onclick="saveSingleKey(' + i + ', this)">保存</button>'
+        +   '<button class="sec mini" style="border-radius:8px;padding:6px 16px"  data-action="cancelEditKey" data-on="click" data-arg="' + i + '">取消</button>'
+        +   '<button class="mini" style="border-radius:8px;padding:6px 18px"  data-action="saveSingleKey" data-on="click" data-arg="' + i + '">保存</button>'
         + '</div>'
         + '</div>';
     }
@@ -3169,10 +3169,10 @@ function renderKeyRows(){
       +     '</div>'
       +   '</div>'
       +   '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
-      +     '<button class="key-action-btn" id="copyBtn' + i + '" onclick="copyKeyRow(' + i + ')">复制</button>'
-      +     '<button class="key-action-btn" onclick="openEditKey(' + i + ')">编辑</button>'
-      +     '<button class="key-action-btn" onclick="toggleKeyRow(' + i + ')">' + (row.enabled ? '禁用' : '启用') + '</button>'
-      +     '<button class="key-action-btn danger" onclick="removeKeyRow(' + i + ')">删除</button>'
+      +     '<button class="key-action-btn" id="copyBtn' + i + '"  data-action="copyKeyRow" data-on="click" data-arg="' + i + '">复制</button>'
+      +     '<button class="key-action-btn"  data-action="openEditKey" data-on="click" data-arg="' + i + '">编辑</button>'
+      +     '<button class="key-action-btn"  data-action="toggleKeyRow" data-on="click" data-arg="' + i + '">' + (row.enabled ? '禁用' : '启用') + '</button>'
+      +     '<button class="key-action-btn danger"  data-action="removeKeyRow" data-on="click" data-arg="' + i + '">删除</button>'
       +   '</div>'
       + '</div>'
       + '</div>';
@@ -3379,7 +3379,7 @@ function slotSelectHtml(a){
     '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
     + esc(s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
   const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
-  return '<select class="slot-select" onchange="setAccountSlot(&quot;' + uidAttr + '&quot;, this.value, this)">'
+  return '<select class="slot-select"  data-action="setAccountSlot" data-on="change" data-uid="' + uidAttr + '">'
     + opts.join('') + '</select>';
 }
 
@@ -3445,14 +3445,14 @@ function renderProxySlots(){
     + '</tr></thead><tbody>'
     + PROXY_SLOTS.map((s, i) =>
         '<tr>'
-        + '<td data-label="名称"><input value="' + esc(s.name || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value; markSlotsDirty()" class="slot-input"></td>'
-        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value; markSlotsDirty()" class="slot-input mono"></td>'
+        + '<td data-label="名称"><input value="' + esc(s.name || '') + '"  data-action="onProxySlotNameInput" data-on="input" data-arg="' + i + '" class="slot-input"></td>'
+        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '"  data-action="onProxySlotUrlInput" data-on="input" data-arg="' + i + '" class="slot-input mono"></td>'
         + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
-        +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked; markSlotsDirty()"></td>'
+        +   '  data-action="onProxySlotEnabledChange" data-on="change" data-arg="' + i + '"></td>'
         + '<td style="text-align:center" data-label="绑定账号">' + (s.bound || 0) + '</td>'
         + '<td style="text-align:center;white-space:nowrap" data-label="">'
-        +   '<button class="sec mini" onclick="testProxySlot(' + i + ', this)">测试</button> '
-        +   '<button class="danger mini" onclick="removeProxySlot(' + i + ')">删除</button>'
+        +   '<button class="sec mini"  data-action="testProxySlot" data-on="click" data-arg="' + i + '">测试</button> '
+        +   '<button class="danger mini"  data-action="removeProxySlot" data-on="click" data-arg="' + i + '">删除</button>'
         + '</td></tr>'
       ).join('')
     + '</tbody></table></div>'
@@ -3543,7 +3543,7 @@ function renderDiscover(){
         + '<span style="color:' + (c.reachable ? 'var(--accent2)' : 'var(--bad)') + '">'
         + (c.reachable ? ('出口 ' + esc(c.exit_ip) + ' · ' + c.latency_ms + 'ms') : '不可达') + '</span>'
         + '</label>').join('')
-    + '<button class="sec" onclick="importDiscovered()" style="margin-top:8px">导入勾选的出口</button></div>';
+    + '<button class="sec"  data-action="importDiscovered" data-on="click" style="margin-top:8px">导入勾选的出口</button></div>';
 }
 
 function importDiscovered(){
@@ -4497,6 +4497,128 @@ function renderAnalytics(data){
     }
   }
 }
+/* M4 D3 stage 2: every former inline handler goes through this delegated
+ * dispatcher, so the page runs under a nonce-based CSP with no
+ * 'unsafe-inline' script allowance. Elements carry
+ *   data-action=<action> data-on=click|change|input|keydown|scroll
+ * plus optional data-arg / data-uid / data-name payloads. */
+const ACTION_HANDLERS = {
+  switchMainTab: (el, ev, arg) => switchMainTab(arg),
+  submitPanelLoginOnEnter: (el, ev) => { if(ev.key === 'Enter') submitPanelLogin(); },
+  submitPanelLogin: () => submitPanelLogin(),
+  switchViewRealm: (el, ev, arg) => switchViewRealm(arg),
+  toggleActiveGatewayRealm: () => toggleActiveGatewayRealm(),
+  triggerSchedulerNow: (el) => triggerSchedulerNow(el),
+  toggleScheduler: (el) => toggleScheduler(el),
+  openLoginModal: () => openLoginModal(),
+  doCheckin: (el) => doCheckin(el),
+  doDailyChat: (el) => doDailyChat(el),
+  doDailyChatWeb: (el) => doDailyChatWeb(el),
+  scanDesktop: (el) => scanDesktop(el),
+  exportAccounts: (el) => exportAccounts(el),
+  openImport: () => openImport(),
+  fetchCredits: (el) => fetchCredits(el),
+  autoAssignSlots: () => autoAssignSlots(),
+  setAll: (el, ev, arg) => setAll(arg === '1', el),
+  setRecentLimit: (el, ev, arg) => setRecentLimit(Number(arg)),
+  changeRecentPage: (el, ev, arg) => changeRecentPage(Number(arg)),
+  switchGrowthAccount: (el) => switchGrowthAccount(el.value),
+  runGrowthTasks: (el) => runGrowthTasks(el),
+  triggerCatTravel: (el) => triggerCatTravel(el),
+  scanTaskQueue: (el) => scanTaskQueue(el),
+  runTaskQueue: (el) => runTaskQueue(el),
+  setAnalyticsRange: (el, ev, arg) => setAnalyticsRange(arg),
+  onRangeCustomChange: () => onRangeCustomChange(),
+  loadCreditHistory: (el) => loadCreditHistory(el),
+  onMatrixAcctFilterChange: (el) => { matrixAcctFilter = el.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf); },
+  onMatrixModelFilterChange: (el) => { matrixModelFilter = el.value; if(cachedMatrixData) renderPerfMatrix(cachedMatrixData.usage, cachedMatrixData.perf); },
+  savePanelPassword: (el) => savePanelPassword(el),
+  addApiKeyRow: () => addApiKeyRow(),
+  discoverProxySlots: (el) => discoverProxySlots(el),
+  addProxySlotRow: () => addProxySlotRow(),
+  saveProxySlots: (el) => saveProxySlots(el),
+  saveReserveCredits: (el) => saveReserveCredits(el),
+  saveDailyTokenLimit: (el) => saveDailyTokenLimit(el),
+  saveAutoSwitchProduct: (el) => saveAutoSwitchProduct(el),
+  saveDailyChatWeb: (el) => saveDailyChatWeb(el),
+  saveLocalWebTools: (el) => saveLocalWebTools(el),
+  loadSettings: (el, ev, arg) => loadSettings(arg === '1'),
+  panelLogout: () => panelLogout(),
+  fetchNewLogs: (el, ev, arg) => fetchNewLogs(arg === '1'),
+  toggleLogAuto: () => toggleLogAuto(),
+  toggleLogScroll: () => toggleLogScroll(),
+  copyFilteredLogs: () => copyFilteredLogs(),
+  exportLogsFile: () => exportLogsFile(),
+  clearServerLogs: () => clearServerLogs(),
+  setLogFilterLevel: (el, ev, arg) => setLogFilterLevel(arg),
+  setLogFilterTag: (el, ev, arg) => setLogFilterTag(arg),
+  onLogSearchInput: () => onLogSearchInput(),
+  loadRequestArchive: (el) => loadRequestArchive(el),
+  closeLogin: () => closeLogin(),
+  switchLoginRealm: (el) => switchLoginRealm(el.value),
+  restartLogin: () => restartLogin(),
+  closeDesktopScan: () => closeDesktopScan(),
+  refreshDesktopScan: (el) => refreshDesktopScan(el),
+  closeImport: () => closeImport(),
+  commitImport: (el) => commitImport(el),
+  handleLogTerminalScroll: () => handleLogTerminalScroll(),
+  toggleAccount: (el, ev, arg) => toggleAccount(el.dataset.uid, arg === '1', el),
+  testAccount: (el) => testAccount(el.dataset.uid, el),
+  refreshOne: (el) => refreshOne(el.dataset.uid, el),
+  syncProfile: (el) => syncProfile(el.dataset.uid, el),
+  activateGlobal: (el) => activateGlobal(el.dataset.uid, el),
+  claimTrial: (el) => claimTrial(el.dataset.uid, el),
+  setAccountProduct: (el, ev, arg) => setAccountProduct(el.dataset.uid, arg, el),
+  exportOne: (el) => exportOne(el.dataset.uid),
+  deleteAccount: (el) => deleteAccount(el.dataset.uid, el.dataset.name, el),
+  gotoRecentPage: (el, ev, arg) => gotoRecentPage(Number(arg)),
+  generateKeyForEdit: (el, ev, arg) => generateKeyForEdit(Number(arg)),
+  cancelEditKey: (el, ev, arg) => cancelEditKey(Number(arg)),
+  saveSingleKey: (el, ev, arg) => saveSingleKey(Number(arg), el),
+  copyKeyRow: (el, ev, arg) => copyKeyRow(Number(arg)),
+  openEditKey: (el, ev, arg) => openEditKey(Number(arg)),
+  toggleKeyRow: (el, ev, arg) => toggleKeyRow(Number(arg)),
+  removeKeyRow: (el, ev, arg) => removeKeyRow(Number(arg)),
+  setAccountSlot: (el) => setAccountSlot(el.dataset.uid, el.value, el),
+  onProxySlotNameInput: (el, ev, arg) => { PROXY_SLOTS[Number(arg)].name = el.value; markSlotsDirty(); },
+  onProxySlotUrlInput: (el, ev, arg) => { PROXY_SLOTS[Number(arg)].url = el.value; markSlotsDirty(); },
+  onProxySlotEnabledChange: (el, ev, arg) => { PROXY_SLOTS[Number(arg)].enabled = el.checked; markSlotsDirty(); },
+  testProxySlot: (el, ev, arg) => testProxySlot(Number(arg), el),
+  removeProxySlot: (el, ev, arg) => removeProxySlot(Number(arg)),
+  importDiscovered: () => importDiscovered(),
+};
+
+function runDashboardAction(el, ev, type){
+  const name = el.dataset ? el.dataset.action : '';
+  const fn = ACTION_HANDLERS[name];
+  if(typeof fn !== 'function') return;
+  try{
+    fn(el, ev, el.dataset ? el.dataset.arg : undefined);
+  }catch(err){
+    console.error('dashboard action "' + name + '" failed:', err);
+  }
+}
+
+function dashboardActionTarget(ev){
+  const node = ev.target;
+  if(!node || typeof node.closest !== 'function') return null;
+  const el = node.closest('[data-action]');
+  if(!el) return null;
+  const type = (ev.type || '').toLowerCase();
+  return (el.dataset && el.dataset.on === type) ? el : null;
+}
+
+['click', 'change', 'input', 'keydown'].forEach(type => {
+  document.addEventListener(type, ev => {
+    const el = dashboardActionTarget(ev);
+    if(el && !el.disabled) runDashboardAction(el, ev, type);
+  });
+});
+// Scroll does not bubble from inner scrollers; capture reaches the target.
+document.addEventListener('scroll', ev => {
+  const el = dashboardActionTarget(ev);
+  if(el) runDashboardAction(el, ev, 'scroll');
+}, true);
 </script>
 </body>
 </html>

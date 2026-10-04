@@ -1,9 +1,10 @@
-"""Dashboard security headers and CSP (M4 D3, conservative stage).
+"""Dashboard security headers and CSP (M4 D3, stage 2 nonce policy).
 
 Run with: python _test_security_headers.py
 No upstream credentials or outbound network are used.
 """
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,10 @@ os.environ["WB_PROXY_USAGE_DIR"] = _startup_dir.name
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+INLINE_HANDLER = re.compile(
+    r'\son(?:click|change|input|submit|keydown|keyup|blur|focus|scroll)\s*=\s*"')
 
 
 class CapturingHandler(wb_proxy.Handler):
@@ -50,15 +55,21 @@ class CapturingHandler(wb_proxy.Handler):
         return {key.lower(): value for key, value in self.headers_sent}
 
 
+def render(page_markup):
+    with tempfile.TemporaryDirectory() as directory:
+        page = os.path.join(directory, "dashboard.html")
+        with open(page, "w", encoding="utf-8") as fh:
+            fh.write(page_markup)
+        handler = CapturingHandler()
+        with mock.patch.object(wb_proxy, "DASHBOARD_HTML", page):
+            handler._dashboard()
+    return handler
+
+
 class DashboardHeaderTests(unittest.TestCase):
     def test_dashboard_carries_the_hardening_headers(self):
-        with tempfile.TemporaryDirectory() as directory:
-            page = os.path.join(directory, "dashboard.html")
-            with open(page, "w", encoding="utf-8") as fh:
-                fh.write("<html><body>ok</body></html>")
-            handler = CapturingHandler()
-            with mock.patch.object(wb_proxy, "DASHBOARD_HTML", page):
-                handler._dashboard()
+        handler = render("<html><script>var a=1;</script>"
+                         "<script>var b=2;</script></html>")
         self.assertEqual(handler.status, 200)
         headers = handler.headers_dict()
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
@@ -70,7 +81,6 @@ class DashboardHeaderTests(unittest.TestCase):
         self.assertIn("object-src 'none'", csp)
         self.assertIn("base-uri 'none'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
-        self.assertIn(b"ok", handler.written)
 
     def test_json_responses_are_nosniff(self):
         handler = CapturingHandler()
@@ -78,6 +88,35 @@ class DashboardHeaderTests(unittest.TestCase):
         headers = handler.headers_dict()
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
         self.assertIn("application/json", headers.get("content-type", ""))
+
+
+class DashboardNonceTests(unittest.TestCase):
+    def test_two_inline_scripts_get_a_shared_nonce(self):
+        handler = render("<html><script>var a=1;</script>"
+                         "<script>var b=2;</script></html>")
+        body = handler.written.decode("utf-8")
+        nonces = re.findall(r'<script nonce="([^"]+)">', body)
+        self.assertEqual(len(nonces), 2)
+        self.assertEqual(nonces[0], nonces[1])
+        csp = handler.headers_dict().get("content-security-policy", "")
+        script_src = [part for part in csp.split(";") if "script-src" in part][0]
+        self.assertIn("'self'", script_src)
+        self.assertIn("'nonce-%s'" % nonces[0], script_src)
+        self.assertNotIn("'unsafe-inline'", script_src)
+
+    def test_unexpected_markup_keeps_the_inline_fallback(self):
+        handler = render("<html><script>var a=1;</script></html>")
+        body = handler.written.decode("utf-8")
+        self.assertNotIn("nonce=", body)
+        csp = handler.headers_dict().get("content-security-policy", "")
+        script_src = [part for part in csp.split(";") if "script-src" in part][0]
+        self.assertIn("'unsafe-inline'", script_src)
+
+    def test_real_dashboard_matches_the_nonce_contract(self):
+        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
+            markup = fh.read()
+        self.assertEqual(markup.count("<script>"), 2)
+        self.assertEqual(len(INLINE_HANDLER.findall(markup)), 0)
 
 
 if __name__ == "__main__":
