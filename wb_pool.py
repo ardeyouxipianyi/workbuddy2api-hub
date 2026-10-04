@@ -31,6 +31,7 @@ DEFAULTS = {
     "min_pick_gap": 0.1,
     "affinity_ttl": 7200,
     "affinity_max_entries": 5000,
+    "session_dead_threshold": 3,
 }
 
 _BOOL_KEYS = ("weighted_pick",)
@@ -42,6 +43,7 @@ _INT_MIN = {
     "top_n": 1,
     "affinity_ttl": 60,
     "affinity_max_entries": 100,
+    "session_dead_threshold": 1,
 }
 _FLOAT_KEYS = (
     "soft_rate",
@@ -119,6 +121,23 @@ def validate_patch(raw):
                 raise ValueError("%s cannot be negative" % key)
         out[key] = value
     return out
+
+
+def next_local_4am(now=None):
+    """Epoch of the next local 04:00 (panel's balance-recovery wall).
+
+    The panel project parks an out-of-credits account until 04:00 local
+    so the 09:00/21:00 check-ins can revive it; the same wall clock is
+    used here. A timestamp already past 04:00 rolls to tomorrow.
+    """
+    import time as _time
+    now = _time.time() if now is None else now
+    lt = _time.localtime(now)
+    stamp = _time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                          4, 0, 0, 0, 0, -1))
+    if stamp <= now:
+        stamp += 86400
+    return stamp
 
 
 def soft_backoff(streak, base, cap):

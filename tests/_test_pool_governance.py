@@ -282,5 +282,52 @@ class RateLimitClassifierTests(unittest.TestCase):
         self.assertTrue(wb_proxy.rate_limit_is_account_level("slow down", None))
 
 
+class NextLocal4amTests(unittest.TestCase):
+    def test_returns_the_next_local_four_am(self):
+        lt = time.localtime()
+        now = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 3, 0, 0, 0, 0, -1))
+        until = wb_pool.next_local_4am(now)
+        self.assertGreater(until, now)
+        self.assertLessEqual(until - now, 24 * 3600)
+        self.assertEqual(time.localtime(until).tm_hour, 4)
+        self.assertAlmostEqual(until - now, 3600, delta=2)
+
+
+class BalanceCooldownTests(unittest.TestCase):
+    def test_402_parks_until_a_balance_refresh_shows_credits(self):
+        account = make_account("balance")
+        account.note_balance_cooled("HTTP 402")
+        self.assertFalse(account.ready())
+        self.assertIsNotNone(account.public()["balanceCooledFor"])
+        account.credits = {"remain": 0}
+        self.assertFalse(account.revive_balance_cooldown())
+        self.assertFalse(account.ready())
+        account.credits = {"remain": 500}
+        self.assertTrue(account.revive_balance_cooldown())
+        self.assertTrue(account.ready())
+        self.assertIsNone(account.public()["balanceCooledFor"])
+
+
+class SessionDeadTests(unittest.TestCase):
+    def test_three_consecutive_reports_disable_the_account(self):
+        account = make_account("dead")
+        account.pool_cfg = wb_pool.normalize({"session_dead_threshold": 3})
+        self.assertFalse(account.note_session_dead("12153"))
+        self.assertFalse(account.note_session_dead("12153"))
+        self.assertTrue(account.note_session_dead("12153"))
+        self.assertFalse(account.enabled)
+        account.enabled = True
+        account.mark_manual_revive()
+        self.assertEqual(account.session_dead_fails, 0)
+
+    def test_success_clears_the_session_dead_counter(self):
+        account = make_account("recovered")
+        account.pool_cfg = wb_pool.normalize({"session_dead_threshold": 3})
+        self.assertFalse(account.note_session_dead("12153"))
+        account.note_success()
+        self.assertEqual(account.session_dead_fails, 0)
+        self.assertFalse(account.note_session_dead("12153"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

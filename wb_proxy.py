@@ -3478,13 +3478,37 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 last_error = exc
                 last_403_detail = detail
                 break
-            if exc.code == 401:
-                log("account %s rejected (HTTP 401), rotating" % account.uid[:8])
+            if exc.code == 402:
+                try:
+                    detail = exc.read(400).decode("utf-8", "replace")
+                except Exception:
+                    detail = ""
+                account.note_balance_cooled(detail or "HTTP 402 (insufficient credits)")
+                log("account %s out of credits (402), cooling until next 04:00"
+                    % account.uid[:8])
                 if session_key and POOL:
                     POOL.affinity.unbind(session_key)
-                account.note_error("HTTP 401",
-                                   cooldown=60,
-                                   single_account=(total <= 1))
+                last_error = exc
+                continue
+            if exc.code == 401:
+                try:
+                    detail = exc.read(400).decode("utf-8", "replace")
+                except Exception:
+                    detail = ""
+                lowered = detail.lower()
+                if ("12153" in detail or "offline user session" in lowered
+                        or "session not found" in lowered):
+                    disabled = account.note_session_dead("session dead (12153)")
+                    log("account %s session dead (#%d)%s"
+                        % (account.uid[:8], account.session_dead_fails,
+                           " - disabled" if disabled else ", rotating"))
+                else:
+                    log("account %s rejected (HTTP 401), rotating" % account.uid[:8])
+                    account.note_error("HTTP 401",
+                                       cooldown=60,
+                                       single_account=(total <= 1))
+                if session_key and POOL:
+                    POOL.affinity.unbind(session_key)
                 last_error = exc
                 continue
             if exc.code in (500, 502, 503, 504):

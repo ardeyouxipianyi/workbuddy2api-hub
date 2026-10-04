@@ -271,6 +271,9 @@ class Account(object):
         self.last_used_at = 0.0
         self.in_flight = 0
         self.max_in_flight = 0
+        self.balance_until = 0.0
+        self.balance_cooled = False
+        self.session_dead_fails = 0
         # Serialise token refresh and file writes. Request threads, /health,
         # dashboard polls and the scheduler can all reach refresh()/save() for
         # the same account at once; without a lock the upstream rotates the
@@ -347,6 +350,7 @@ class Account(object):
             "softStreak": int(self.soft_streak),
             "breakerFor": round(max(0.0, self.breaker_until - now)) or None,
             "degradeFor": round(max(0.0, self.degrade_until - now)) or None,
+            "balanceCooledFor": round(max(0.0, self.balance_until - now)) or None,
             "inFlight": int(self.in_flight),
             "maxInFlight": int(self.max_in_flight or 0),
             "addedAt": self.added_at,
@@ -590,6 +594,7 @@ class Account(object):
         self.refresh_token = data.get("refreshToken") or self.refresh_token
         self.expires_at = jwt_exp(token) or self.expires_at
         with self._throttle_lock:
+            self.session_dead_fails = 0
             self.last_error = ""
             self.cooldown_until = 0
         if self.path and os.path.exists(os.path.dirname(self.path)):
@@ -776,6 +781,11 @@ class Account(object):
             self.last_checkin = time.strftime("%Y-%m-%d %H:%M:%S")
             if self.path and os.path.exists(os.path.dirname(self.path)):
                 self.save(os.path.dirname(self.path))
+            if self.balance_cooled:
+                try:
+                    self.fetch_credits()
+                except Exception:
+                    pass
             return {"ok": (code == 0 or code == 10001), "code": code, "msg": msg, "data": payload.get("data")}
         except urllib.error.HTTPError as exc:
             try:
@@ -833,6 +843,7 @@ class Account(object):
             "updated_at": time.time(),
             "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        self.revive_balance_cooldown()
         if self.path and os.path.exists(os.path.dirname(self.path)):
             self.save(os.path.dirname(self.path))
         return {"ok": True, "credits": self.credits}
@@ -861,7 +872,8 @@ class Account(object):
         now = time.time()
         with self._throttle_lock:
             wait = max(0.0, self.cooldown_until - now,
-                       self.breaker_until - now, self.degrade_until - now)
+                       self.breaker_until - now, self.degrade_until - now,
+                       self.balance_until - now)
             if model:
                 wait = max(wait, max(0.0, self.model_cooldowns.get(model, 0.0) - now))
         return wait
@@ -931,6 +943,9 @@ class Account(object):
             self.degrade_count = 0
             self.breaker_until = 0.0
             self.degrade_until = 0.0
+            self.balance_until = 0.0
+            self.balance_cooled = False
+            self.session_dead_fails = 0
             self.last_error = ""
             self.cooldown_until = 0.0
 
@@ -947,6 +962,60 @@ class Account(object):
         with self._throttle_lock:
             if self.in_flight > 0:
                 self.in_flight -= 1
+
+    def note_balance_cooled(self, message="insufficient credits"):
+        """402 / out-of-credits: hard cooldown until the next local 04:00."""
+        until = wb_pool.next_local_4am()
+        with self._throttle_lock:
+            self.last_error = str(message)[:200]
+            self.balance_cooled = True
+            self.balance_until = max(self.balance_until, until)
+        return until
+
+    def revive_balance_cooldown(self):
+        """A balance refresh that shows credits again unfreezes the
+        balance cooldown only - rate-limit and model cooldowns stay."""
+        if not self.balance_cooled:
+            return False
+        remain = wb_pool.credits_remain(self)
+        if remain is None or remain <= 0:
+            return False
+        with self._throttle_lock:
+            self.balance_cooled = False
+            self.balance_until = 0.0
+            self.last_error = ""
+        return True
+
+    def note_session_dead(self, message):
+        """Session-dead (12153): disable only after N consecutive reports."""
+        threshold = max(1, int(self.pool_cfg.get("session_dead_threshold") or 3))
+        with self._throttle_lock:
+            self.last_error = str(message)[:200]
+            self.session_dead_fails += 1
+            fails = self.session_dead_fails
+        if fails < threshold:
+            return False
+        self.enabled = False
+        if self.path:
+            try:
+                self.save(os.path.dirname(self.path))
+            except Exception:
+                pass
+        return True
+
+    def mark_manual_revive(self):
+        """Operator re-enabled the account: clear every manual penalty."""
+        with self._throttle_lock:
+            self.session_dead_fails = 0
+            self.balance_cooled = False
+            self.balance_until = 0.0
+            self.breaker_until = 0.0
+            self.degrade_count = 0
+            self.degrade_until = 0.0
+            self.soft_streak = 0
+            self.fails = 0
+            self.last_error = ""
+            self.cooldown_until = 0.0
 
 def _human_delta(seconds):
     if seconds is None: return None
@@ -1141,7 +1210,7 @@ class AccountPool(object):
         if account is None: return None
         account.enabled = bool(enabled)
         if enabled:
-            account.clear_error()
+            account.mark_manual_revive()
         account.save(self.dir)
         self.apply_proxy_slots()
         return account.public()
@@ -1274,7 +1343,7 @@ class AccountPool(object):
                 if realm and account.realm != realm: continue
                 account.enabled = bool(enabled)
                 if enabled:
-                    account.clear_error()
+                    account.mark_manual_revive()
                 account.save(self.dir)
         self.apply_proxy_slots()
 
