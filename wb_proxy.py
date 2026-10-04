@@ -2077,6 +2077,7 @@ def runtime_settings_view():
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
+        "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -3913,6 +3914,60 @@ def parse_rate_limit_reset(detail):
         return None
 
 
+def upstream_timeouts():
+    """(header, idle) seconds for the chat upstream socket.
+
+    header covers connect/TLS/first byte; idle bounds each mid-stream
+    read, so active data keeps the connection alive while a silent
+    stream fails out and releases its in-flight lease. There is no
+    total-duration cap, matching the panel project's semantics.
+    """
+    try:
+        cfg = wb_settings.upstream_config(ACCOUNTS_DIR)
+    except Exception:
+        cfg = None
+    header = 120.0
+    idle = 300.0
+    if isinstance(cfg, dict):
+        try:
+            header = float(cfg.get("header_timeout_seconds") or header)
+        except (TypeError, ValueError):
+            pass
+        try:
+            idle = float(cfg.get("idle_timeout_seconds") or idle)
+        except (TypeError, ValueError):
+            pass
+    return max(1.0, header), max(1.0, idle)
+
+
+def _apply_stream_idle_timeout(response, seconds):
+    """Switch the upstream socket to the mid-stream idle timeout.
+
+    urllib's timeout covers the initial request; the same socket is then
+    read for the whole SSE stream. Setting the socket timeout to the idle
+    value bounds each read instead of the whole stream. Best-effort: an
+    unknown socket shape keeps the header timeout.
+    """
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return False
+    if seconds <= 0:
+        return False
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    if sock is None:
+        sock = getattr(fp, "_sock", None)
+    if sock is None:
+        return False
+    try:
+        sock.settimeout(seconds)
+        return True
+    except Exception:
+        return False
+
+
 def open_upstream(payload, session_key=None, target_realm=None):
     # Refresh the daily guards before picking. The scan underneath is
     # incremental and TTL-cached, so this is a stat() plus a cached dict on
@@ -3943,6 +3998,9 @@ def open_upstream(payload, session_key=None, target_realm=None):
     # Read once per request, not per attempt: this is a panel setting, and a
     # settings read on every retry would be pure overhead.
     auto_switch = auto_switch_product_enabled()
+    # Panel parity: header/idle timeouts are read once per request, not
+    # once per retry, so a settings read never lands in the retry loop.
+    header_timeout, idle_timeout = upstream_timeouts()
     max_attempts = max(2, total) + 1 + (MAX_PRODUCT_SWITCHES if auto_switch else 0)
     for _attempt in range(max_attempts):
         account = POOL.pick_for_session(realm=realm, session_key=session_key,
@@ -3971,7 +4029,9 @@ def open_upstream(payload, session_key=None, target_realm=None):
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
                                      headers=account.headers(purpose="chat"))
         try:
-            resp = wb_accounts.urlopen(req, timeout=600, proxy=account.proxy)
+            resp = wb_accounts.urlopen(req, timeout=header_timeout,
+                                       proxy=account.proxy)
+            _apply_stream_idle_timeout(resp, idle_timeout)
             account.clear_error(model=model)
             reset_switch_counter(account, model)
             # The third element is the reasoning effort this request ran at: the
@@ -6713,6 +6773,17 @@ class Handler(BaseHTTPRequestHandler):
                                    "invalid_request_error")
             wb_settings.set_local_web_tools(ACCOUNTS_DIR, raw)
             reply["local_web_tools"] = raw
+        if "upstream" in payload:
+            raw = payload.get("upstream")
+            if not isinstance(raw, dict):
+                return self._error(400, "upstream must be an object",
+                                   "invalid_request_error")
+            try:
+                patch = wb_settings.validate_upstream_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_upstream_config(ACCOUNTS_DIR, patch)
+            reply["upstream"] = wb_settings.upstream_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()

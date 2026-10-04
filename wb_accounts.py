@@ -247,10 +247,54 @@ def desktop_effective_realm(hint, token, domain=None):
         return evidence
     return hint if hint in ("intl", "cn") else "intl"
 
+_DEVICE_TOKEN_CACHE = {"key": None, "token": "", "at": 0.0}
+_DEVICE_TOKEN_LOCK = threading.Lock()
+_DEVICE_TOKEN_TTL = 300
+_DEVICE_TOKEN_MAX_BYTES = 1024
+
+
+def resolve_device_token(accounts_dir):
+    """X-Device-Token fallback: a literal value, or a desktop token file.
+
+    Mirrors the panel's device_token.go: the desktop client writes its
+    token to a file, the gateway reads it (max 1KB, trimmed) and caches
+    the result for five minutes so the header hot path stays cheap.
+    Failures degrade to an empty token instead of breaking a request.
+    """
+    try:
+        cfg = wb_settings.upstream_config(accounts_dir)
+    except Exception:
+        return ""
+    literal = str(cfg.get("device_token") or "").strip()
+    path = str(cfg.get("device_token_file") or "").strip()
+    key = literal or path
+    if not key:
+        return ""
+    now = time.time()
+    with _DEVICE_TOKEN_LOCK:
+        if (_DEVICE_TOKEN_CACHE["key"] == key
+                and now - _DEVICE_TOKEN_CACHE["at"] < _DEVICE_TOKEN_TTL):
+            return _DEVICE_TOKEN_CACHE["token"]
+    token = literal
+    if not token and path:
+        try:
+            if os.path.getsize(path) <= _DEVICE_TOKEN_MAX_BYTES:
+                with open(path, encoding="utf-8") as fh:
+                    token = fh.read().strip()
+        except Exception:
+            token = ""
+    with _DEVICE_TOKEN_LOCK:
+        _DEVICE_TOKEN_CACHE.update({"key": key, "token": token, "at": now})
+    return token
+
+
 class Account(object):
     def __init__(self, data, path=None):
         data = data or {}
         self.path = path
+        # Directory of the credential file, so header-time helpers (the
+        # optional X-Device-Token) can resolve settings without a pool lookup.
+        self.accounts_dir = os.path.dirname(path) if path else ""
         token = str(data.get("accessToken") or "")
         self.uid = str(data.get("uid") or jwt_uid(token))
         # The CN desktop build stores its nickname as an encrypted envelope
@@ -649,6 +693,9 @@ class Account(object):
                 headers["X-No-Enterprise-Id"] = "1"
             if self.realm == "cn":
                 headers["X-Product"] = "SaaS"
+            device_token = self._device_token()
+            if device_token:
+                headers["X-Device-Token"] = device_token
             return headers
 
         identity = wb_identity.build_identity_headers(
@@ -672,7 +719,17 @@ class Account(object):
             "X-Session-ID": derive_id(self.uid, "session"),
         }
         headers.update(identity)
+        device_token = self._device_token()
+        if device_token:
+            headers["X-Device-Token"] = device_token
         return headers
+
+    def _device_token(self):
+        """Optional X-Device-Token from the configured literal or file."""
+        directory = getattr(self, "accounts_dir", "")
+        if not directory:
+            return ""
+        return resolve_device_token(directory)
 
     def set_product(self, value):
         """切換出站身分（cli <-> workbuddy）。回傳 True 表示真的換了。

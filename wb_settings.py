@@ -755,6 +755,61 @@ def set_pricing_enabled(accounts_dir, enabled):
     return enabled
 
 
+UPSTREAM_DEFAULTS = {
+    "header_timeout_seconds": 120,
+    "idle_timeout_seconds": 300,
+    "device_token": "",
+    "device_token_file": "",
+}
+
+
+def validate_upstream_patch(raw):
+    """Strict validation for a panel-saved upstream patch."""
+    out = {}
+    for key, value in (raw or {}).items():
+        if key in ("header_timeout_seconds", "idle_timeout_seconds"):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("%s must be a whole number of seconds" % key)
+            if value < 1:
+                raise ValueError("%s cannot be less than 1" % key)
+            out[key] = value
+        elif key in ("device_token", "device_token_file"):
+            if not isinstance(value, str):
+                raise ValueError("%s must be a string" % key)
+            out[key] = value.strip()
+        else:
+            raise ValueError("unknown upstream setting %r" % key)
+    return out
+
+
+def upstream_config(accounts_dir):
+    """Chat socket timeouts and the optional X-Device-Token source."""
+    stored = load(accounts_dir).get("upstream")
+    stored = stored if isinstance(stored, dict) else {}
+    out = {}
+    for key, default in UPSTREAM_DEFAULTS.items():
+        value = stored.get(key, default)
+        if key in ("header_timeout_seconds", "idle_timeout_seconds"):
+            out[key] = (value if isinstance(value, int) and not isinstance(value, bool)
+                        and value >= 1 else default)
+        else:
+            out[key] = value.strip() if isinstance(value, str) else default
+    return out
+
+
+def set_upstream_config(accounts_dir, cfg):
+    """Persist the upstream settings. Returns the stored config."""
+    current = upstream_config(accounts_dir)
+    if isinstance(cfg, dict):
+        current.update({k: v for k, v in cfg.items() if k in UPSTREAM_DEFAULTS})
+    clean = validate_upstream_patch(current)
+    with _lock:
+        data = load(accounts_dir)
+        data["upstream"] = clean
+        save(accounts_dir, data)
+    return clean
+
+
 def auto_switch_product(accounts_dir):
     """Whether an upstream 429 may rotate an account's outbound identity.
 
