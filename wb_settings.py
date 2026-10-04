@@ -63,6 +63,25 @@ def save(accounts_dir, data):
         return path
 
 
+def deep_merge(base, patch):
+    """Recursively merge patch into base; unknown sibling keys survive.
+
+    The panel form only submits the keys it manages. Replacing a whole group
+    would silently drop hand-written or future keys, so nested objects merge
+    key by key (panel mergeConfigMaps semantics). Returns a new dict; inputs
+    are not mutated.
+    """
+    if not isinstance(base, dict) or not isinstance(patch, dict):
+        return patch
+    out = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def panel_password_is_default(accounts_dir):
     data = load(accounts_dir)
     if not data.get("panel_password_hash"):
@@ -416,7 +435,7 @@ def set_pool_config(accounts_dir, cfg):
     clean = wb_pool.normalize(current)
     with _lock:
         data = load(accounts_dir)
-        data["pool"] = clean
+        data["pool"] = deep_merge(data.get("pool"), clean)
         save(accounts_dir, data)
     return clean
 
@@ -520,7 +539,7 @@ def set_schedule_config(accounts_dir, cfg):
             clean[key] = int(value)
     with _lock:
         data = load(accounts_dir)
-        data["schedule"] = clean
+        data["schedule"] = deep_merge(data.get("schedule"), clean)
         save(accounts_dir, data)
     return clean
 
@@ -581,7 +600,7 @@ def set_redis_config(accounts_dir, cfg):
     clean = validate_redis_patch(current)
     with _lock:
         data = load(accounts_dir)
-        data["redis"] = clean
+        data["redis"] = deep_merge(data.get("redis"), clean)
         save(accounts_dir, data)
     return clean
 
@@ -636,7 +655,7 @@ def set_upstream_config(accounts_dir, cfg):
     clean = validate_upstream_patch(current)
     with _lock:
         data = load(accounts_dir)
-        data["upstream"] = clean
+        data["upstream"] = deep_merge(data.get("upstream"), clean)
         save(accounts_dir, data)
     return clean
 
@@ -691,7 +710,7 @@ def set_prompt_config(accounts_dir, cfg):
     clean = validate_prompt_patch(current)
     with _lock:
         data = load(accounts_dir)
-        data["prompt"] = clean
+        data["prompt"] = deep_merge(data.get("prompt"), clean)
         save(accounts_dir, data)
     return clean
 
