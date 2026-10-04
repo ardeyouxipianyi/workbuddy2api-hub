@@ -1030,6 +1030,75 @@ def _usage_snapshot_uncached(realm=None, since=None, until=None):
         "accounts_ready": (POOL.count_ready() if POOL else 0),
     }
     return snap
+def usage_timeseries(realm=None, range=None, since=None, until=None,
+                     bucket_seconds=None):
+    """Bucketed token/credit series for the analytics chart (M4 D5).
+
+    Bucket size auto-scales with the window: minute (<=6h), hour (<=14d),
+    day otherwise; an explicit bucket_seconds overrides it. Completed
+    requests contribute tokens; every non-client-aborted row contributes
+    credit (money already spent).
+    """
+    r = realm_scope(realm, CURRENT_REALM)
+    lo, hi = range_window(range, since, until)
+    if hi is None:
+        hi = time.time()
+    if lo is None:
+        lo = hi - 86400
+    span = max(1.0, hi - lo)
+    if bucket_seconds:
+        step = max(60, int(bucket_seconds))
+    elif span <= 6 * 3600:
+        step = 60
+    elif span <= 14 * 86400:
+        step = 3600
+    else:
+        step = 86400
+    buckets = {}
+    try:
+        with open(USAGE_LOG, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if r and not row_matches_realm(row, r):
+                    continue
+                at = row.get("at") or 0
+                if at < lo or at > hi:
+                    continue
+                key = int((at - lo) // step)
+                bucket = buckets.setdefault(key, {
+                    "at": lo + key * step, "requests": 0, "errors": 0,
+                    "prompt_tokens": 0, "completion_tokens": 0,
+                    "reasoning_tokens": 0, "cached_tokens": 0,
+                    "total_tokens": 0, "credit": 0.0,
+                })
+                outcome = row_outcome(row)
+                if outcome == "completed":
+                    bucket["requests"] += 1
+                    for field in ("prompt_tokens", "completion_tokens",
+                                  "reasoning_tokens", "cached_tokens",
+                                  "total_tokens"):
+                        bucket[field] += (row.get(field) or 0)
+                else:
+                    bucket["errors"] += 1
+                if outcome != "client_aborted":
+                    bucket["credit"] += (row.get("credit") or 0)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log("usage timeseries read failed: %s" % exc)
+    return {
+        "ok": True, "realm": r or "all", "bucket_seconds": step,
+        "since": lo, "until": hi,
+        "series": [buckets[key] for key in sorted(buckets)],
+    }
+
+
 def _tail_lines(path, max_lines, chunk=256 * 1024):
     """Return up to the last `max_lines` non-empty lines, oldest first.
 
@@ -6061,6 +6130,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_usage_by_account()
         if path == "/usage/perf":
             return self._get_usage_perf(query)
+        if path == "/usage/timeseries":
+            return self._get_usage_timeseries(query)
         if path == "/tasks":
             return self._get_tasks(query)
         if path == "/scheduler":
@@ -6245,6 +6316,21 @@ class Handler(BaseHTTPRequestHandler):
         req_range, req_since, req_until = range_query(query)
         return self._json(200, perf_stats(sample, realm=req_realm, range=req_range,
                                           since=req_since, until=req_until))
+
+    def _get_usage_timeseries(self, query):
+        if not self._authorized():
+            return
+        req_realm = (query.get('realm', [None])[0]
+                     or self.headers.get('X-Realm') or CURRENT_REALM)
+        req_range, req_since, req_until = range_query(query)
+        bucket = (query.get("bucket") or [None])[0]
+        try:
+            bucket_seconds = int(bucket) if bucket else None
+        except (TypeError, ValueError):
+            bucket_seconds = None
+        return self._json(200, usage_timeseries(
+            realm=req_realm, range=req_range, since=req_since,
+            until=req_until, bucket_seconds=bucket_seconds))
 
     def _get_tasks(self, query):
         if not self._authorized():
