@@ -5729,6 +5729,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         # self.path is unset when parse_request() never ran (an over-long
         # request line is rejected before it), so fall back to "".
@@ -6411,6 +6412,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"id": wanted, "key": entry.get("key") or ""})
         return self._error(404, "no such key", "invalid_request_error")
 
+    def _send_security_headers(self):
+        """Conservative hardening headers for the dashboard page (M4 D3).
+
+        The dashboard is a single-file page with inline scripts/handlers, so
+        the CSP keeps 'unsafe-inline' for scripts and styles while locking
+        everything else down (no objects, no framing, no base-uri override).
+        Splitting dashboard.js and dropping the inline handlers is tracked as
+        a separate, higher-risk milestone.
+        """
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy",
+                         "geolocation=(), camera=(), microphone=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "font-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
     def _dashboard(self):
         try:
             with open(DASHBOARD_HTML, "rb") as fh:
@@ -6421,6 +6443,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(body)
     def _read_chunked_body(self, max_bytes=MAX_PAYLOAD_BYTES):

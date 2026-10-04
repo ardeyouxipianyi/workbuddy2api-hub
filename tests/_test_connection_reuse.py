@@ -84,6 +84,35 @@ def wait_ready():
     return False
 
 
+def recv_response(sock, limit=200000):
+    """Read one complete HTTP response (headers + Content-Length body).
+
+    The old fixed-size recv(400) left body bytes in the socket whenever a
+    response grew past that size, and the next recv then started mid-body -
+    a test bug that looked like a connection-desync bug.
+    """
+    data = b""
+    while b"\r\n\r\n" not in data and len(data) < limit:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = 0
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            try:
+                length = int(line.split(b":", 1)[1].strip())
+            except ValueError:
+                length = 0
+    while len(body) < length and len(body) < limit:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        body += chunk
+    return head + b"\r\n\r\n" + body
+
+
 def send_pair(bad_body, label):
     """Bad-key request with `bad_body`, then a good small one, same socket."""
     sock = socket.create_connection(("127.0.0.1", port), timeout=20)
@@ -94,7 +123,7 @@ def send_pair(bad_body, label):
             b"Content-Length: " + str(len(bad_body)).encode() + b"\r\n\r\n" + bad_body
         )
         time.sleep(1.0)
-        first = sock.recv(400)
+        first = recv_response(sock)
 
         small = b'{"model":"x","messages":[{"role":"user","content":"hi"}]}'
         sock.sendall(
@@ -104,7 +133,7 @@ def send_pair(bad_body, label):
         )
         time.sleep(2.5)
         try:
-            second = sock.recv(900)
+            second = recv_response(sock)
         except Exception as exc:
             second = ("recv error: %s" % exc).encode()
     finally:
