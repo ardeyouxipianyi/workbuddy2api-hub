@@ -1393,8 +1393,24 @@ function renderAvailableModels(){
       ctx = '<b>' + m.context_windows.map(fmtK).join(' / ') + '</b>';
     }
 
-    // 4. 最大输出
-    const maxOut = m.max_output_tokens ? ('<b>' + fmtK(m.max_output_tokens) + '</b>') : '-';
+    // 4. 最大输出（M5 E2：有实测钳制时标注「钳制 N×」，数据来自 output_probes.json）
+    let maxOut = m.max_output_tokens ? ('<b>' + fmtK(m.max_output_tokens) + '</b>') : '-';
+    const clamp = Number(m.output_clamp || 0);
+    if(clamp > 0){
+      const claimed = Number(m.max_output_tokens || 0);
+      const tip = '声称 ' + (claimed ? fmtK(claimed) : '?') + ' · 实测 ' + fmtK(clamp);
+      if(!claimed){
+        maxOut = '<b style="color:var(--warn)">' + fmtK(clamp) + ' ⚠</b>'
+          + '<div style="font-size:11px;color:var(--warn);margin-top:2px" title="' + esc(tip) + '">实测上限</div>';
+      }else if(clamp < claimed){
+        const ratio = claimed / clamp;
+        const xs = (ratio >= 10 ? Math.round(ratio) : Math.round(ratio * 10) / 10) + '×';
+        maxOut = '<b style="color:var(--warn)">' + fmtK(clamp) + ' ⚠</b>'
+          + '<div style="font-size:11px;color:var(--warn);margin-top:2px" title="' + esc(tip) + '">钳制 ' + xs + '</div>';
+      }else{
+        maxOut = '<b>' + fmtK(clamp) + '</b> <span style="color:var(--accent2)">✓</span>';
+      }
+    }
 
     // 5. 思考档位
     let effort = '<span style="color:var(--dim)">—</span>';

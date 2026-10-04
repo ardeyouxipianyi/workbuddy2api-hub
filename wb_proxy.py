@@ -45,6 +45,8 @@ import wb_prompt
 import wb_global
 import wb_taskqueue
 import wb_reqlog
+import wb_modelsdev
+import wb_probes
 IS_WINDOWS = os.name == "nt"
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
@@ -242,18 +244,70 @@ def _empty_stats():
             "gen_ms_sum": 0, "gen_samples": 0,
             "wall_ms_sum": 0, "wall_samples": 0}
 _usage = _empty_stats()
+def _best_cached_tokens(usage):
+    """Best cache-hit value across every alias the upstreams emit (E3).
+
+    Order mirrors the panel: prompt_tokens_details.cached_tokens >
+    prompt_cache_hit_tokens > cache_read_input_tokens > cached_tokens >
+    input_tokens_details.cached_tokens > completion_tokens_details.
+    First positive value wins; zero aliases never shadow a real hit.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    input_details = usage.get("input_tokens_details") or {}
+    details = usage.get("completion_tokens_details") or {}
+    for value in (prompt_details.get("cached_tokens"),
+                  usage.get("prompt_cache_hit_tokens"),
+                  usage.get("cache_read_input_tokens"),
+                  usage.get("cached_tokens"),
+                  input_details.get("cached_tokens"),
+                  details.get("cached_tokens")):
+        try:
+            number = float(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return 0
+
+
+def normalize_usage_cache_aliases(usage):
+    """Write the best cache-hit value into every alias (panel parity, E3).
+
+    Some responses carry the real hit in prompt_tokens_details.cached_tokens
+    while also emitting cache_read_input_tokens: 0 / cached_tokens: 0
+    compatibility aliases; strict downstream parsers may prefer the zero
+    aliases and lose the hit. Mutates and returns the usage dict.
+    """
+    if not isinstance(usage, dict):
+        return usage
+    best = _best_cached_tokens(usage)
+    if best <= 0:
+        return usage
+    usage["cache_read_input_tokens"] = best
+    usage["cached_tokens"] = best
+    usage["prompt_cache_hit_tokens"] = best
+    prompt_details = dict(usage.get("prompt_tokens_details") or {})
+    prompt_details["cached_tokens"] = best
+    usage["prompt_tokens_details"] = prompt_details
+    if isinstance(usage.get("input_tokens_details"), dict):
+        input_details = dict(usage["input_tokens_details"])
+        input_details["cached_tokens"] = best
+        usage["input_tokens_details"] = input_details
+    return usage
+
+
 def _extract_usage(usage):
     """Normalize the upstream usage block into the fields we track."""
     if not usage:
         return {}
     details = usage.get("completion_tokens_details") or {}
-    prompt_details = usage.get("prompt_tokens_details") or {}
     return {
         "prompt_tokens": usage.get("prompt_tokens") or 0,
         "completion_tokens": usage.get("completion_tokens") or 0,
         "reasoning_tokens": details.get("reasoning_tokens") or 0,
-        "cached_tokens": usage.get("prompt_cache_hit_tokens") or details.get("cached_tokens") \
-            or prompt_details.get("cached_tokens") or 0,
+        "cached_tokens": _best_cached_tokens(usage),
         "total_tokens": usage.get("total_tokens") or 0,
         "credit": usage.get("credit") or 0,
     }
@@ -2029,12 +2083,24 @@ def model_entry(mid, meta):
         "modality": "+".join(inputs) + "->text",
     }
     # ---- limits ----
-    if meta.get("maxInputTokens"):
-        item["context_length"] = meta["maxInputTokens"]
-        item["max_input_tokens"] = meta["maxInputTokens"]
-    if meta.get("maxOutputTokens"):
-        item["max_output_tokens"] = meta["maxOutputTokens"]
-        item["max_completion_tokens"] = meta["maxOutputTokens"]
+    # Four-level lookup (E1): remote > built-in knowledge table > local
+    # model.json cache > models.dev (asynchronously warmed; never blocks).
+    # context_length always has a value (1M when unknown - a high estimate is
+    # safer than a low one); max_output_tokens is omitted when unknown.
+    ctx_value, out_value, _limit_source = wb_modelsdev.lookup(
+        mid, meta.get("maxInputTokens"), meta.get("maxOutputTokens"),
+        directory=ACCOUNTS_DIR)
+    item["context_length"] = ctx_value
+    item["max_input_tokens"] = ctx_value
+    if out_value:
+        item["max_output_tokens"] = out_value
+        item["max_completion_tokens"] = out_value
+    # E2: annotate the measured upstream clamp (from output_probes.json)
+    # without overriding the model's spec value.
+    clamp = wb_probes.clamp_for(ACCOUNTS_DIR, mid)
+    if clamp:
+        item["output_clamp"] = clamp
+        item["max_output_tokens_clamped"] = clamp
     ctx = (meta.get("contextWindow") or {}).get("supportedLengths")
     if ctx:
         item["context_windows"] = ctx
@@ -2415,6 +2481,11 @@ def clean_chunk(raw):
     except Exception:
         return raw
     changed = False
+    if isinstance(obj.get("usage"), dict):
+        before = dict(obj["usage"])
+        normalize_usage_cache_aliases(obj["usage"])
+        if obj["usage"] != before:
+            changed = True
     for choice in obj.get("choices") or []:
         delta = choice.get("delta")
         if not isinstance(delta, dict):
@@ -4247,6 +4318,8 @@ def aggregate_stream(raw_iter, model, resp_id):
     elif finish == "tool_calls":
         # 占位被全部过滤掉，无实际工具调用，降级为正常结束，防止客户端无限挂起等待
         finish = "stop"
+    if usage:
+        normalize_usage_cache_aliases(usage)
     if usage is None or (usage.get("total_tokens") or 0) == 0:
         full_c = "".join(content)
         full_r = "".join(reasoning)
@@ -5044,8 +5117,7 @@ def _responses_usage(u):
     return {
         "input_tokens": u.get("prompt_tokens") or 0,
         "input_tokens_details": {
-            "cached_tokens": u.get("prompt_cache_hit_tokens")
-            or det.get("cached_tokens") or pdet.get("cached_tokens") or 0,
+            "cached_tokens": _best_cached_tokens(u),
         },
         "output_tokens": u.get("completion_tokens") or 0,
         "output_tokens_details": {"reasoning_tokens": det.get("reasoning_tokens") or 0},
@@ -6204,6 +6276,12 @@ class Handler(BaseHTTPRequestHandler):
             entries = fetch_models(realm=req_realm)
         except Exception as exc:
             return self._error(502, str(exc))
+        # Level 4 is best effort: warm the local cache in the background at
+        # most once per cooldown; offline deployments just keep the fallback.
+        try:
+            wb_modelsdev.refresh_async(ACCOUNTS_DIR, log=log)
+        except Exception:
+            pass
         data = [model_entry(mid, meta) for mid, meta in entries]
         return self._json(200, {"object": "list", "data": data, "realm": req_realm or CURRENT_REALM})
 
