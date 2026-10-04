@@ -43,6 +43,7 @@ import wb_webtools
 import wb_identity
 import wb_prompt
 import wb_global
+import wb_taskqueue
 IS_WINDOWS = os.name == "nt"
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
@@ -1142,6 +1143,7 @@ def recent_usage(limit=100, realm=None, page=1):
     }
 POOL = None
 SCHEDULER = None
+TASK_QUEUE = None
 ACCOUNTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'accounts')
 def realm_state_file():
     """Path of the persisted realm switch.
@@ -6676,6 +6678,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_accounts_credits_fetch(payload)
         if path == "/tasks/run":
             return self._route_tasks_run(payload)
+        if path == "/tasks/queue/scan":
+            return self._route_tasks_queue_scan(payload)
+        if path == "/tasks/queue/start":
+            return self._route_tasks_queue_start(payload)
+        if path == "/tasks/queue/status":
+            return self._route_tasks_queue_status(payload)
         if path == "/tasks/travel":
             return self._route_tasks_travel(payload)
         if path == "/scheduler/trigger":
@@ -6861,6 +6869,39 @@ class Handler(BaseHTTPRequestHandler):
             results.append({"uid": account.uid, "ok": res.get("ok", False),
                             "credits": account.credits, "error": res.get("error", "")})
         return self._json(200, {"results": results, "accounts": account_views()})
+
+    def _route_tasks_queue_scan(self, payload):
+        """Task center: read-only scan of every CN account's pending work."""
+        if TASK_QUEUE is None:
+            return self._json(200, {"ok": False, "msg": "任务中心未初始化"})
+        uid = payload.get("uid")
+        uids = None
+        if uid and uid != "all":
+            uids = [str(uid)]
+        result = TASK_QUEUE.scan(uids=uids)
+        log("task queue scan: %d pending item(s)" % result.get("pending_count", 0),
+            level="INFO")
+        return self._json(200, result)
+
+    def _route_tasks_queue_start(self, payload):
+        """Task center: queue the scanned work and run it in the background."""
+        if TASK_QUEUE is None:
+            return self._json(200, {"ok": False, "msg": "任务中心未初始化"})
+        uid = payload.get("uid")
+        uids = [str(uid)] if uid and uid != "all" else None
+        codes = payload.get("codes")
+        if isinstance(codes, list):
+            codes = [str(c) for c in codes]
+        else:
+            codes = None
+        result = TASK_QUEUE.start(uids=uids, codes=codes,
+                                  concurrency=payload.get("concurrency"))
+        return self._json(200, result)
+
+    def _route_tasks_queue_status(self, payload):
+        if TASK_QUEUE is None:
+            return self._json(200, {"ok": False, "msg": "任务中心未初始化"})
+        return self._json(200, TASK_QUEUE.status())
 
     def _route_tasks_run(self, payload):
         if not POOL:
@@ -7806,10 +7847,11 @@ def _bootstrap_runtime(args):
     POOL.apply_reserve_credits()
     apply_daily_token_limit()
     load_persisted_realm()
-    global SCHEDULER
+    global SCHEDULER, TASK_QUEUE
     from wb_scheduler import Scheduler
     SCHEDULER = Scheduler(POOL)
     SCHEDULER.start()
+    TASK_QUEUE = wb_taskqueue.TaskQueue(POOL, log=log, concurrency=1)
     return api_key_generated
 
 def _report_first_run(args):

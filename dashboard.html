@@ -570,6 +570,20 @@ a:hover{text-decoration:underline}
       <div class="card accent2"><div class="val" id="catState">-</div><div class="lbl" id="catDesc">猫猫日常状态</div></div>
     </div>
 
+    <div id="taskQueuePanel" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div>
+          <b>任务中心队列</b>
+          <span id="taskQueueSummary" style="color:var(--dim);margin-left:8px">未扫描</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="sec mini" onclick="scanTaskQueue(this)">扫描待办</button>
+          <button class="sec mini" onclick="runTaskQueue(this)">运行队列</button>
+        </div>
+      </div>
+      <div id="taskQueueList" style="margin-top:8px;max-height:220px;overflow:auto;display:none"></div>
+    </div>
+
     <div style="overflow-x:auto">
       <table id="growthTable" class="data-cards">
         <thead>
@@ -1462,6 +1476,85 @@ async function runGrowthTasks(btn){
     btn.disabled = false;
     btn.textContent = oldText;
   }
+}
+
+let TASK_QUEUE_TIMER = null;
+
+async function scanTaskQueue(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const payload = {};
+    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all') payload.uid = CURRENT_GROWTH_UID;
+    const r = await postJSON('/tasks/queue/scan', payload);
+    const accounts = r.accounts || [];
+    const rows = [];
+    accounts.forEach(a => {
+      (a.growth || []).forEach(t => {
+        rows.push('<div>[' + esc(a.nickname || (a.uid || '').slice(0,8)) + '] ' + esc(t.name || t.task_code)
+          + ' <span style="color:var(--dim)">' + esc(t.task_code) + ' ' + (t.current || 0) + '/' + (t.target || 1) + '</span></div>');
+      });
+      if(a.growth_error){
+        rows.push('<div style="color:var(--warn)">[' + esc(a.nickname || (a.uid || '').slice(0,8)) + '] ' + esc(a.growth_error) + '</div>');
+      }
+    });
+    const list = document.getElementById('taskQueueList');
+    if(list){
+      list.style.display = 'block';
+      list.innerHTML = rows.length ? rows.join('') : '<div style="color:var(--dim)">没有可自动化的待办任务</div>';
+    }
+    const summary = document.getElementById('taskQueueSummary');
+    if(summary) summary.textContent = '待办 ' + (r.pending_count || 0) + ' 项';
+    toast('扫描完成: 待办 ' + (r.pending_count || 0) + ' 项', 'ok');
+  }catch(e){
+    toast('扫描失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function runTaskQueue(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const payload = {};
+    if(CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all') payload.uid = CURRENT_GROWTH_UID;
+    const r = await postJSON('/tasks/queue/start', payload);
+    if(!r.started){ toast(r.msg || '无法启动队列', 'warn'); return; }
+    toast('队列已启动: ' + r.total + ' 项（并发 ' + (r.concurrency || 1) + '）', 'ok');
+    if(TASK_QUEUE_TIMER) clearInterval(TASK_QUEUE_TIMER);
+    TASK_QUEUE_TIMER = setInterval(pollTaskQueue, 2000);
+    pollTaskQueue();
+  }catch(e){
+    toast('启动失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function pollTaskQueue(){
+  try{
+    const r = await postJSON('/tasks/queue/status', {});
+    const summary = document.getElementById('taskQueueSummary');
+    const counts = r.counts || {};
+    if(summary){
+      summary.textContent = (r.running ? '运行中' : '已结束') + ' · 完成 '
+        + (counts.done || 0) + ' / 失败 ' + (counts.error || 0) + ' / 共 ' + ((r.items || []).length);
+    }
+    const list = document.getElementById('taskQueueList');
+    if(list){
+      const items = r.items || [];
+      list.style.display = 'block';
+      list.innerHTML = items.length ? items.map(it => {
+        const color = it.status === 'done' ? 'var(--accent2)' : (it.status === 'error' ? 'var(--warn)' : 'var(--dim)');
+        return '<div>[' + esc(it.nickname || (it.uid || '').slice(0,8)) + '] ' + esc(it.code)
+          + ' <span style="color:' + color + '">' + esc(it.status) + '</span> ' + esc(it.message || '') + '</div>';
+      }).join('') : '<div style="color:var(--dim)">队列为空</div>';
+    }
+    if(!r.running && TASK_QUEUE_TIMER){
+      clearInterval(TASK_QUEUE_TIMER);
+      TASK_QUEUE_TIMER = null;
+      loadAccounts();
+    }
+  }catch(e){ /* polling failures are non-fatal */ }
 }
 
 async function triggerCatTravel(btn){

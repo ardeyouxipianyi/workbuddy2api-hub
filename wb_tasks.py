@@ -108,12 +108,18 @@ def fetch_growth_tasks(account):
                 code = t.get("task_code") or ""
                 spec = TASK_SPECS.get(code, {})
                 prog = t.get("progress") or {}
+                status = str(t.get("accept_status") or "not_accepted")
                 tasks.append({
                     "task_code": code,
                     "name": t.get("title") or spec.get("name") or code,
                     "description": t.get("description") or t.get("task_desc") or "",
                     "jump_url": t.get("jump_url") or "",
-                    "status": t.get("accept_status") or "not_accepted",
+                    "status": status,
+                    "accept_status": status,
+                    "upstream_status": str(t.get("status") or ""),
+                    "locked": bool(t.get("locked")),
+                    "claimable": bool(t.get("claimable")),
+                    "claimed": bool(t.get("claimed") or status == "claimed"),
                     "current": prog.get("current", 0),
                     "target": prog.get("target", spec.get("target", 1)),
                     "reward_credit": t.get("reward_credit") or spec.get("reward", 0),
@@ -520,6 +526,100 @@ DESKTOP_ACTIONS = {
     "create_canvas": run_desktop_canvas,
     "Hp_Appearance": run_desktop_appearance,
 }
+
+
+def run_single_task(account, code, gap=1.0):
+    """执行单个成长任务动作并自动领奖（panel runGrowthQueued 同语义）。
+
+    回傳 (ok, message, earned_credit)。隊列與單任務入口共用本函數：先回讀任務
+    狀態（已領取/未解鎖/不可自動化直接跳過），需要時補接取，再按 DESKTOP_ACTIONS
+    或通用事件上報，等進度落賬後領獎。
+    """
+    if account.realm != "cn":
+        return False, "国际版不适用国内成长任务中心", 0
+    tasks = fetch_growth_tasks(account)
+    task = next((t for t in tasks if t["task_code"] == code), None)
+    if task is None:
+        return False, "该账号无此任务", 0
+    if task.get("claimed") or task.get("status") == "claimed":
+        return True, "已完成（已领取）", 0
+    if task.get("unforgeable"):
+        return False, "该任务不可自动化: %s" % (task.get("reason") or ""), 0
+    if task.get("locked"):
+        return True, "任务未解锁（上游锁定），跳过", 0
+    if code in NIGHT_TASK_CODES and not in_night_window():
+        return True, "夜猫子任务仅 23:00-08:00 计数，跳过", 0
+
+    cur = int(task.get("current") or 0)
+    tgt = int(task.get("target") or 1)
+    if task.get("claimable") or cur >= tgt or task.get("upstream_status") == "complete":
+        res = claim_task(account, code)
+        if res.get("ok"):
+            credit = res.get("credit", 0) or 0
+            return True, "已达标，领奖成功 +%s 积分" % credit, credit
+        return False, "已达标但领奖失败: %s" % (res.get("msg") or "未知原因"), 0
+
+    if task.get("status") == "not_accepted":
+        accepted = accept_tasks(account, [code])
+        if code not in (accepted.get("accepted") or []):
+            return False, "接取失败: %s" % (accepted.get("msg") or "上游拒绝"), 0
+        time.sleep(gap)
+        tasks = fetch_growth_tasks(account)
+        task = next((t for t in tasks if t["task_code"] == code), task)
+        cur = int(task.get("current") or 0)
+        tgt = int(task.get("target") or tgt or 1)
+
+    need = max(1, tgt - cur)
+    action = DESKTOP_ACTIONS.get(code)
+    if action:
+        try:
+            report_ok, detail = action(account, need)
+        except Exception as exc:
+            return False, "事件链异常: %s" % exc, 0
+    else:
+        spec = TASK_SPECS.get(code) or {}
+        kind = spec.get("kind")
+        report_ok = True
+        detail = "已上报 %s 事件 ×%d" % (kind or "heartbeat", need)
+        id_pool = None
+        if kind in ("expert", "team"):
+            id_pool = TEAM_ID_POOL if kind == "team" else EXPERT_ID_POOL
+        for i in range(need):
+            expert = None
+            if id_pool:
+                pid, pnm = id_pool[(cur + i) % len(id_pool)]
+                expert = (pid, pnm)
+            event = build_event(account, kind, idx=i, expert=expert)
+            if not report_events(account, [event]):
+                report_ok = False
+            if i < need - 1:
+                time.sleep(gap)
+    if not report_ok:
+        return False, "事件上报失败（上游拒绝）", 0
+
+    # Wait for the upstream to post the progress (usually 1-3s).
+    prog = cur
+    for attempt in range(6):
+        fresh = next((x for x in fetch_growth_tasks(account)
+                      if x["task_code"] == code), None)
+        if fresh:
+            prog = int(fresh.get("current") or 0)
+            if prog >= tgt or fresh.get("status") in ("completed", "claimed"):
+                break
+            if prog > cur:
+                time.sleep(2.5)
+                continue
+        if attempt < 2:
+            time.sleep(1.5)
+        else:
+            break
+    if prog < tgt:
+        return False, "%s；进度 %s/%s 未达成，领奖顺延" % (detail, prog, tgt), 0
+    res = claim_task(account, code)
+    if res.get("ok"):
+        credit = res.get("credit", 0) or 0
+        return True, "%s；领奖成功 +%s 积分" % (detail, credit), credit
+    return False, "进度已达 %s/%s 但领奖失败: %s" % (prog, tgt, res.get("msg") or "未知原因"), 0
 
 
 def run_growth_tasks(account, gap=1.0):
