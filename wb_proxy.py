@@ -416,6 +416,11 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         row["account"] = account
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = acc.realm if acc else CURRENT_REALM
+    if account and POOL and not usage_missing and fields.get("total_tokens"):
+        try:
+            POOL.note_model_cost(account, model, fields.get("credit"))
+        except Exception:
+            pass
     # Derived per-request rates (None-safe).
     if gen_ms and gen_ms > 0:
         row["tokens_per_sec"] = round(fields.get("completion_tokens", 0) / (gen_ms / 1000.0), 2)

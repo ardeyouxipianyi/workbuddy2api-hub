@@ -13,6 +13,7 @@ from unittest import mock
 
 _startup_dir = tempfile.TemporaryDirectory(prefix="pool-governance-")
 os.environ["ACCOUNTS_DIR"] = _startup_dir.name
+os.environ["WB_PROXY_USAGE_DIR"] = _startup_dir.name
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
@@ -327,6 +328,113 @@ class SessionDeadTests(unittest.TestCase):
         account.note_success()
         self.assertEqual(account.session_dead_fails, 0)
         self.assertFalse(account.note_session_dead("12153"))
+
+
+class CostLedgerTests(unittest.TestCase):
+    def make_pool(self, *accounts):
+        pool = wb_accounts.AccountPool(_startup_dir.name)
+        pool.accounts = list(accounts)
+        pool.apply_pool_config(wb_pool.normalize(None))
+        return pool
+
+    def test_note_model_cost_marks_free_and_paid(self):
+        pool = self.make_pool()
+        now = [5000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("a", "m-free", 0)
+            pool.note_model_cost("a", "m-paid", 0.35)
+        self.assertEqual(pool.cost_ledger[("a", "m-free")]["tier"], 0)
+        self.assertEqual(pool.cost_ledger[("a", "m-paid")]["tier"], 2)
+
+    def test_cost_layer_prefers_free_then_unknown(self):
+        free = make_account("free")
+        paid = make_account("paid")
+        unknown = make_account("unknown")
+        pool = self.make_pool(free, paid, unknown)
+        cfg = wb_pool.normalize({"cost_explore_interval": 0})
+        now = [5000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("free", "m", 0)
+        chosen = pool._apply_cost_layer([free, paid, unknown], "m", cfg, now[0])
+        self.assertEqual([a.uid for a in chosen], ["free"])
+        # Keep the paid observation fresh while the free one ages out: the
+        # unknown layer is then preferred over the measured-paid one.
+        now[0] += cfg["cost_ledger_ttl"] - 10
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("paid", "m", 0.2)
+        now[0] += 11
+        chosen = pool._apply_cost_layer([free, paid, unknown], "m", cfg, now[0])
+        self.assertEqual(sorted(a.uid for a in chosen), ["free", "unknown"])
+
+    def test_exploration_routes_to_unknown_then_back(self):
+        free = make_account("free")
+        unknown = make_account("unknown")
+        pool = self.make_pool(free, unknown)
+        cfg = wb_pool.normalize({"cost_explore_interval": 100})
+        now = [9000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("free", "m", 0)
+        first = pool._apply_cost_layer([free, unknown], "m", cfg, now[0])
+        self.assertEqual([a.uid for a in first], ["unknown"])
+        second = pool._apply_cost_layer([free, unknown], "m", cfg, now[0] + 10)
+        self.assertEqual([a.uid for a in second], ["free"])
+        third = pool._apply_cost_layer([free, unknown], "m", cfg, now[0] + 101)
+        self.assertEqual([a.uid for a in third], ["unknown"])
+
+    def test_credit_floor_only_blocks_measured_paid_below_floor(self):
+        free = make_account("free", credits=10)
+        paid = make_account("paid", credits=50)
+        rich = make_account("rich", credits=500)
+        unknown = make_account("unknown")
+        pool = self.make_pool(free, paid, rich, unknown)
+        cfg = wb_pool.normalize({"credit_floor": 100})
+        now = [7000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("free", "m", 0)
+            pool.note_model_cost("paid", "m", 0.2)
+            pool.note_model_cost("rich", "m", 0.2)
+        kept = pool._apply_credit_floor([free, paid, rich, unknown], "m",
+                                        cfg, now[0])
+        self.assertEqual(sorted(a.uid for a in kept), ["free", "rich", "unknown"])
+
+    def test_pick_returns_none_when_every_candidate_is_floor_blocked(self):
+        paid = make_account("paid", credits=1)
+        pool = self.make_pool(paid)
+        pool.apply_pool_config(wb_pool.normalize({"credit_floor": 100}))
+        now = [8000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            pool.note_model_cost("paid", "m", 0.5)
+            picked = pool.pick(model="m")
+        self.assertIsNone(picked)
+
+
+class CostRecordingTests(unittest.TestCase):
+    def test_record_usage_feeds_the_cost_ledger(self):
+        import wb_proxy
+
+        seen = []
+
+        class StubPool(object):
+            def get(self, uid):
+                return None
+
+            def note_model_cost(self, uid, model, credit):
+                seen.append((uid, model, credit))
+
+        old = wb_proxy.POOL
+        wb_proxy.POOL = StubPool()
+        try:
+            wb_proxy.record_usage("m", {"total_tokens": 10, "credit": 0.25},
+                                  account="acct-1")
+        finally:
+            wb_proxy.POOL = old
+        self.assertEqual(seen, [("acct-1", "m", 0.25)])
 
 
 if __name__ == "__main__":

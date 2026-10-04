@@ -28,6 +28,9 @@ DEFAULTS = {
     "max_in_flight": 3,
     "max_in_flight_global": 2,
     "top_n": 5,
+    "cost_ledger_ttl": 21600,
+    "cost_explore_interval": 1800.0,
+    "credit_floor": 0,
     "min_pick_gap": 0.1,
     "affinity_ttl": 7200,
     "affinity_max_entries": 5000,
@@ -44,6 +47,8 @@ _INT_MIN = {
     "affinity_ttl": 60,
     "affinity_max_entries": 100,
     "session_dead_threshold": 1,
+    "cost_ledger_ttl": 60,
+    "credit_floor": 0,
 }
 _FLOAT_KEYS = (
     "soft_rate",
@@ -55,6 +60,7 @@ _FLOAT_KEYS = (
     "idle_weight_per_hour",
     "idle_weight_max",
     "min_pick_gap",
+    "cost_explore_interval",
 )
 
 

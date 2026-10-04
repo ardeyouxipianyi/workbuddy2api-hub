@@ -1065,6 +1065,10 @@ class AccountPool(object):
         self._cursor = 0
         self.pool_cfg = wb_pool.normalize(None)
         self.affinity = SessionAffinity()
+        # Panel-parity cost ledger: (uid, model) -> {tier, at, credit}.
+        # tier 0 = measured free, 2 = measured paid, absent/stale = unknown.
+        self.cost_ledger = {}
+        self.cost_explored_at = {}
 
     def load(self):
         with self._lock:
@@ -1243,6 +1247,75 @@ class AccountPool(object):
                 else:
                     account.proxy = account.proxy_legacy
 
+    def note_model_cost(self, uid, model, credit):
+        """Record one measured cost observation for (account, model)."""
+        uid = str(uid or "")
+        model = str(model or "")
+        if not uid or not model:
+            return
+        try:
+            credit = float(credit or 0)
+        except (TypeError, ValueError):
+            return
+        tier = 2 if credit > 0 else 0
+        now = time.time()
+        with self._lock:
+            self.cost_ledger[(uid, model)] = {"tier": tier, "at": now,
+                                              "credit": credit}
+            if len(self.cost_ledger) > 5000:
+                cutoff = now - 86400
+                self.cost_ledger = {k: v for k, v in self.cost_ledger.items()
+                                    if v.get("at", 0) >= cutoff}
+
+    def _cost_tier(self, account, model, cfg, now):
+        ttl = float(cfg.get("cost_ledger_ttl") or 21600)
+        entry = self.cost_ledger.get((account.uid, model))
+        if not entry or now - entry.get("at", 0) > ttl:
+            return 1
+        return entry.get("tier", 1)
+
+    def _apply_cost_layer(self, candidates, model, cfg, now):
+        """Keep the cheapest measured layer; explore unknown accounts.
+
+        tier 0 (measured free) wins over tier 1 (unknown), which wins over
+        tier 2 (measured paid). When a free layer monopolises while unknown
+        accounts exist, one request per cost_explore_interval is routed to
+        an unknown account so the ledger can learn - the panel project's
+        条件探索, adapted here (no extra upstream request).
+        """
+        if not candidates:
+            return candidates
+        tiers = [(a, self._cost_tier(a, model, cfg, now)) for a in candidates]
+        best = min(t for _a, t in tiers)
+        chosen = [a for a, t in tiers if t == best]
+        unknown = [a for a, t in tiers if t == 1]
+        interval = float(cfg.get("cost_explore_interval") or 0)
+        if best == 0 and unknown and interval > 0:
+            last = self.cost_explored_at.get(model, 0.0)
+            if now - last >= interval:
+                self.cost_explored_at[model] = now
+                return unknown
+        return chosen
+
+    def _apply_credit_floor(self, candidates, model, cfg, now):
+        """Drop measured-paid models once the balance is at the floor.
+
+        Only a *measured paid* tier and a *known* balance can exclude an
+        account: unknown accounts stay usable so the ledger can still
+        learn, and free models are never blocked by the floor.
+        """
+        floor = int(cfg.get("credit_floor") or 0)
+        if floor <= 0:
+            return candidates
+        out = []
+        for account in candidates:
+            if self._cost_tier(account, model, cfg, now) == 2:
+                remain = wb_pool.credits_remain(account)
+                if remain is not None and remain <= floor:
+                    continue
+            out.append(account)
+        return out
+
     def apply_pool_config(self, cfg=None):
         """Re-resolve the panel-parity pool rules for every account.
 
@@ -1386,6 +1459,10 @@ class AccountPool(object):
             return None
         if cfg.get("weighted_pick", True):
             candidates = [a for a in snapshot if a.ready(model=model)]
+            if not candidates:
+                return None
+            candidates = self._apply_cost_layer(candidates, model, cfg, now)
+            candidates = self._apply_credit_floor(candidates, model, cfg, now)
             if not candidates:
                 return None
             account = wb_pool.choose(candidates, cfg, now=now)
