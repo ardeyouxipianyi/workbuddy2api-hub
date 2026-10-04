@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 import wb_accounts as _accounts
+import wb_desktop
 
 CHAT_BASE = "https://copilot.tencent.com"
 BILL_BASE = "https://www.codebuddy.cn"
@@ -58,15 +59,10 @@ TASK_SPECS = {
 # ---------------------------------------------------------------------------
 # 逆向修复常量 (2026-09 实测校准)
 # ---------------------------------------------------------------------------
-# 这些任务上游只认桌面客户端的真实行为信号 (jump_url 均为 workbuddy:// 深链,
-# 需要真实点击进入对应页面)。伪造 /v2/report 事件会被忽略或落到 heartbeat,
-# 进度永远是 0/1, claim 必然返回 400 "task not completed"。诚实地跳过并给出深链。
-DESKTOP_ONLY_TASKS = {
-    "RichMeow_Chat": "在桌面端发起 1 次对话",
-    "Library_read": "在桌面端打开「资料库」并读完介绍文档",
-    "Buddy_App": "在桌面端左上角「发现应用」进入任意一个 Buddy 应用",
-    "Buddy_App_QQ": "在桌面端「发现应用」进入「企鹅教师助手」",
-}
+# 这些任务需要桌面客户端的真实行为信号。panel 2026-09-12 多账号实测后，下列
+# 任务已能用带完整桌面指纹的事件链纯 API 点亮，见 DESKTOP_ACTIONS；此表仅保留
+# 尚未破解、必须真实操作的条目（当前为空，保留供后续逆向使用）。
+DESKTOP_ONLY_TASKS = {}
 
 # 夜猫子任务只在 23:00-08:00 上报才计数, 且每天 1 次、累计 3 天。
 NIGHT_TASK_CODES = {"black_cat"}
@@ -425,6 +421,107 @@ def do_cat_travel(account):
     return {"ok": True, "action": state, "msg": f"当前状态: {state}"}
 
 
+# ---------------------------------------------------------------------------
+# 桌面事件链动作（wb_desktop，panel 2026-09-12 多账号实测判据）
+# ---------------------------------------------------------------------------
+def _desktop_chat_chain(account, need, prefix):
+    ok_all = True
+    for i in range(max(1, need)):
+        ms = int(time.time() * 1000)
+        conv = "wb2api-%s-%d-%d" % (prefix, ms, i)
+        req = conv + "-req"
+        events = wb_desktop.chat_sequence(conv, req,
+                                          "msg-%s-%d" % (prefix, i),
+                                          "fast-model", "fast-model")
+        if not wb_desktop.report_desktop_events(account, events):
+            ok_all = False
+        time.sleep(0.3)
+    return ok_all, "已上报桌面端完整对话事件链 ×%d" % max(1, need)
+
+
+def run_desktop_richmeow(account, need):
+    return _desktop_chat_chain(account, 1, "rm")
+
+
+def run_desktop_buddy_app(account, need):
+    ok = wb_desktop.report_desktop_events(account, wb_desktop.buddy_app_sequence())
+    return ok, "已上报 buddyapp 进入五连事件（同时覆盖 Buddy_App 与 Buddy_App_QQ）"
+
+
+def run_desktop_automation(account, need):
+    ok = wb_desktop.report_desktop_events(
+        account, [wb_desktop.automation_create_event()])
+    return ok, "已上报定时任务创建事件"
+
+
+def run_desktop_library(account, need):
+    ok = wb_desktop.report_web_event(
+        account, "web_element_click",
+        "https://www.workbuddy.cn/space/d/o0KWYeynteVv06UnAZqIFm",
+        "library_doc_intro_click", "WorkBuddy资料库介绍")
+    return ok, "已上报资料库介绍阅读事件（web 指纹）"
+
+
+_TEMPLATE_POOL = [("1", "深度研究"), ("2", "周报生成"), ("3", "竞品分析"),
+                  ("4", "活动策划"), ("5", "代码评审")]
+
+
+def run_desktop_template(account, need):
+    ok_all = True
+    count = max(1, need)
+    for i in range(count):
+        tid, tname = _TEMPLATE_POOL[i % len(_TEMPLATE_POOL)]
+        ms = int(time.time() * 1000)
+        conv = "wb2api-tpl-%d-%d" % (ms, i)
+        req = conv + "-req"
+        events = wb_desktop.template_use_sequence(conv, req, tid, tname)
+        if not wb_desktop.report_desktop_events(account, events):
+            ok_all = False
+        time.sleep(0.3)
+    return ok_all, "已上报 template_used ×%d" % count
+
+
+def run_desktop_playbook(account, need):
+    ms = int(time.time() * 1000)
+    conv = "wb2api-pb-%d" % ms
+    req = conv + "-req"
+    events = wb_desktop.playbook_prompt_sequence(
+        conv, req, "pm-gtm-launch-plan", "新产品上市 GTM 发布计划一页纸")
+    ok = wb_desktop.report_desktop_events(account, events)
+    return ok, "已上报 playbook_cta_click + playbook_prompt_send"
+
+
+def run_desktop_canvas(account, need):
+    ms = int(time.time() * 1000)
+    conv = "wb2api-canvas-%d" % ms
+    req = conv + "-req"
+    events = wb_desktop.design_canvas_sequence(conv, req)
+    ok = wb_desktop.report_desktop_events(account, events)
+    return ok, "已上报 wbx_design_canvas_task_create/open"
+
+
+def run_desktop_appearance(account, need):
+    theme = "theme-tkmw7j"
+    wb_desktop.set_appearance_theme(account, theme)
+    time.sleep(2)
+    ok = wb_desktop.report_desktop_events(
+        account, [wb_desktop.appearance_skin_event(theme)])
+    return ok, "已设置主题并上报皮肤生效事件"
+
+
+DESKTOP_ACTIONS = {
+    "RichMeow_Chat": run_desktop_richmeow,
+    "Buddy_App": run_desktop_buddy_app,
+    "Buddy_App_QQ": run_desktop_buddy_app,
+    "automation_1": run_desktop_automation,
+    "Library_read": run_desktop_library,
+    "template_5": run_desktop_template,
+    "playbook_prompt": run_desktop_playbook,
+    "create_canvas": run_desktop_canvas,
+    "Hp_Appearance": run_desktop_appearance,
+}
+
+
 def run_growth_tasks(account, gap=1.0):
     """完整执行批量成长任务点亮与领奖。"""
     if account.realm != "cn":
@@ -519,23 +616,32 @@ def run_growth_tasks(account, gap=1.0):
         #    (eventCode, id) 去重, 进度永远不动。
         need = max(1, tgt - cur)
         kind = spec.get("kind")
-        logs.append(f"正在点亮任务 [{spec['name']}] (需上报 {need} 次)...")
-        report_ok = True
-        id_pool = None
-        if kind in ("expert", "team"):
-            id_pool = TEAM_ID_POOL if kind == "team" else EXPERT_ID_POOL
-        for i in range(need):
-            expert = None
-            if id_pool:
-                pid, pnm = id_pool[(cur + i) % len(id_pool)]
-                expert = (pid, pnm)
-            ev = build_event(account, kind, idx=i, expert=expert)
-            if not report_events(account, [ev]):
-                report_ok = False
-            if i < need - 1:
-                time.sleep(gap)
-        if not report_ok:
-            logs.append(f"! 任务 [{spec['name']}] 部分事件上报失败 (上游拒绝), 继续尝试领奖")
+        action = DESKTOP_ACTIONS.get(code)
+        if action:
+            logs.append(f"正在点亮任务 [{spec['name']}] (桌面事件链 ×{need})...")
+            try:
+                report_ok, detail = action(account, need)
+            except Exception as exc:
+                report_ok, detail = False, "事件链异常: %s" % exc
+            logs.append(("✓ " if report_ok else "! ") + detail)
+        else:
+            logs.append(f"正在点亮任务 [{spec['name']}] (需上报 {need} 次)...")
+            report_ok = True
+            id_pool = None
+            if kind in ("expert", "team"):
+                id_pool = TEAM_ID_POOL if kind == "team" else EXPERT_ID_POOL
+            for i in range(need):
+                expert = None
+                if id_pool:
+                    pid, pnm = id_pool[(cur + i) % len(id_pool)]
+                    expert = (pid, pnm)
+                ev = build_event(account, kind, idx=i, expert=expert)
+                if not report_events(account, [ev]):
+                    report_ok = False
+                if i < need - 1:
+                    time.sleep(gap)
+            if not report_ok:
+                logs.append(f"! 任务 [{spec['name']}] 部分事件上报失败 (上游拒绝), 继续尝试领奖")
         time.sleep(1.5)
 
         # 等上游把进度落账再领奖。进度通常 1-3 秒就可见, 因此先快查几次;
