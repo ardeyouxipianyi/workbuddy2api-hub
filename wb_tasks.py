@@ -8,6 +8,7 @@
 """
 import datetime
 import json
+import os
 import re
 import time
 import urllib.error
@@ -56,6 +57,16 @@ TASK_SPECS = {
     "Library_read": {"kind": "library", "target": 1, "reward": 100, "name": "浏览资料库"},
     "first_buddy": {"kind": "buddy_first", "target": 1, "reward": 0, "name": "领养首只猫猫"},
     "Expert_Philanthropy": {"unforgeable": True, "reason": "真实捐款动作", "reward": 0, "name": "公益爱心捐赠"},
+    # 小程序（mp）口徑常態任務：默認列表不下發，需 X-Client-Platform: miniprogram。
+    # school_season（校園日）活動已於 2026-09-24 結束，不登記（mp 列表出現也會被
+    # pending() 過濾）。Sequential 族每日零點解鎖一環。
+    "Sequential_Tasks_1": {"kind": "mpchat", "target": 1, "reward": 100, "name": "小程序首对话"},
+    "Sequential_Tasks_2": {"kind": "mpexpert", "target": 1, "reward": 200, "name": "小程序选专家对话"},
+    "Sequential_Tasks_3": {"kind": "mpchat", "target": 5, "reward": 300, "name": "小程序五次对话"},
+    "Sequential_Tasks_4": {"kind": "mpauto", "target": 1, "reward": 100, "name": "小程序定时任务"},
+    "Sequential_Tasks_5": {"kind": "mpmodel", "target": 1, "reward": 100, "name": "小程序使用 GLM5.2"},
+    "Sequential_Tasks_6": {"kind": "mpchat", "target": 10, "reward": 500, "name": "小程序十次对话"},
+    "Sequential_Tasks_7": {"kind": "mpplaybook", "target": 1, "reward": 500, "name": "小程序体验灵感"},
 }
 
 # ---------------------------------------------------------------------------
@@ -97,10 +108,14 @@ TEAM_ID_POOL = [
 ]
 
 
-def fetch_growth_tasks(account):
-    """查询成长任务列表及当前状态。"""
+def fetch_growth_tasks(account, mp=False):
+    """查询成长任务列表及当前状态；mp=True 走小程序口径（mp 专属任务）。"""
     url = CHAT_BASE + "/v2/activity/growth/tasks"
-    req = urllib.request.Request(url, headers=account.headers("chat"))
+    headers = account.headers("chat")
+    if mp:
+        headers = dict(headers)
+        headers["X-Client-Platform"] = "miniprogram"
+    req = urllib.request.Request(url, headers=headers)
     try:
         with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -166,7 +181,7 @@ def fetch_growth_summary(account):
     return out
 
 
-def accept_tasks(account, codes, chunk=20):
+def accept_tasks(account, codes, chunk=20, mp=False):
     """批量接取任务。
 
     上游按批返回 results, 单个任务可能 status=accepted / already_accepted /
@@ -182,8 +197,12 @@ def accept_tasks(account, codes, chunk=20):
     for i in range(0, len(codes), max(1, chunk)):
         part = codes[i:i + max(1, chunk)]
         body = json.dumps({"task_codes": part}).encode("utf-8")
+        headers = account.headers("chat")
+        if mp:
+            headers = dict(headers)
+            headers["X-Client-Platform"] = "miniprogram"
         req = urllib.request.Request(url, data=body, method="POST",
-                                     headers=account.headers("chat"))
+                                     headers=headers)
         try:
             with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
                 d = json.loads(resp.read().decode("utf-8"))
@@ -227,10 +246,14 @@ def accept_tasks(account, codes, chunk=20):
     return out
 
 
-def claim_task(account, code):
+def claim_task(account, code, mp=False):
     """领取任务奖励。支持 copilot.tencent.com -> www.workbuddy.cn 自动降级。"""
     url = f"{CHAT_BASE}/activity/growth/tasks/{code}/claim"
-    req = urllib.request.Request(url, data=b"{}", method="POST", headers=account.headers("chat"))
+    headers = account.headers("chat")
+    if mp:
+        headers = dict(headers)
+        headers["X-Client-Platform"] = "miniprogram"
+    req = urllib.request.Request(url, data=b"{}", method="POST", headers=headers)
     try:
         with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
@@ -753,6 +776,119 @@ def run_streak_bonus(account):
             "credits": account.credits}
 
 
+# 小程序對話事件之間的真人節奏間隔：連發會被反作弊回滾（claim 400
+# "task not completed"），panel 2026-09-26 實測 45s 間隔可穩定入賬。
+MP_CHAT_GAP = float(os.environ.get("WB_MP_CHAT_GAP") or "45")
+MP_SEQUENTIAL_CODES = ("Sequential_Tasks_1", "Sequential_Tasks_2",
+                       "Sequential_Tasks_3", "Sequential_Tasks_4",
+                       "Sequential_Tasks_5", "Sequential_Tasks_6",
+                       "Sequential_Tasks_7")
+
+
+def _report_sequential_events(account, code, need):
+    """上報對應 Sequential 任務的判據事件（panel 各 runSequential*）。"""
+    if code in ("Sequential_Tasks_1", "Sequential_Tasks_3", "Sequential_Tasks_6"):
+        for i in range(need):
+            conv = "wb2api-mp-%d-%d" % (int(time.time() * 1000), i)
+            if not wb_desktop.report_mp_events(
+                    account, [wb_desktop.mp_chat_event(conv)]):
+                return False, "小程序对话事件上报失败"
+            if i < need - 1:
+                time.sleep(MP_CHAT_GAP)
+        return True, "已上报小程序对话事件 ×%d（间隔 %.0fs 防回滚）" % (need, MP_CHAT_GAP)
+    if code == "Sequential_Tasks_2":
+        expert_id, expert_name = EXPERT_ID_POOL[0]
+        if not wb_desktop.report_mp_events(
+                account, [wb_desktop.mp_expert_event(expert_id, expert_name)]):
+            return False, "小程序专家事件上报失败"
+        return True, "已上报小程序专家使用事件（%s）" % expert_id
+    if code == "Sequential_Tasks_4":
+        if not wb_desktop.report_desktop_events(
+                account, [wb_desktop.automation_create_event("wb2api 自动化")]):
+            return False, "定时任务创建事件上报失败"
+        return True, "已上报定时任务创建事件（PC 同源判据）"
+    if code == "Sequential_Tasks_5":
+        conv = "wb2api-mp-glm-%d" % int(time.time() * 1000)
+        if not wb_desktop.report_mp_events(
+                account, [wb_desktop.mp_chat_event(conv, model_id="glm-5.2",
+                                                   model_name="GLM-5.2")]):
+            return False, "小程序模型对话事件上报失败"
+        return True, "已上报小程序 GLM-5.2 对话事件"
+    if code == "Sequential_Tasks_7":
+        ms = int(time.time() * 1000)
+        conv = "wb2api-pb-%d" % ms
+        req = conv + "-req"
+        if wb_desktop.report_desktop_events(
+                account, wb_desktop.playbook_prompt_sequence(
+                    conv, req, "pm-gtm-launch-plan",
+                    "新产品上市 GTM 发布计划一页纸")):
+            return True, "已上报灵感事件组（PC 判据）"
+        if wb_desktop.report_mp_events(
+                account, wb_desktop.mp_playbook_events(
+                    "pm-gtm-launch-plan", "新产品上市 GTM 发布计划一页纸")):
+            return True, "已上报灵感事件组（mp 备选判据）"
+        return False, "灵感事件组上报失败"
+    return False, "未知 Sequential 任务 %s" % code
+
+
+def run_sequential_task(account, code, gap=None):
+    """Sequential 小程序任務通用骨架（panel runSequentialEventTask）。
+
+    mp 查詢 → accept（mp 頭）→ 判據事件上報 → 回讀 → 達標領獎（mp 頭）。
+    locked 期間 accept 不落賬，直接跳過等次日零點解鎖。
+    """
+    if account.realm != "cn":
+        return False, "国际版不适用国内成长任务中心", 0
+    if code not in MP_SEQUENTIAL_CODES:
+        return False, "不是小程序 Sequential 任务", 0
+    tasks = fetch_growth_tasks(account, mp=True)
+    task = next((t for t in tasks if t["task_code"] == code), None)
+    if task is None:
+        return True, "mp 口径未下发该任务（前置未完成或活动未开始），跳过", 0
+    if task.get("claimed") or task.get("status") == "claimed":
+        return True, "已完成（已领取）", 0
+    if task.get("locked"):
+        return True, "任务未解锁（每日零点解锁一环），跳过", 0
+    target = max(1, int(task.get("target") or 1))
+    current = int(task.get("current") or 0)
+    if task.get("claimable") or current >= target or task.get("status") == "completed":
+        res = claim_task(account, code, mp=True)
+        if res.get("ok"):
+            credit = res.get("credit", 0) or 0
+            return True, "已达标，领奖成功 +%s 积分" % credit, credit
+        return False, "已达标但领奖失败: %s" % (res.get("msg") or "未知原因"), 0
+    if task.get("status") == "not_accepted":
+        accepted = accept_tasks(account, [code], mp=True)
+        if code not in (accepted.get("accepted") or []):
+            return True, "accept 未登记生效（可能处于每日锁定窗口），等下次调度", 0
+        time.sleep(gap if gap is not None else 1.0)
+        tasks = fetch_growth_tasks(account, mp=True)
+        task = next((t for t in tasks if t["task_code"] == code), task)
+        target = max(1, int(task.get("target") or target))
+        current = int(task.get("current") or 0)
+    need = max(1, target - current)
+    ok, detail = _report_sequential_events(account, code, need)
+    if not ok:
+        return False, detail, 0
+    prog = current
+    for _round in range(3):
+        time.sleep(3.0)
+        fresh = next((t for t in fetch_growth_tasks(account, mp=True)
+                      if t["task_code"] == code), None)
+        if fresh:
+            prog = int(fresh.get("current") or 0)
+            if fresh.get("claimable") or fresh.get("claimed") or prog >= target:
+                break
+    if prog < target:
+        return False, "%s；进度 %s/%s 未点亮（判据形态待校正，下次重试）" % (
+            detail, prog, target), 0
+    res = claim_task(account, code, mp=True)
+    if res.get("ok"):
+        credit = res.get("credit", 0) or 0
+        return True, "%s；领奖成功 +%s 积分" % (detail, credit), credit
+    return False, "进度已达但领奖失败: %s" % (res.get("msg") or "未知原因"), 0
+
+
 def run_single_task(account, code, gap=1.0):
     """执行单个成长任务动作并自动领奖（panel runGrowthQueued 同语义）。
 
@@ -762,6 +898,8 @@ def run_single_task(account, code, gap=1.0):
     """
     if account.realm != "cn":
         return False, "国际版不适用国内成长任务中心", 0
+    if code in MP_SEQUENTIAL_CODES:
+        return run_sequential_task(account, code, gap=gap)
     tasks = fetch_growth_tasks(account)
     task = next((t for t in tasks if t["task_code"] == code), None)
     if task is None:

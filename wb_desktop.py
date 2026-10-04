@@ -18,6 +18,7 @@ import hashlib
 import json
 import time
 import urllib.request
+import uuid
 
 import wb_accounts
 
@@ -26,6 +27,18 @@ WEB_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
 DESKTOP_REPORT_PATH = "/v2/report"
 APPEARANCE_SET_PATH = "/v2/user-asset/appearance/set"
+# 小程序（mp）事件指紋常數（panel mpEventBase：appservice wQ()/Ao() 對齊）。
+MP_IDE_TYPE = "WorkBuddy_MP"
+MP_EXT_VERSION = "2.4.0"
+MP_MACHINE_ID = "0655736a-607f-4d9d-b430-58176ee9a090"
+# mp 上報走 billing 域（panel BillingBaseCN），與 web 事件（workbuddy.cn）不同域。
+MP_REPORT_BASE_CN = "https://www.codebuddy.cn"
+MP_REPORT_HEADERS = {
+    "X-Client-Product": "workbuddy-mp",
+    "X-Client-Version": MP_EXT_VERSION,
+    "X-Client-Platform": "mp-weixin",
+    "X-Platform": "wechatmp",
+}
 # Web 控制台 origin（panel webBase：CN = www.workbuddy.cn，國際 = www.workbuddy.ai）。
 WEB_BASE_CN = "https://www.workbuddy.cn"
 WEB_BASE_INTL = "https://www.workbuddy.ai"
@@ -136,6 +149,101 @@ def report_web_event(account, event_code, page_url, element_id, element_name):
         "X-User-Id": account.uid,
     }
     return _post_report(account, base + DESKTOP_REPORT_PATH, [event], headers)
+
+
+def mp_event_base(account):
+    """小程序埋點公共指紋（每個事件注入；業務欄位可覆蓋同名鍵）。"""
+    return {
+        "timestamp": int(time.time() * 1000),
+        "ideType": MP_IDE_TYPE,
+        "ideVersion": MP_EXT_VERSION,
+        "extName": "workbuddy-mp",
+        "extVersion": MP_EXT_VERSION,
+        "product": "SaaS",
+        "ideName": "wx_app_cloud",
+        "platform": "mini_program",
+        "os": "windows",
+        "osVersion": "11",
+        "arch": "x64",
+        "machineId": MP_MACHINE_ID,
+        "timezone": "Asia/Shanghai",
+        "userId": account.uid,
+        "userNickname": account.nickname or "",
+    }
+
+
+def report_mp_events(account, events):
+    """以小程序指紋向 www.codebuddy.cn/v2/report 批量上報事件。"""
+    if not events:
+        return False
+    base = mp_event_base(account)
+    merged = []
+    for event in events:
+        item = dict(base)
+        item.update(event)
+        merged.append(item)
+    headers = {
+        "Authorization": "Bearer " + str(account.access_token or ""),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-User-Id": account.uid,
+    }
+    headers.update(MP_REPORT_HEADERS)
+    return _post_report(account, MP_REPORT_BASE_CN + DESKTOP_REPORT_PATH, merged, headers)
+
+
+def mp_chat_event(conversation_id, activity_id="", model_id="", model_name=""):
+    """小程序 chat_request_send 事件（Sequential 對話族判據）。"""
+    rid = "wb2api-" + uuid.uuid4().hex
+    event = {
+        "eventCode": "chat_request_send",
+        "inputLength": 14, "isPlan": False, "isAutoExecuteTerminal": False,
+        "isAutoModify": False, "codebaseEnable": False, "maxToken": 0,
+        "maxSteps": 500, "temperature": 0, "maxRetries": 0,
+        "mentionContexts": [], "knowledgeId": [], "knowledgeName": [],
+        "codebaseId": "", "mentionContextCount": 0, "command": "",
+        "recommendId": "", "skillId": "", "skillCount": 0, "totalCount": 0,
+        "traceId": rid, "rootRequestId": rid,
+        "parentConversationId": conversation_id,
+        "conversationId": conversation_id,
+        "messageId": "msg-" + rid[-8:],
+        "agentName": "mp", "agentType": "main",
+        "codebuddy.session_id": conversation_id,
+        "codebuddy.conversation_request_id": rid,
+    }
+    if activity_id:
+        event["activityId"] = activity_id
+    if model_id:
+        event["requestModelId"] = model_id
+        event["requestModelName"] = model_name or model_id
+    return event
+
+
+def mp_expert_event(expert_id, expert_name, expert_type="agent"):
+    """小程序 expert_actual_use 事件（Sequential_Tasks_2 判據）。"""
+    return {
+        "eventCode": "expert_actual_use", "reportDelay": 0,
+        "extVersion": "2.2.8", "source": "mini_program",
+        "id": expert_id, "name": expert_id,
+        "expertTitle": expert_name or expert_id, "type": "send_message",
+        "characterCount": 12, "expertType": expert_type or "agent",
+    }
+
+
+def mp_playbook_events(case_id, case_name):
+    """小程序靈感事件組（Sequential_Tasks_7 備選判據）。"""
+    base = {"id": case_id, "name": case_name, "type": "document",
+            "categoryId": "", "categoryName": "", "skills": "",
+            "skillNames": ""}
+    cta = {"eventCode": "playbook_cta_click", "source": "discover",
+           "position": 1, "extVersion": "2.2.8"}
+    cta.update(base)
+    send = {"eventCode": "playbook_prompt_send", "source": "discover",
+            "promptLength": 96, "isOfficial": 1,
+            "conversationId": "wb2api-mp-pb-" + uuid.uuid4().hex,
+            "extVersion": "2.2.8"}
+    send.update(base)
+    return [cta, send]
 
 
 def set_appearance_theme(account, resource_key):

@@ -75,6 +75,16 @@ class TaskQueue(object):
 
         def worker(account):
             tasks = wb_tasks.fetch_growth_tasks(account)
+            # C7: mp-only tasks (Sequential family) live behind the miniprogram
+            # header; merge them by code so the queue sees the whole to-do list.
+            try:
+                mp_tasks = wb_tasks.fetch_growth_tasks(account, mp=True)
+            except Exception:
+                mp_tasks = []
+            seen = {t.get("task_code") for t in tasks}
+            for task in mp_tasks:
+                if task.get("task_code") not in seen:
+                    tasks.append(task)
             pending = [t for t in tasks if self.pending(t)]
             item = {
                 "uid": account.uid,
