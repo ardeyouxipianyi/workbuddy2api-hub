@@ -1772,6 +1772,8 @@ function accountRow(a){
     +     '<button class="sec mini" onclick="testAccount(&quot;' + uidAttr + '&quot;, this)">测试</button>'
     +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>'
     +     '<button class="sec mini" onclick="syncProfile(&quot;' + uidAttr + '&quot;, this)" title="从 Web 控制台同步最新昵称（改名后免重登）">同步昵称</button>'
+    +     (a.realm === 'intl' ? ('<button class="sec mini" onclick="activateGlobal(&quot;' + uidAttr + '&quot;, this)" title="补注册地区并激活国际版账号（幂等）">激活</button>'
+    +       '<button class="sec mini" onclick="claimTrial(&quot;' + uidAttr + '&quot;, this)" title="领取一次性 trial 加油包（幂等）">Trial</button>') : '')
     +   '</div>'
     +   '<div class="acct-actions-row">'
     +     '<div class="id-btn-group" title="出站身分：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
@@ -1908,6 +1910,32 @@ async function refreshOne(uid, btn){
     toast('刷新失败: ' + e.message, 'bad');
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '刷新凭证'; }
+  }
+}
+async function activateGlobal(uid, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '激活中...'; }
+  try{
+    const r = await postJSON('/accounts/global-register', {uid: uid});
+    if(r.ok) toast('国际版账号已激活: ' + (r.detail || ''), 'ok');
+    else toast('激活失败: ' + (r.error || '未知错误'), 'bad');
+    await loadAccounts();
+  }catch(e){
+    toast('激活请求失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '激活'; }
+  }
+}
+async function claimTrial(uid, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '领取中...'; }
+  try{
+    const r = await postJSON('/accounts/trial', {uid: uid});
+    if(!r.ok) toast('Trial 领取失败: ' + (r.error || '未知错误'), 'bad');
+    else toast(r.claimed ? 'Trial 加油包已领取' : 'Trial 已领过（幂等）', r.claimed ? 'ok' : 'warn');
+    await loadAccounts();
+  }catch(e){
+    toast('Trial 请求失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Trial'; }
   }
 }
 async function syncProfile(uid, btn){

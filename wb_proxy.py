@@ -42,6 +42,7 @@ import wb_settings
 import wb_webtools
 import wb_identity
 import wb_prompt
+import wb_global
 IS_WINDOWS = os.name == "nt"
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
@@ -6701,6 +6702,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_accounts_refresh(payload)
         if path == "/accounts/sync-profile":
             return self._route_accounts_sync_profile(payload)
+        if path == "/accounts/global-register":
+            return self._route_accounts_global_register(payload)
+        if path == "/accounts/trial":
+            return self._route_accounts_trial(payload)
         if path == "/accounts/test":
             return self._route_accounts_test(payload)
         if path == "/accounts/set":
@@ -6714,6 +6719,50 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/accounts/import":
             return self._route_accounts_import(payload)
         return self._error(404, "unknown account endpoint", "invalid_request_error")
+    def _route_accounts_global_register(self, payload):
+        """Manual international-account activation (panel global_register.go).
+
+        Region completion is idempotent and never runs in the background:
+        the operator triggers it from the dashboard or scripts/trial.py.
+        """
+        uid = str(payload.get("uid") or "").strip()
+        account = POOL.get(uid) if uid else None
+        if account is None:
+            return self._error(404, "account not found", "invalid_request_error")
+        try:
+            activated, detail = wb_global.complete_registration(account)
+        except Exception as exc:
+            log("global register failed for %s: %s" % (account.uid[:8], exc),
+                level="WARN")
+            return self._json(200, {"ok": False, "uid": account.uid,
+                                    "error": str(exc)[:300]})
+        log("account %s: global registration %s" % (account.uid[:8], detail),
+            level="INFO")
+        return self._json(200, {"ok": True, "uid": account.uid,
+                                "activated": activated, "detail": detail,
+                                "accounts": account_views()})
+
+    def _route_accounts_trial(self, payload):
+        """Manual one-shot trial top-up (panel trial.go, international only)."""
+        uid = str(payload.get("uid") or "").strip()
+        account = POOL.get(uid) if uid else None
+        if account is None:
+            return self._error(404, "account not found", "invalid_request_error")
+        try:
+            claimed = wb_global.claim_trial(account)
+        except Exception as exc:
+            log("trial claim failed for %s: %s" % (account.uid[:8], exc),
+                level="WARN")
+            return self._json(200, {"ok": False, "uid": account.uid,
+                                    "error": str(exc)[:300]})
+        log("account %s: trial %s" % (account.uid[:8],
+                                      "claimed" if claimed else "already claimed"),
+            level="INFO")
+        return self._json(200, {"ok": True, "uid": account.uid,
+                                "claimed": claimed,
+                                "detail": "claimed" if claimed else "already claimed",
+                                "accounts": account_views()})
+
     def _route_accounts_sync_profile(self, payload):
         """Manual nickname refresh from the web console (panel issue #94).
 
