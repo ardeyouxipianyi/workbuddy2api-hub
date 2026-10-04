@@ -1,0 +1,56 @@
+name: release-checksums
+
+# The portable green package is built locally (it bundles the Python runtime,
+# which is .gitignored), so CI cannot rebuild the zip. This workflow hashes
+# whatever assets the release already carries and attaches checksums.txt,
+# mirroring the panel's "binaries + checksums" release discipline (M6 F1).
+#
+# If the zip is uploaded *after* the release is published, re-run this
+# workflow from the Actions tab with the tag as input.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to hash (e.g. v1.6.10)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  checksums:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the release tag
+        id: rel
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "${{ steps.rel.outputs.tag }}" --dir dist --clobber
+      - name: checksums
+        run: |
+          cd dist
+          rm -f checksums.txt
+          if [ -z "$(ls -A)" ]; then
+            echo "::error::release ${{ steps.rel.outputs.tag }} has no assets to hash"
+            exit 1
+          fi
+          sha256sum * > checksums.txt
+          cat checksums.txt
+      - name: Upload checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.rel.outputs.tag }}" dist/checksums.txt --clobber

@@ -115,6 +115,8 @@ GHCR 新包默认私有；如需免登录拉取，首次发布后在 Packages �
 - **改 `PORT` 要同步改端口映射**：`PORT` 只决定容器内监听哪个端口，`-p HOST:CONTAINER` 的**右侧必须与之一致**，例如 `-e PORT=9000 -p 9000:9000`；只改 `PORT` 而映射仍是 `8788:8788`，请求会打到没人监听的端口上。用 compose 时 `ports` 与 `PORT` 要同时改（默认的 `8788:8788` + `PORT=8788` 本来就一致）。
 - **鉴权**：容器以 `--lan` 启动（监听 `0.0.0.0`），会生成 API Key 写入 `./accounts/settings.json`，并打印在启动日志里：
   `docker compose logs wb-proxy | grep -i "api key"`。不带这个 Key 调 `/v1` 会收到 401；想用自己的 Key 就传 `-e API_KEY=...`。
+- **目录权限（PUID/PGID）**：容器默认以 root（`0:0`）运行，与历史行为一致。想以宿主用户身份跑，就在 compose 里设 `PUID=$(id -u)` / `PGID=$(id -g)`（或写进 `.env`），并确保 `./accounts`、`./usage` 对该 uid 可写；`docker run` 也可直接加 `--user $(id -u):$(id -g)`。
+- **健康检查**：镜像自带 `HEALTHCHECK`（每 30s 请求一次 `/health`），`docker ps` 的 STATUS 列会显示 healthy/unhealthy，编排器也可直接探活。
 
 ### 6. 测试
 
@@ -125,9 +127,9 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 20 个套件：17 个 Python + 3 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 51 个套件：45 个 Python + 6 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
-- CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。
+- CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。推送 `v*` tag 时额外断言 **tag == 源码版本**（`wb_proxy.py` 里的两处版本串必须先一致，`-ci` 演练 tag 豁免）。
 
 ---
 
@@ -237,6 +239,19 @@ export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 ---
 
 ## 六、版本更新记录 (Changelog)
+
+### feat/panel-parity（开发分支，未发布）
+
+把 PANEL（`linguo2625469/workbuddy2api-panel`）的账号池治理、任务农场、观测与模型治理能力，按 HUB 的架构重新实现（不照搬 Go 实现），全部开关化、默认向后兼容：
+
+- **账号池治理（M1）**：加权选号 + 成本分层 + 条件探索、软冷却指数退避、熔断、连败降权、单号在途租约、402 硬冷却至次日 04:00、session-dead ×3 才禁用、`credit_floor`、Upstash 粘性镜像（可选、默认关）。
+- **可靠性与会话（M2）**：SSE 首字节/流中空闲超时、`X-Device-Token` 文件兜底、工具调用配对与残参修复、每轮会话头族与 `gateway_hint`、`prompt.mode`（passthrough/custom/append）、Web 控制台昵称同步、国际版激活/地区完善/trial。
+- **任务农场（M3）**：任务中心扫描 + 并发执行队列、桌面事件链补全、连登管家（补签/礼包/兑换/抽奖）、每日 01:00 成长队列、mp 小程序任务。
+- **观测与安全（M4）**：请求归档与指标（TTFB p50/p95）、日志分频道环形缓冲、Token 时序与积分历史、安全响应头 + 保守 CSP、cockpit tools 导入兼容。
+- **模型目录与治理（M5）**：context/output 四级查找（上游 → 知识表 → `model.json` 缓存 → models.dev 异步）、真实输出上限探测（`scripts/probe_max_tokens.py` + 看板「钳制 N×」标注）、缓存 token 别名归一。
+- **工程（M6）**：Release 附 `checksums.txt`、CI `tag == 源码版本` 断言、Docker `HEALTHCHECK` 与 PUID/PGID 指引。
+
+> 分支状态：`feat/panel-parity`，基线 `6c2a663`；上游恢复更新后再决定 PR/发布节奏。
 
 ### v1.6.10
 

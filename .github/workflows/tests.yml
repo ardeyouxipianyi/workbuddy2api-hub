@@ -7,6 +7,9 @@ name: tests
 on:
   push:
     branches: [main]
+    # v* tags run the full matrix plus the tag == source version assertion
+    # below, so a release cannot ship a tag that disagrees with the code.
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -37,3 +40,33 @@ jobs:
           node-version: "20"
       - name: Run every suite
         run: python tests/run_all.py
+
+  # Release discipline (M6 F2, panel parity): a v* tag must match the version
+  # baked into wb_proxy.py, and the two source version strings must agree with
+  # each other. A tag carrying a -ci suffix is a rehearsal and skips only the
+  # tag comparison (the source-consistency check still runs).
+  version-assert:
+    name: tag matches source version
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert tag == source version
+        run: |
+          set -euo pipefail
+          OVERVIEW=$(grep -oP '"version"\s*:\s*"\K[^"]+' wb_proxy.py | head -n1 || true)
+          SERVER=$(grep -oP 'server_version\s*=\s*"wb-proxy/\K[^"]+' wb_proxy.py | head -n1 || true)
+          echo "source: overview=$OVERVIEW server=$SERVER tag=$GITHUB_REF_NAME"
+          if [ -z "$OVERVIEW" ] || [ "$OVERVIEW" != "$SERVER" ]; then
+            echo "::error::source version strings disagree ($OVERVIEW vs $SERVER)"
+            exit 1
+          fi
+          TAG="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_NAME" == *-ci ]]; then
+            echo "rehearsal tag (-ci): skipping tag==version assertion (source=$OVERVIEW)"
+          elif [ "$TAG" != "$OVERVIEW" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != source version $OVERVIEW (bump the source first)"
+            exit 1
+          else
+            echo "version assert OK: $TAG"
+          fi
