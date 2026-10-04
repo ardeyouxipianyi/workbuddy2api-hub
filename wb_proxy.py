@@ -41,6 +41,7 @@ import wb_catalog
 import wb_settings
 import wb_webtools
 import wb_identity
+import wb_prompt
 IS_WINDOWS = os.name == "nt"
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
@@ -1560,6 +1561,7 @@ def runtime_settings_view():
         "schedule": wb_settings.schedule_config(ACCOUNTS_DIR),
         "redis": wb_settings.redis_config(ACCOUNTS_DIR),
         "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
+        "prompt": wb_settings.prompt_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -3095,6 +3097,48 @@ def key_model_message(entry, model):
             % (name, model, allowed))
 
 
+# Process-memory degradation window: content-blocked passthrough/append
+# traffic switches to the minimal neutral prompt until the next 00:00 CST
+# (panel degrade.go). Restarts clear it, which is fine - the next rejection
+# re-triggers it.
+PROMPT_DEGRADE = wb_prompt.DegradeGate()
+
+
+def prompt_mode_config():
+    """Prompt mode settings, fail-open to passthrough on any read error."""
+    try:
+        cfg = wb_settings.prompt_config(ACCOUNTS_DIR)
+    except Exception:
+        cfg = None
+    if not isinstance(cfg, dict):
+        cfg = {"mode": "passthrough", "file": ""}
+    return cfg
+
+
+def apply_prompt_mode(messages):
+    """Apply the configured prompt mode to one request's messages.
+
+    passthrough is the legacy behaviour (client system prompts ride through);
+    custom/append are opt-in. While the degrade window is active, passthrough
+    and append switch to the minimal neutral prompt; custom never degrades.
+    An unreadable prompt file fails open to passthrough rather than blocking.
+    """
+    cfg = prompt_mode_config()
+    mode = cfg.get("mode") or "passthrough"
+    degraded = PROMPT_DEGRADE.active()
+    if mode in ("custom", "append"):
+        try:
+            text = wb_prompt.load_prompt(mode, cfg.get("file"))
+        except Exception:
+            text = ""
+        if text:
+            return wb_prompt.apply_mode(messages, mode, text, degraded=degraded)
+        return messages
+    if degraded:
+        return wb_prompt.apply_mode(messages, mode, "", degraded=True)
+    return messages
+
+
 def build_upstream_body(payload):
     model = payload.get("model") or ""
     # Resolve the effective thinking state before the backfill below: while
@@ -3112,6 +3156,9 @@ def build_upstream_body(payload):
         elif thinking_type != "disabled" and str(effort or "").strip().lower() != "none":
             thinking_enabled = True
     messages = normalize_roles(payload.get("messages") or [])
+    # Prompt mode runs before sanitize/backfill so the gateway prompt is the
+    # one the upstream sees, with the client's fingerprint-y system text gone.
+    messages = apply_prompt_mode(messages)
     messages = sanitize_messages(messages)
     messages = backfill_reasoning_content(
         messages, model, thinking_enabled=thinking_enabled
@@ -3626,6 +3673,7 @@ def open_upstream(payload, session_key=None, target_realm=None,
     last_429_detail = ""
     last_403_detail = ""
     transient_hits = 0
+    degraded_retried = False
     # Read once per request, not per attempt: this is a panel setting, and a
     # settings read on every retry would be pure overhead.
     auto_switch = auto_switch_product_enabled()
@@ -3720,6 +3768,18 @@ def open_upstream(payload, session_key=None, target_realm=None,
                     detail = exc.read(400).decode("utf-8", "replace")
                 except Exception:
                     detail = ""
+                # Panel degrade.go: a content rejection in passthrough/append
+                # mode is usually a system-prompt fingerprint false positive.
+                # Switch to the minimal neutral prompt until next 00:00 CST
+                # and retry this turn once; custom mode opted out.
+                if (not degraded_retried
+                        and prompt_mode_config().get("mode") in ("passthrough", "append")):
+                    PROMPT_DEGRADE.trigger()
+                    degraded_retried = True
+                    upstream_body = build_upstream_body(payload)
+                    tried.discard(account.uid)
+                    log("upstream 403 (content review) -> degraded prompt retry")
+                    continue
                 log("upstream 403 for '%s' (content review), passing through" % model)
                 if session_key and POOL:
                     POOL.affinity.unbind(session_key)
@@ -6466,6 +6526,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(exc), "invalid_request_error")
             wb_settings.set_upstream_config(ACCOUNTS_DIR, patch)
             reply["upstream"] = wb_settings.upstream_config(ACCOUNTS_DIR)
+        if "prompt" in payload:
+            raw = payload.get("prompt")
+            if not isinstance(raw, dict):
+                return self._error(400, "prompt must be an object",
+                                   "invalid_request_error")
+            try:
+                patch = wb_settings.validate_prompt_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_prompt_config(ACCOUNTS_DIR, patch)
+            reply["prompt"] = wb_settings.prompt_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()
