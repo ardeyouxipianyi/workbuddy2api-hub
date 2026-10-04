@@ -14,8 +14,11 @@ from wb_tasks import do_cat_travel
 
 
 class Scheduler:
-    def __init__(self, pool):
+    def __init__(self, pool, task_queue=None):
         self.pool = pool
+        # Optional task-center queue: the daily growth run reuses it so the
+        # manual "run queue" and the 01:00 automatic run share one state.
+        self.task_queue = task_queue
         # 对齐 Sliverkiss/workbuddy2api 官方默认排程 (CST 24小时制)
         self.checkin_hours = [9, 21]     # 每日 09:00、21:00 签到
         self.travel_hours = [9, 21]      # 每日 09:00 派出、21:00 领奖闭环
@@ -24,11 +27,13 @@ class Scheduler:
         # start of the window and 01:00 stays as the existing make-up point.
         self.cat_hours = [1, 23]         # 每日 01:00、23:00 夜猫子专属任务
         self.daily_chat_hours = [9, 21]  # 国际版每日活跃打卡
+        self.growth_hours = [1]          # 每日 01:00 成长任务队列（Sequential 解锁）
         self.checkin_enabled = True
         self.travel_enabled = True
         self.keepalive_enabled = True
         self.cat_enabled = True
         self.daily_chat_enabled = True
+        self.growth_enabled = True
         # Panel parity: when false, scheduled tasks skip disabled accounts
         # (the gateway's existing behaviour is to include them).
         self.include_disabled_in_tasks = True
@@ -39,7 +44,8 @@ class Scheduler:
         self._streak_bonus_done = {}
         self.all_hours = sorted(list(set(self.checkin_hours + self.travel_hours
                                           + self.keepalive_hours + self.cat_hours
-                                          + self.daily_chat_hours)))
+                                          + self.daily_chat_hours
+                                          + self.growth_hours)))
         self.enabled = True
         self._stop_event = threading.Event()
         self._thread = None
@@ -145,11 +151,13 @@ class Scheduler:
         self.keepalive_hours = list(cfg["keepalive_hours"])
         self.cat_hours = list(cfg["cat_hours"])
         self.daily_chat_hours = list(cfg["daily_chat_hours"])
+        self.growth_hours = list(cfg["growth_hours"])
         self.checkin_enabled = bool(cfg["checkin_enabled"])
         self.travel_enabled = bool(cfg["travel_enabled"])
         self.keepalive_enabled = bool(cfg["keepalive_enabled"])
         self.cat_enabled = bool(cfg["cat_enabled"])
         self.daily_chat_enabled = bool(cfg["daily_chat_enabled"])
+        self.growth_enabled = bool(cfg["growth_enabled"])
         self.include_disabled_in_tasks = bool(cfg["include_disabled_in_tasks"])
         self.balance_refresh_enabled = bool(cfg["balance_refresh_enabled"])
         self.balance_refresh_minutes = int(cfg["balance_refresh_minutes"])
@@ -164,6 +172,8 @@ class Scheduler:
             hours.update(self.cat_hours)
         if self.daily_chat_enabled:
             hours.update(self.daily_chat_hours)
+        if self.growth_enabled:
+            hours.update(self.growth_hours)
         self.all_hours = sorted(hours)
         self._calc_next_fire()
         return cfg
@@ -306,6 +316,20 @@ class Scheduler:
                         self.log(f"! 账号 [{uid8}] 每日活跃对话失败: {res.get('error') or res.get('msg')}")
                     time.sleep(1.5)
 
+        # C4: 每日 01:00（可配）自動跑一次任務中心佇列：掃描全部待辦 →
+        # 帳號內串行/帳號間併發執行；Sequential 族每日零點解鎖一環，這裡自然接上。
+        if (self.growth_enabled and self.task_queue is not None
+                and time.localtime().tm_hour in self.growth_hours):
+            try:
+                started = self.task_queue.start()
+            except Exception as exc:
+                self.log(f"! 成长任务队列启动失败: {exc}")
+            else:
+                if started.get("started"):
+                    self.log(f"📋 每日成长任务队列已启动（{started.get('total')} 项）")
+                else:
+                    self.log(f"📋 每日成长任务队列未启动: {started.get('msg')}")
+
         self.log(f"巡检完成：Token保活 {refreshed_count} 个，国内签到 {checkin_count} 个，猫猫日常 {travel_count} 个，国际活跃 {daily_chat_count} 个")
 
     def status(self):
@@ -316,6 +340,7 @@ class Scheduler:
             "keepalive_hours": list(self.keepalive_hours),
             "cat_hours": list(self.cat_hours),
             "daily_chat_hours": list(self.daily_chat_hours),
+            "growth_hours": list(self.growth_hours),
             "include_disabled_in_tasks": self.include_disabled_in_tasks,
             "balance_refresh": {"enabled": self.balance_refresh_enabled,
                                 "minutes": self.balance_refresh_minutes},

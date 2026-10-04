@@ -427,11 +427,13 @@ SCHEDULE_DEFAULTS = {
     "keepalive_hours": [22],
     "cat_hours": [1, 23],
     "daily_chat_hours": [9, 21],
+    "growth_hours": [1],
     "checkin_enabled": True,
     "travel_enabled": True,
     "keepalive_enabled": True,
     "cat_enabled": True,
     "daily_chat_enabled": True,
+    "growth_enabled": True,
     # The gateway has always run scheduled tasks for disabled accounts;
     # this panel-parity switch lets an operator opt into skipping them.
     "include_disabled_in_tasks": True,
@@ -439,9 +441,9 @@ SCHEDULE_DEFAULTS = {
     "balance_refresh_minutes": 5,
 }
 _SCHEDULE_HOUR_KEYS = ("checkin_hours", "travel_hours", "keepalive_hours",
-                       "cat_hours", "daily_chat_hours")
+                       "cat_hours", "daily_chat_hours", "growth_hours")
 _SCHEDULE_BOOL_KEYS = ("checkin_enabled", "travel_enabled", "keepalive_enabled",
-                       "cat_enabled", "daily_chat_enabled",
+                       "cat_enabled", "daily_chat_enabled", "growth_enabled",
                        "include_disabled_in_tasks", "balance_refresh_enabled")
 
 

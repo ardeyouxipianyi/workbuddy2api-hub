@@ -7849,9 +7849,9 @@ def _bootstrap_runtime(args):
     load_persisted_realm()
     global SCHEDULER, TASK_QUEUE
     from wb_scheduler import Scheduler
-    SCHEDULER = Scheduler(POOL)
-    SCHEDULER.start()
     TASK_QUEUE = wb_taskqueue.TaskQueue(POOL, log=log, concurrency=1)
+    SCHEDULER = Scheduler(POOL, task_queue=TASK_QUEUE)
+    SCHEDULER.start()
     return api_key_generated
 
 def _report_first_run(args):

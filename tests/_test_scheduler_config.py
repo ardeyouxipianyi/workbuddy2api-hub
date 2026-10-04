@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import wb_accounts
 import wb_scheduler
 import wb_settings
+import wb_tasks
 
 
 class ScheduleSettingsTests(unittest.TestCase):
@@ -28,6 +29,8 @@ class ScheduleSettingsTests(unittest.TestCase):
         self.assertEqual(cfg["keepalive_hours"], [22])
         self.assertEqual(cfg["cat_hours"], [1, 23])
         self.assertEqual(cfg["daily_chat_hours"], [9, 21])
+        self.assertEqual(cfg["growth_hours"], [1])
+        self.assertTrue(cfg["growth_enabled"])
         self.assertTrue(cfg["include_disabled_in_tasks"])
         self.assertFalse(cfg["balance_refresh_enabled"])
         self.assertEqual(cfg["balance_refresh_minutes"], 5)
@@ -71,8 +74,9 @@ class SchedulerConfigTests(unittest.TestCase):
                                                     "travel_hours": [4],
                                                     "keepalive_hours": [5],
                                                     "cat_hours": [6],
-                                                    "daily_chat_hours": [7]})
-        self.assertEqual(sched.all_hours, [3, 4, 5, 6, 7])
+                                                    "daily_chat_hours": [7],
+                                                    "growth_hours": [8]})
+        self.assertEqual(sched.all_hours, [3, 4, 5, 6, 7, 8])
 
     def test_disabling_every_family_leaves_no_fire_hours(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -80,7 +84,8 @@ class SchedulerConfigTests(unittest.TestCase):
                                                     "travel_enabled": False,
                                                     "keepalive_enabled": False,
                                                     "cat_enabled": False,
-                                                    "daily_chat_enabled": False})
+                                                    "daily_chat_enabled": False,
+                                                    "growth_enabled": False})
         self.assertEqual(sched.all_hours, [])
         self.assertIsNone(sched.next_run_time)
 
@@ -114,6 +119,52 @@ class SchedulerConfigTests(unittest.TestCase):
             with mock.patch.object(wb_scheduler.time, "time", return_value=70.0):
                 self.assertFalse(sched._maybe_refresh_balances())
             self.assertEqual(calls, ["acct"])
+
+    def test_growth_queue_fires_at_the_configured_hour(self):
+        class FakeQueue(object):
+            def __init__(self):
+                self.calls = 0
+
+            def start(self):
+                self.calls += 1
+                return {"started": True, "total": 2}
+
+        class FakeAccount(object):
+            uid = "u1"
+            realm = "cn"
+            enabled = True
+            nickname = "N"
+            expires_at = 0
+
+            def can_checkin(self):
+                return False
+
+        with tempfile.TemporaryDirectory() as directory:
+            sched = self.make_scheduler(directory, {"growth_hours": [5],
+                                                    "growth_enabled": True})
+            sched.pool.accounts = [FakeAccount()]
+            queue = FakeQueue()
+            sched.task_queue = queue
+            hour5 = type("T", (), {"tm_hour": 5})()
+            hour6 = type("T", (), {"tm_hour": 6})()
+            with mock.patch.object(wb_scheduler.time, "sleep", return_value=None), \
+                    mock.patch.object(wb_scheduler.time, "localtime",
+                                      return_value=hour5), \
+                    mock.patch.object(wb_scheduler, "do_cat_travel",
+                                      return_value={"action": None, "msg": ""}), \
+                    mock.patch.object(wb_tasks, "run_streak_bonus",
+                                      return_value={"logs": []}):
+                sched._run_cycle("test")
+            self.assertEqual(queue.calls, 1)
+            with mock.patch.object(wb_scheduler.time, "sleep", return_value=None), \
+                    mock.patch.object(wb_scheduler.time, "localtime",
+                                      return_value=hour6), \
+                    mock.patch.object(wb_scheduler, "do_cat_travel",
+                                      return_value={"action": None, "msg": ""}), \
+                    mock.patch.object(wb_tasks, "run_streak_bonus",
+                                      return_value={"logs": []}):
+                sched._run_cycle("test")
+            self.assertEqual(queue.calls, 1)
 
     def test_status_exposes_schedule(self):
         with tempfile.TemporaryDirectory() as directory:
