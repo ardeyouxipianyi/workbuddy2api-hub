@@ -1557,6 +1557,7 @@ def runtime_settings_view():
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
         "pool": wb_settings.pool_config(ACCOUNTS_DIR),
+        "schedule": wb_settings.schedule_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -6045,6 +6046,19 @@ class Handler(BaseHTTPRequestHandler):
             if POOL:
                 POOL.apply_pool_config()
             reply["pool"] = wb_settings.pool_config(ACCOUNTS_DIR)
+        if "schedule" in payload:
+            raw = payload.get("schedule")
+            if not isinstance(raw, dict):
+                return self._error(400, "schedule must be an object",
+                                   "invalid_request_error")
+            try:
+                patch = wb_settings.validate_schedule_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_schedule_config(ACCOUNTS_DIR, patch)
+            if SCHEDULER:
+                SCHEDULER.apply_settings()
+            reply["schedule"] = wb_settings.schedule_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()

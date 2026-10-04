@@ -421,6 +421,108 @@ def set_pool_config(accounts_dir, cfg):
     return clean
 
 
+SCHEDULE_DEFAULTS = {
+    "checkin_hours": [9, 21],
+    "travel_hours": [9, 21],
+    "keepalive_hours": [22],
+    "cat_hours": [1],
+    "daily_chat_hours": [9, 21],
+    "checkin_enabled": True,
+    "travel_enabled": True,
+    "keepalive_enabled": True,
+    "cat_enabled": True,
+    "daily_chat_enabled": True,
+    # The gateway has always run scheduled tasks for disabled accounts;
+    # this panel-parity switch lets an operator opt into skipping them.
+    "include_disabled_in_tasks": True,
+    "balance_refresh_enabled": False,
+    "balance_refresh_minutes": 5,
+}
+_SCHEDULE_HOUR_KEYS = ("checkin_hours", "travel_hours", "keepalive_hours",
+                       "cat_hours", "daily_chat_hours")
+_SCHEDULE_BOOL_KEYS = ("checkin_enabled", "travel_enabled", "keepalive_enabled",
+                       "cat_enabled", "daily_chat_enabled",
+                       "include_disabled_in_tasks", "balance_refresh_enabled")
+
+
+def _clean_hours(value):
+    """Validate an hours list (whole numbers 0-23, no bools), sorted."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("hours must be a list of whole numbers 0-23")
+    out = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError("hours must be whole numbers 0-23")
+        if not 0 <= item <= 23:
+            raise ValueError("hours must be between 0 and 23")
+        if item not in out:
+            out.append(item)
+    return sorted(out)
+
+
+def validate_schedule_patch(raw):
+    """Strict validation for a panel-saved schedule patch."""
+    out = {}
+    for key, value in (raw or {}).items():
+        if key in _SCHEDULE_HOUR_KEYS:
+            out[key] = _clean_hours(value)
+        elif key in _SCHEDULE_BOOL_KEYS:
+            if not isinstance(value, bool):
+                raise ValueError("%s must be true or false" % key)
+            out[key] = value
+        elif key == "balance_refresh_minutes":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("balance_refresh_minutes must be a whole number")
+            if value < 1:
+                raise ValueError("balance_refresh_minutes cannot be less than 1")
+            out[key] = value
+        else:
+            raise ValueError("unknown schedule setting %r" % key)
+    return out
+
+
+def schedule_config(accounts_dir):
+    """Panel-parity schedule: per-family hours, switches and balance scan."""
+    stored = load(accounts_dir).get("schedule")
+    stored = stored if isinstance(stored, dict) else {}
+    out = {}
+    for key, default in SCHEDULE_DEFAULTS.items():
+        value = stored.get(key)
+        if key in _SCHEDULE_HOUR_KEYS:
+            try:
+                cleaned = _clean_hours(value) if value is not None else None
+            except ValueError:
+                cleaned = None
+            out[key] = cleaned if cleaned is not None else list(default)
+        elif key in _SCHEDULE_BOOL_KEYS:
+            out[key] = value if isinstance(value, bool) else default
+        else:
+            out[key] = (value if isinstance(value, int) and not isinstance(value, bool)
+                        and value >= 1 else default)
+    return out
+
+
+def set_schedule_config(accounts_dir, cfg):
+    """Persist the schedule. Returns the normalized, stored config."""
+    current = schedule_config(accounts_dir)
+    if isinstance(cfg, dict):
+        current.update({k: v for k, v in cfg.items() if k in SCHEDULE_DEFAULTS})
+    clean = {}
+    for key, default in SCHEDULE_DEFAULTS.items():
+        value = current.get(key, default)
+        if key in _SCHEDULE_HOUR_KEYS:
+            clean[key] = _clean_hours(value)
+        elif key in _SCHEDULE_BOOL_KEYS:
+            clean[key] = value if isinstance(value, bool) else default
+        else:
+            clean[key] = int(value)
+    with _lock:
+        data = load(accounts_dir)
+        data["schedule"] = clean
+        save(accounts_dir, data)
+    return clean
+
+
 def auto_switch_product(accounts_dir):
     """Whether an upstream 429 may rotate an account's outbound identity.
 
