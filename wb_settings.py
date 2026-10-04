@@ -63,6 +63,62 @@ def save(accounts_dir, data):
         return path
 
 
+LOGGING_DEFAULTS = {
+    # Client IP / UA are personal data: opt-in, off by default.
+    "record_client_info": False,
+    # Request archive retention window and size budget (panel reqlog parity).
+    "retention_days": 7,
+    "archive_max_mb": 100,
+}
+
+
+def validate_logging_patch(raw):
+    """Strict validation for a panel-saved logging patch."""
+    out = {}
+    for key, value in (raw or {}).items():
+        if key == "record_client_info":
+            if not isinstance(value, bool):
+                raise ValueError("record_client_info must be true or false")
+            out[key] = value
+        elif key in ("retention_days", "archive_max_mb"):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("%s must be a whole number" % key)
+            if value < 1:
+                raise ValueError("%s cannot be less than 1" % key)
+            out[key] = value
+        else:
+            raise ValueError("unknown logging setting %r" % key)
+    return out
+
+
+def logging_config(accounts_dir):
+    """Request-archive settings (lenient read, strict write)."""
+    stored = load(accounts_dir).get("logging")
+    stored = stored if isinstance(stored, dict) else {}
+    out = {}
+    for key, default in LOGGING_DEFAULTS.items():
+        value = stored.get(key, default)
+        if key == "record_client_info":
+            out[key] = value if isinstance(value, bool) else default
+        else:
+            out[key] = (value if isinstance(value, int) and not isinstance(value, bool)
+                        and value >= 1 else default)
+    return out
+
+
+def set_logging_config(accounts_dir, cfg):
+    """Persist the logging settings. Returns the stored config."""
+    current = logging_config(accounts_dir)
+    if isinstance(cfg, dict):
+        current.update({k: v for k, v in cfg.items() if k in LOGGING_DEFAULTS})
+    clean = validate_logging_patch(current)
+    with _lock:
+        data = load(accounts_dir)
+        data["logging"] = deep_merge(data.get("logging"), clean)
+        save(accounts_dir, data)
+    return clean
+
+
 def deep_merge(base, patch):
     """Recursively merge patch into base; unknown sibling keys survive.
 

@@ -44,6 +44,7 @@ import wb_identity
 import wb_prompt
 import wb_global
 import wb_taskqueue
+import wb_reqlog
 IS_WINDOWS = os.name == "nt"
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
@@ -419,6 +420,7 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         row["account"] = account
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = acc.realm if acc else CURRENT_REALM
+    row.update(_request_context_fields())
     if account and POOL and not usage_missing and fields.get("total_tokens"):
         try:
             POOL.note_model_cost(account, model, fields.get("credit"))
@@ -464,6 +466,54 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     return row
 
 
+# Per-request context (thread-local: one Handler thread per connection).
+_REQ_CONTEXT = threading.local()
+_LOGGING_CFG_CACHE = {"at": 0.0, "cfg": None}
+
+
+def set_request_context(request_id="", client_ip="", user_agent="", path=""):
+    _REQ_CONTEXT.request_id = str(request_id or "")
+    _REQ_CONTEXT.client_ip = str(client_ip or "")
+    _REQ_CONTEXT.user_agent = str(user_agent or "")
+    _REQ_CONTEXT.path = str(path or "")
+
+
+def logging_config_cached():
+    """Read the logging settings at most once a minute (hot-path friendly)."""
+    now = time.time()
+    cfg = _LOGGING_CFG_CACHE.get("cfg")
+    if cfg is None or now - _LOGGING_CFG_CACHE.get("at", 0.0) > 60:
+        try:
+            cfg = wb_settings.logging_config(ACCOUNTS_DIR)
+        except Exception:
+            cfg = dict(wb_settings.LOGGING_DEFAULTS)
+        _LOGGING_CFG_CACHE["at"] = now
+        _LOGGING_CFG_CACHE["cfg"] = cfg
+    return cfg
+
+
+def _request_context_fields():
+    """request_id/path always; IP/UA only when the operator opted in."""
+    fields = {}
+    request_id = getattr(_REQ_CONTEXT, "request_id", "")
+    path = getattr(_REQ_CONTEXT, "path", "")
+    if request_id:
+        fields["request_id"] = request_id
+    if path:
+        fields["path"] = path
+    try:
+        if logging_config_cached().get("record_client_info"):
+            client_ip = getattr(_REQ_CONTEXT, "client_ip", "")
+            user_agent = getattr(_REQ_CONTEXT, "user_agent", "")
+            if client_ip:
+                fields["client_ip"] = client_ip
+            if user_agent:
+                fields["user_agent"] = user_agent[:300]
+    except Exception:
+        pass
+    return fields
+
+
 def _persist_usage(row, fail_label):
     """Append one usage row as a JSONL line.
 
@@ -479,6 +529,13 @@ def _persist_usage(row, fail_label):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception as exc:
         log("%s: %s" % (fail_label, exc))
+        return
+    try:
+        cfg = logging_config_cached()
+        wb_reqlog.rotate_if_needed(USAGE_LOG, cfg["archive_max_mb"],
+                                   cfg["retention_days"], log=log)
+    except Exception as exc:
+        log("request archive rotation failed: %s" % exc, level="WARN")
 
 def record_error(model, status, message, elapsed_ms=None, account=None,
                  usage=None, stream=None, ttft_ms=None, gen_ms=None, fp=None,
@@ -521,6 +578,7 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
         row["account"] = account
         acc = POOL.get(account) if POOL else None
         row["realm"] = acc.realm if acc else CURRENT_REALM
+    row.update(_request_context_fields())
     with _lock:
         _usage["errors"] += 1
         if elapsed_ms is not None:
@@ -1565,6 +1623,7 @@ def runtime_settings_view():
         "redis": wb_settings.redis_config(ACCOUNTS_DIR),
         "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
         "prompt": wb_settings.prompt_config(ACCOUNTS_DIR),
+        "logging": wb_settings.logging_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -6540,6 +6599,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(exc), "invalid_request_error")
             wb_settings.set_prompt_config(ACCOUNTS_DIR, patch)
             reply["prompt"] = wb_settings.prompt_config(ACCOUNTS_DIR)
+        if "logging" in payload:
+            raw = payload.get("logging")
+            if not isinstance(raw, dict):
+                return self._error(400, "logging must be an object",
+                                   "invalid_request_error")
+            try:
+                patch = wb_settings.validate_logging_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_logging_config(ACCOUNTS_DIR, patch)
+            _LOGGING_CFG_CACHE["cfg"] = None
+            reply["logging"] = wb_settings.logging_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()
@@ -6684,6 +6755,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_tasks_queue_start(payload)
         if path == "/tasks/queue/status":
             return self._route_tasks_queue_status(payload)
+        if path == "/requests":
+            return self._route_requests(payload)
+        if path == "/requests/metrics":
+            return self._route_requests_metrics(payload)
         if path == "/tasks/travel":
             return self._route_tasks_travel(payload)
         if path == "/scheduler/trigger":
@@ -6869,6 +6944,55 @@ class Handler(BaseHTTPRequestHandler):
             results.append({"uid": account.uid, "ok": res.get("ok", False),
                             "credits": account.credits, "error": res.get("error", "")})
         return self._json(200, {"results": results, "accounts": account_views()})
+
+    @staticmethod
+    def _request_filters(payload):
+        """Shared filter parsing for the request-archive endpoints."""
+        def _number(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        error = payload.get("error")
+        if error is not None:
+            error = bool(error)
+        status = payload.get("status")
+        if status is not None:
+            try:
+                status = int(status)
+            except (TypeError, ValueError):
+                status = None
+        return {
+            "model": str(payload.get("model") or "").strip() or None,
+            "account": str(payload.get("account") or "").strip() or None,
+            "status": status,
+            "outcome": str(payload.get("outcome") or "").strip() or None,
+            "error": error,
+            "path": str(payload.get("path") or "").strip() or None,
+            "request_id": str(payload.get("request_id") or "").strip() or None,
+            "since": _number(payload.get("since")),
+            "until": _number(payload.get("until")),
+        }
+
+    def _route_requests(self, payload):
+        """Request archive query (newest first) with multi-dimensional filters."""
+        try:
+            limit = max(1, min(5000, int(payload.get("limit") or 200)))
+        except (TypeError, ValueError):
+            limit = 200
+        rows = wb_reqlog.read_rows(USAGE_DIR)
+        filtered = wb_reqlog.filter_rows(rows, **self._request_filters(payload))
+        total = len(filtered)
+        return self._json(200, {"ok": True, "total": total,
+                                "rows": list(reversed(filtered))[:limit]})
+
+    def _route_requests_metrics(self, payload):
+        """Completion/HTTP success rates and latency percentiles over the window."""
+        rows = wb_reqlog.read_rows(USAGE_DIR)
+        filtered = wb_reqlog.filter_rows(rows, **self._request_filters(payload))
+        return self._json(200, {"ok": True,
+                                "metrics": wb_reqlog.compute_metrics(filtered)})
 
     def _route_tasks_queue_scan(self, payload):
         """Task center: read-only scan of every CN account's pending work."""
@@ -7508,6 +7632,7 @@ class Handler(BaseHTTPRequestHandler):
             or path.startswith("/tasks")
             or path.startswith("/scheduler")
             or path.startswith("/logs")
+            or path.startswith("/requests")
         )
         if not is_account_route and path not in ("/v1/chat/completions", "/chat/completions",
                                                 "/v1/completions", "/completions",
@@ -7532,6 +7657,19 @@ class Handler(BaseHTTPRequestHandler):
             _chat_slots.release()
 
     def _dispatch_chat_post(self, path, payload):
+        # Per-request archive context: a request id is always recorded; the
+        # client IP/UA ride along only when the operator opted in.
+        try:
+            client_ip = self.client_address[0] if self.client_address else ""
+        except Exception:
+            client_ip = ""
+        set_request_context(
+            request_id=(self.headers.get("X-Request-Id")
+                        or self.headers.get("X-Request-ID") or uuid.uuid4().hex),
+            client_ip=client_ip,
+            user_agent=self.headers.get("User-Agent") or "",
+            path=path,
+        )
         # 先擋背景請求：Codex 自己發的（記憶整理／環境建議／自動複核）
         # 不算「使用者實際使用」，一律本地拒絕，不碰上游。
         if BLOCK_BACKGROUND_REQUESTS:

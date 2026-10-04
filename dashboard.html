@@ -944,6 +944,43 @@ a:hover{text-decoration:underline}
         <div class="log-empty">正在拉取网关日志...</div>
       </div>
     </div>
+
+    <!-- 请求归档（D1/D2）：指标 + 最近请求表 -->
+    <section style="margin-top:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <h2 style="margin:0;font-size:16px;color:var(--fg)">请求归档</h2>
+          <div style="font-size:12px;color:var(--dim)">每请求一行 JSONL；默认保留 7 天 / 100MB（可在设置调整）。IP/UA 默认不记录。</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
+            模型 <input id="reqFilterModel" class="slot-input" style="width:150px" placeholder="全部">
+          </label>
+          <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">
+            <input type="checkbox" id="reqFilterErrors" style="margin:0"> 只看失败
+          </label>
+          <select id="reqFilterLimit" class="slot-select" style="min-width:90px">
+            <option value="100">100 条</option>
+            <option value="200" selected>200 条</option>
+            <option value="500">500 条</option>
+          </select>
+          <button class="sec" onclick="loadRequestArchive(this)">刷新归档</button>
+        </div>
+      </div>
+      <div class="cards" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+        <div class="card"><div class="val" id="reqMRequests">-</div><div class="lbl">请求数</div></div>
+        <div class="card accent"><div class="val" id="reqMCompletion">-</div><div class="lbl">完成成功率</div></div>
+        <div class="card accent"><div class="val" id="reqMHttp">-</div><div class="lbl">HTTP 成功率</div></div>
+        <div class="card accent2"><div class="val" id="reqMElapsed">-</div><div class="lbl">平均耗时 / P95</div></div>
+        <div class="card accent2"><div class="val" id="reqMTtfb">-</div><div class="lbl">TTFB 平均 / P95</div></div>
+      </div>
+      <div style="overflow-x:auto;max-height:420px">
+        <table class="data-cards" id="requestTable">
+          <thead><tr><th>时间</th><th>模型</th><th>状态</th><th>结果</th><th>耗时</th><th>TTFB</th><th>账号</th><th>请求 ID</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
   <footer>每 5 秒自动刷新 · 数据来自本机反代 <span class="mono" id="logfile"></span></footer>
@@ -1555,6 +1592,52 @@ async function pollTaskQueue(){
       loadAccounts();
     }
   }catch(e){ /* polling failures are non-fatal */ }
+}
+
+function fmtReqMs(value){
+  return (value === null || value === undefined) ? '-' : (Math.round(value) + ' ms');
+}
+function fmtReqPct(value){
+  return (value === null || value === undefined) ? '-' : (Math.round(value * 1000) / 10 + '%');
+}
+async function loadRequestArchive(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const model = (document.getElementById('reqFilterModel') || {}).value || '';
+    const errorsOnly = !!(document.getElementById('reqFilterErrors') || {}).checked;
+    const limit = Number((document.getElementById('reqFilterLimit') || {}).value || 200);
+    const filters = {limit: limit};
+    if(model) filters.model = model;
+    if(errorsOnly) filters.error = true;
+    const metricsRes = await postJSON('/requests/metrics', filters);
+    const rowsRes = await postJSON('/requests', filters);
+    const m = metricsRes.metrics || {};
+    const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value; };
+    set('reqMRequests', String(m.requests || 0));
+    set('reqMCompletion', fmtReqPct(m.completion_rate));
+    set('reqMHttp', fmtReqPct(m.http_success_rate));
+    set('reqMElapsed', fmtReqMs(m.avg_elapsed_ms) + ' / ' + fmtReqMs(m.p95_elapsed_ms));
+    set('reqMTtfb', fmtReqMs(m.avg_ttfb_ms) + ' / ' + fmtReqMs(m.p95_ttfb_ms));
+    const tbody = document.querySelector('#requestTable tbody');
+    if(tbody){
+      const rows = rowsRes.rows || [];
+      tbody.innerHTML = rows.map(r => '<tr>'
+        + '<td>' + esc(r.iso || '') + '</td>'
+        + '<td>' + esc(r.model || '') + '</td>'
+        + '<td>' + esc(String(r.status != null ? r.status : (r.error ? 'ERR' : '200'))) + '</td>'
+        + '<td>' + esc(r.outcome || (r.error ? 'failed' : 'completed')) + '</td>'
+        + '<td>' + fmtReqMs(r.elapsed_ms) + '</td>'
+        + '<td>' + fmtReqMs(r.ttft_ms) + '</td>'
+        + '<td class="mono">' + esc(String(r.account || '').slice(0,8)) + '</td>'
+        + '<td class="mono">' + esc(String(r.request_id || '').slice(0,12)) + '</td>'
+        + '</tr>').join('') || '<tr><td colspan="8" style="color:var(--dim)">没有匹配的请求</td></tr>';
+    }
+    if(btn) toast('请求归档已刷新', 'ok');
+  }catch(e){
+    toast('读取请求归档失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
 }
 
 async function triggerCatTravel(btn){
@@ -3485,6 +3568,7 @@ function switchMainTab(tab){
   if(tab === 'logs'){
     startLogPolling();
     fetchNewLogs(true);
+    loadRequestArchive();
   } else {
     stopLogPolling();
   }
