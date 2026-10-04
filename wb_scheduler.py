@@ -20,7 +20,9 @@ class Scheduler:
         self.checkin_hours = [9, 21]     # 每日 09:00、21:00 签到
         self.travel_hours = [9, 21]      # 每日 09:00 派出、21:00 领奖闭环
         self.keepalive_hours = [22]      # 每日 22:00 集中 Token 保活检查
-        self.cat_hours = [1]             # 每日 01:00 夜猫子专属任务
+        # Panel parity (C5): the night window is 23:00-08:00; 23:00 catches the
+        # start of the window and 01:00 stays as the existing make-up point.
+        self.cat_hours = [1, 23]         # 每日 01:00、23:00 夜猫子专属任务
         self.daily_chat_hours = [9, 21]  # 国际版每日活跃打卡
         self.checkin_enabled = True
         self.travel_enabled = True
@@ -33,6 +35,8 @@ class Scheduler:
         self.balance_refresh_enabled = False
         self.balance_refresh_minutes = 5
         self._last_balance_refresh = 0.0
+        # uid -> date: the streak bonus runs once per account per day.
+        self._streak_bonus_done = {}
         self.all_hours = sorted(list(set(self.checkin_hours + self.travel_hours
                                           + self.keepalive_hours + self.cat_hours
                                           + self.daily_chat_hours)))
@@ -210,6 +214,20 @@ class Scheduler:
         finally:
             self._run_lock.release()
 
+    def _maybe_streak_bonus(self, account, uid8):
+        """Run the idempotent streak bonus at most once per account per day."""
+        today = time.strftime("%Y-%m-%d")
+        if self._streak_bonus_done.get(account.uid) == today:
+            return
+        try:
+            bonus = wb_tasks.run_streak_bonus(account)
+        except Exception as exc:
+            self.log(f"! 账号 [{uid8}] 连登管家异常: {exc}")
+            return
+        self._streak_bonus_done[account.uid] = today
+        for line in bonus.get("logs") or []:
+            self.log(f"🎁 [{uid8}] {line}")
+
     def _run_cycle(self, trigger_reason="周期巡检"):
         self.last_run_time = time.strftime("%Y-%m-%d %H:%M:%S")
         self.log(f"开始执行任务 ({trigger_reason})...")
@@ -241,13 +259,24 @@ class Scheduler:
             if acc.realm == "cn":
                 if self.checkin_enabled and acc.can_checkin():
                     self.log(f"检测到国内版账号 [{uid8}] 今日尚未签到，执行自动签到...")
+                    # C6: read the streak before/after so a 200 that silently
+                    # fails to register is visible instead of looking fine.
+                    before_days = wb_tasks.fetch_streak_days(acc)
                     res = acc.checkin()
                     if res.get("ok"):
                         checkin_count += 1
                         self.log(f"✓ 账号 [{uid8}] 自动签到成功: {res.get('msg')}")
+                        after_days = wb_tasks.fetch_streak_days(acc)
+                        if (before_days is not None and after_days is not None
+                                and after_days <= before_days):
+                            self.log(f"! 账号 [{uid8}] 签到返回成功但连登天数未增加"
+                                     f"（{before_days} -> {after_days}），上游可能静默丢失")
                     else:
                         self.log(f"! 账号 [{uid8}] 自动签到未成功: {res.get('error') or res.get('msg')}")
                     time.sleep(1.0)
+                # C3: 連登管家（每日一次）——補簽、兌換解鎖檔位、抽完所有次數。
+                if self.checkin_enabled:
+                    self._maybe_streak_bonus(acc, uid8)
 
                 # 检查猫猫旅行
                 if self.travel_enabled:
@@ -290,8 +319,8 @@ class Scheduler:
             "include_disabled_in_tasks": self.include_disabled_in_tasks,
             "balance_refresh": {"enabled": self.balance_refresh_enabled,
                                 "minutes": self.balance_refresh_minutes},
-            "mode": "整点排程 (09:00/21:00 签到旅行 · 22:00 保活 · 01:00 夜猫)",
-            "mode_cn": "整点排程 (09:00/21:00 签到旅行 · 22:00 保活 · 01:00 夜猫)",
+            "mode": "整点排程 (09:00/21:00 签到旅行 · 22:00 保活 · 01:00/23:00 夜猫)",
+            "mode_cn": "整点排程 (09:00/21:00 签到旅行 · 22:00 保活 · 01:00/23:00 夜猫)",
             "mode_intl": "账号 Token 自动保活与凭证常驻 (每日 22:00 集中巡检)",
             "last_run_time": self.last_run_time or "尚未运行",
             "next_run_time": self.next_run_time or "待调度",

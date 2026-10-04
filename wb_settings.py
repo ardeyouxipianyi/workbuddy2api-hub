@@ -425,7 +425,7 @@ SCHEDULE_DEFAULTS = {
     "checkin_hours": [9, 21],
     "travel_hours": [9, 21],
     "keepalive_hours": [22],
-    "cat_hours": [1],
+    "cat_hours": [1, 23],
     "daily_chat_hours": [9, 21],
     "checkin_enabled": True,
     "travel_enabled": True,

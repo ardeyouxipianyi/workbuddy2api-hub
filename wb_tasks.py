@@ -6,11 +6,13 @@
 3. 猫猫旅行 (buddy travel) 状态查询、自动派出与自动领奖。
 4. 严格遵守 >= 1.0s 防风控间隔，并使用 wb_fingerprint 的稳定设备指纹。
 """
+import datetime
 import json
 import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 import wb_accounts as _accounts
 import wb_desktop
@@ -526,6 +528,229 @@ DESKTOP_ACTIONS = {
     "create_canvas": run_desktop_canvas,
     "Hp_Appearance": run_desktop_appearance,
 }
+
+
+# ---------------------------------------------------------------------------
+# 連登管家（panel scheduler/streak.go + upstream/streak.go）
+# ---------------------------------------------------------------------------
+def _growth_json(account, method, path, body=None, timeout=15):
+    """Growth-center call on the chat domain; returns (data, error)."""
+    data = None
+    headers = dict(account.headers("chat"))
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(CHAT_BASE + path, data=data, method=method,
+                                 headers=headers)
+    try:
+        with _accounts.urlopen(req, timeout=timeout, proxy=account.proxy) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read(300).decode("utf-8", "replace")
+        except Exception:
+            pass
+        return None, "HTTP %s: %s" % (exc.code, detail[:200])
+    except Exception as exc:
+        return None, str(exc)[:200]
+    if not isinstance(payload, dict):
+        return None, "growth response is not an object"
+    if payload.get("code") != 0:
+        return None, str(payload.get("msg") or ("code=%s" % payload.get("code")))
+    return payload.get("data") or {}, ""
+
+
+def _billing_json(account, method, path, body=None, timeout=15):
+    """Billing-domain call (www.codebuddy.cn for CN); returns (data, error)."""
+    cfg = _accounts.get_realm_config(account.realm)
+    url = cfg["billing_upstream"] + path
+    headers = dict(account.headers("billing"))
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    try:
+        with _accounts.urlopen(
+                urllib.request.Request(url, data=data, method=method,
+                                       headers=headers),
+                timeout=timeout, proxy=account.proxy) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read(300).decode("utf-8", "replace")
+        except Exception:
+            pass
+        return None, "HTTP %s: %s" % (exc.code, detail[:200])
+    except Exception as exc:
+        return None, str(exc)[:200]
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        msg = payload.get("msg") if isinstance(payload, dict) else "bad response"
+        return None, str(msg or "unknown error")
+    return payload.get("data") or {}, ""
+
+
+def streak_full(account):
+    """GET /activity/growth/streak -> full streak/redemption payload."""
+    return _growth_json(account, "GET", "/activity/growth/streak")
+
+
+def fetch_streak_days(account):
+    """Current consecutive-login day count, or None when unavailable."""
+    data, err = streak_full(account)
+    if err:
+        return None
+    try:
+        return int(((data or {}).get("streak") or {}).get("days") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def redeem_tier(account, tier):
+    """POST /activity/growth/redeem {tier, client_token} (idempotent token)."""
+    return _growth_json(account, "POST", "/activity/growth/redeem",
+                        {"tier": tier, "client_token": str(uuid.uuid4())})
+
+
+def lottery_chances(account):
+    """GET /activity/growth/lottery/summary -> (chances, error)."""
+    data, err = _growth_json(account, "GET", "/activity/growth/lottery/summary")
+    if err:
+        return 0, err
+    try:
+        return int((data or {}).get("chances") or 0), ""
+    except (TypeError, ValueError):
+        return 0, "bad chances payload"
+
+
+def lottery_draw(account):
+    """POST /activity/growth/lottery/draw -> (prize, error)."""
+    return _growth_json(account, "POST", "/activity/growth/lottery/draw",
+                        {"client_token": str(uuid.uuid4())})
+
+
+def heatmap_yesterday_missed(account):
+    """True when yesterday's heatmap cell exists with score 0."""
+    data, err = _growth_json(account, "GET", "/activity/growth/heatmap")
+    if err:
+        return False, err
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    for cell in (data or {}).get("cells") or []:
+        if isinstance(cell, dict) and str(cell.get("date") or "")[:10] == yesterday:
+            return (cell.get("score") or 0) == 0, ""
+    return False, ""
+
+
+def use_makeup_card(account, target_date):
+    """POST /activity/growth/makeup-cards/use {target_date}."""
+    _data, err = _growth_json(account, "POST", "/activity/growth/makeup-cards/use",
+                              {"target_date": target_date})
+    return err == ""
+
+
+def claim_gift(account):
+    """POST /billing/meter/claim-gift -> (credit, error)."""
+    data, err = _billing_json(account, "POST", "/billing/meter/claim-gift", {})
+    if err:
+        return 0, err
+    try:
+        return int((data or {}).get("credit") or 0), ""
+    except (TypeError, ValueError):
+        return 0, "bad gift payload"
+
+
+def claim_compensation(account):
+    """POST /billing/meter/claim-compensation -> (credit, error)."""
+    data, err = _billing_json(account, "POST", "/billing/meter/claim-compensation", {})
+    if err:
+        return 0, err
+    try:
+        return int((data or {}).get("credit") or 0), ""
+    except (TypeError, ValueError):
+        return 0, "bad compensation payload"
+
+
+def run_streak_bonus(account):
+    """連登管家：補簽 → 禮包/補償 → 兌換已解鎖檔位 → 抽完所有次數（冪等）。
+
+    對應 panel scheduler/streak.go：未解鎖（403）與已領取檔位自動跳過；
+    每次執行都不會重複消耗上游配額。
+    """
+    if account.realm != "cn":
+        return {"ok": False, "logs": ["国际版不适用国内成长中心"], "credit": 0}
+    logs = []
+    credit_total = 0
+
+    # 0. 補簽保連登（昨日漏簽且有補簽卡）。
+    missed, _err = heatmap_yesterday_missed(account)
+    if missed:
+        full, _full_err = streak_full(account)
+        cards = int(((full or {}).get("makeup_cards") or {}).get("balance") or 0)
+        if cards > 0:
+            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+            if use_makeup_card(account, yesterday):
+                logs.append("已用补签卡补签 %s（保连登）" % yesterday)
+            else:
+                logs.append("补签失败（上游拒绝）")
+        else:
+            logs.append("昨日漏签但没有补签卡")
+
+    # 0.5 禮包/補償（每號一次；無則靜默）。
+    gift, gift_err = claim_gift(account)
+    if not gift_err and gift:
+        credit_total += gift
+        logs.append("新手礼包 +%s 积分" % gift)
+    comp, comp_err = claim_compensation(account)
+    if not comp_err and comp:
+        credit_total += comp
+        logs.append("补偿领取 +%s 积分" % comp)
+
+    # 1. 兌換所有已解鎖檔位。
+    full, err = streak_full(account)
+    if err:
+        logs.append("连登状态查询失败: %s" % err)
+        return {"ok": False, "logs": logs, "credit": credit_total}
+    status = (full or {}).get("redemption_status") or {}
+    statuses = {
+        "7d": status.get("tier_7d_status"),
+        "14d": status.get("tier_14d_status"),
+        "28d": status.get("tier_28d_status"),
+    }
+    for tier in status.get("tiers") or []:
+        if not isinstance(tier, dict):
+            continue
+        name = str(tier.get("tier") or "")
+        if statuses.get(name) in ("locked", "claimed"):
+            continue
+        _data, redeem_err = redeem_tier(account, name)
+        if redeem_err:
+            logs.append("兑换 %s 档跳过: %s" % (name, redeem_err))
+            continue
+        logs.append("兑换 %s 档（+%s积分 +%s能量 卡×%s 抽奖×%s）" % (
+            name, tier.get("credit") or 0, tier.get("energy") or 0,
+            tier.get("cards") or 0, tier.get("chances") or 0))
+        time.sleep(0.5)
+
+    # 2. 抽完所有次數。
+    chances, chance_err = lottery_chances(account)
+    if chance_err:
+        logs.append("抽奖次数查询失败: %s" % chance_err)
+    else:
+        for i in range(chances):
+            prize, draw_err = lottery_draw(account)
+            if draw_err:
+                logs.append("第%d抽失败: %s" % (i + 1, draw_err))
+                break
+            logs.append("第%d抽: %s" % (i + 1, json.dumps(
+                prize, ensure_ascii=False)[:200]))
+            time.sleep(0.5)
+        if chances:
+            logs.append("抽奖完成 %d 次" % chances)
+
+    account.fetch_credits()
+    return {"ok": True, "logs": logs, "credit": credit_total,
+            "credits": account.credits}
 
 
 def run_single_task(account, code, gap=1.0):

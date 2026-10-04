@@ -26,7 +26,7 @@ class ScheduleSettingsTests(unittest.TestCase):
         self.assertEqual(cfg["checkin_hours"], [9, 21])
         self.assertEqual(cfg["travel_hours"], [9, 21])
         self.assertEqual(cfg["keepalive_hours"], [22])
-        self.assertEqual(cfg["cat_hours"], [1])
+        self.assertEqual(cfg["cat_hours"], [1, 23])
         self.assertEqual(cfg["daily_chat_hours"], [9, 21])
         self.assertTrue(cfg["include_disabled_in_tasks"])
         self.assertFalse(cfg["balance_refresh_enabled"])
