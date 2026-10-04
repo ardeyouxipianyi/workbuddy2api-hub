@@ -1,0 +1,286 @@
+"""Panel-parity pool governance: weighted picking + backoff state machine.
+
+Run with: python _test_pool_governance.py
+No upstream credentials or outbound network are used.
+"""
+import os
+import random
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+_startup_dir = tempfile.TemporaryDirectory(prefix="pool-governance-")
+os.environ["ACCOUNTS_DIR"] = _startup_dir.name
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import wb_accounts
+import wb_pool
+import wb_settings
+
+
+def make_account(uid, realm="cn", credits=None):
+    data = {"uid": uid, "realm": realm, "accessToken": "token"}
+    if credits is not None:
+        data["credits"] = {"remain": credits}
+    return wb_accounts.Account(data)
+
+
+class BackoffMathTests(unittest.TestCase):
+    def test_soft_backoff_grows_then_caps(self):
+        self.assertEqual(wb_pool.soft_backoff(1, 600, 7200), 600)
+        self.assertEqual(wb_pool.soft_backoff(2, 600, 7200), 1200)
+        self.assertEqual(wb_pool.soft_backoff(4, 600, 7200), 4800)
+        self.assertEqual(wb_pool.soft_backoff(9, 600, 7200), 7200)
+
+    def test_breaker_backoff_starts_at_threshold_and_caps(self):
+        self.assertEqual(wb_pool.breaker_backoff(3, 3, 1800, 21600), 1800)
+        self.assertEqual(wb_pool.breaker_backoff(4, 3, 1800, 21600), 3600)
+        self.assertEqual(wb_pool.breaker_backoff(99, 3, 1800, 21600), 21600)
+
+    def test_degrade_uses_same_shape(self):
+        self.assertEqual(wb_pool.degrade_backoff(5, 5, 600, 7200), 600)
+        self.assertEqual(wb_pool.degrade_backoff(6, 5, 600, 7200), 1200)
+
+    def test_normalize_clamps_and_drops_unknown(self):
+        cfg = wb_pool.normalize({"soft_rate": -5, "top_n": 0,
+                                 "weighted_pick": False, "bogus": 1})
+        self.assertEqual(cfg["soft_rate"], wb_pool.DEFAULTS["soft_rate"])
+        self.assertEqual(cfg["top_n"], wb_pool.DEFAULTS["top_n"])
+        self.assertFalse(cfg["weighted_pick"])
+        self.assertNotIn("bogus", cfg)
+        self.assertEqual(cfg["breaker_threshold"],
+                         wb_pool.DEFAULTS["breaker_threshold"])
+
+    def test_validate_patch_rejects_bad_shapes(self):
+        with self.assertRaises(ValueError):
+            wb_pool.validate_patch({"weighted_pick": "yes"})
+        with self.assertRaises(ValueError):
+            wb_pool.validate_patch({"breaker_threshold": True})
+        with self.assertRaises(ValueError):
+            wb_pool.validate_patch({"soft_rate": -1})
+        with self.assertRaises(ValueError):
+            wb_pool.validate_patch({"unknown_setting": 1})
+        self.assertEqual(wb_pool.validate_patch({"weighted_pick": False,
+                                                 "soft_rate": 30}),
+                         {"weighted_pick": False, "soft_rate": 30})
+
+
+class AccountGovernanceTests(unittest.TestCase):
+    def test_soft_rate_streak_grows_and_success_resets(self):
+        account = make_account("soft")
+        with mock.patch.object(wb_accounts.time, "time", return_value=1000.0):
+            first = account.note_soft_rate("429")
+            second = account.note_soft_rate("429")
+            self.assertEqual((first, second), (600.0, 1200.0))
+            self.assertEqual(account.soft_streak, 2)
+            self.assertFalse(account.ready())
+            self.assertEqual(account.public()["softStreak"], 2)
+        account.note_success()
+        self.assertEqual(account.soft_streak, 0)
+        self.assertTrue(account.ready())
+
+    def test_breaker_trips_at_threshold_and_expires(self):
+        account = make_account("brk")
+        now = [1000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            account.note_failure("500")
+            account.note_failure("502")
+            self.assertTrue(account.ready())
+            account.note_failure("503")
+            self.assertFalse(account.ready())
+            self.assertAlmostEqual(account.breaker_until - now[0], 1800.0, places=3)
+            now[0] += 2000.0
+            self.assertTrue(account.ready())
+        account.note_success()
+        self.assertEqual(account.fails, 0)
+        self.assertEqual(account.breaker_until, 0.0)
+
+    def test_degrade_window_parks_unknown_failures(self):
+        account = make_account("degrade")
+        account.pool_cfg = wb_pool.normalize({"breaker_threshold": 99,
+                                              "degrade_threshold": 3,
+                                              "degrade_cooldown": 120})
+        now = [2000.0]
+        with mock.patch.object(wb_accounts.time, "time",
+                               side_effect=lambda: now[0]):
+            account.note_unknown_failure("boom")
+            account.note_unknown_failure("boom")
+            self.assertTrue(account.ready())
+            account.note_unknown_failure("boom")
+            self.assertFalse(account.ready())
+            self.assertAlmostEqual(account.degrade_until - now[0], 120.0, places=3)
+        account.note_success()
+        self.assertEqual(account.degrade_count, 0)
+        self.assertEqual(account.degrade_until, 0.0)
+
+    def test_in_flight_cap_parks_and_releases(self):
+        account = make_account("lease")
+        account.max_in_flight = 2
+        self.assertTrue(account.acquire())
+        self.assertTrue(account.acquire())
+        self.assertFalse(account.acquire())
+        self.assertFalse(account.ready())
+        self.assertEqual(account.public()["inFlight"], 2)
+        account.release()
+        self.assertTrue(account.ready())
+        self.assertEqual(account.public()["inFlight"], 1)
+
+
+class WeightedPickTests(unittest.TestCase):
+    def test_idle_weight_prefers_never_used(self):
+        idle = make_account("idle", credits=100)
+        fresh = make_account("fresh", credits=100)
+        idle.last_used_at = time.time() - 3600
+        fresh.last_used_at = 0.0
+        weights = wb_pool.weights_for([idle, fresh], wb_pool.normalize(None),
+                                      time.time())
+        self.assertGreater(weights[1], weights[0])
+
+    def test_unknown_credits_are_not_starved(self):
+        known = make_account("known", credits=1000)
+        unknown = make_account("unknown")
+        weights = wb_pool.weights_for([known, unknown], wb_pool.normalize(None),
+                                      time.time())
+        self.assertGreaterEqual(weights[1], weights[0])
+
+    def test_credits_share_drives_the_draw(self):
+        rich = make_account("rich", credits=1000)
+        poor = make_account("poor", credits=100)
+        cfg = wb_pool.normalize(None)
+        rng = random.Random(7)
+        now = time.time()
+        counts = {"rich": 0, "poor": 0}
+        for _ in range(400):
+            counts[wb_pool.choose([rich, poor], cfg, now=now, rng=rng).uid] += 1
+        self.assertGreater(counts["rich"], counts["poor"] * 2)
+
+    def test_min_pick_gap_skips_just_used_candidate(self):
+        accounts = [make_account("a%d" % i, credits=100) for i in range(5)]
+        now = time.time()
+        accounts[0].last_used_at = now
+        cfg = wb_pool.normalize({"min_pick_gap": 0.1})
+        rng = random.Random(3)
+        for _ in range(50):
+            picked = wb_pool.choose(accounts, cfg, now=now, rng=rng)
+            self.assertNotEqual(picked.uid, "a0")
+
+    def test_pool_pick_uses_weighted_choice_and_stamps_idle(self):
+        pool = wb_accounts.AccountPool(_startup_dir.name)
+        first = make_account("first", credits=100)
+        second = make_account("second", credits=100)
+        pool.accounts = [first, second]
+        pool.apply_pool_config(wb_pool.normalize(None))
+        with mock.patch.object(wb_accounts.wb_pool, "choose",
+                               return_value=second) as choose:
+            picked = pool.pick()
+        self.assertIs(picked, second)
+        self.assertGreater(second.last_used_at, 0.0)
+        choose.assert_called_once()
+
+    def test_weighted_off_restores_cursor_round_robin(self):
+        pool = wb_accounts.AccountPool(_startup_dir.name)
+        first = make_account("first")
+        second = make_account("second")
+        pool.accounts = [first, second]
+        pool.apply_pool_config(wb_pool.normalize({"weighted_pick": False}))
+        self.assertEqual(pool.pick().uid, "first")
+        self.assertEqual(pool.pick().uid, "second")
+        self.assertEqual(pool.pick().uid, "first")
+
+
+class PoolSettingsTests(unittest.TestCase):
+    def test_pool_config_persists_and_merges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = wb_settings.pool_config(directory)
+            self.assertTrue(cfg["weighted_pick"])
+            wb_settings.set_pool_config(directory,
+                                        {"soft_rate": 30, "weighted_pick": False})
+            again = wb_settings.pool_config(directory)
+            self.assertEqual(again["soft_rate"], 30.0)
+            self.assertFalse(again["weighted_pick"])
+            self.assertEqual(again["breaker_threshold"],
+                             wb_pool.DEFAULTS["breaker_threshold"])
+
+    def test_apply_pool_config_sets_realm_caps(self):
+        pool = wb_accounts.AccountPool(_startup_dir.name)
+        cn = make_account("cn", realm="cn")
+        intl = make_account("intl", realm="intl")
+        pool.accounts = [cn, intl]
+        pool.apply_pool_config(wb_pool.normalize({"max_in_flight": 3,
+                                                  "max_in_flight_global": 2}))
+        self.assertEqual(cn.max_in_flight, 3)
+        self.assertEqual(intl.max_in_flight, 2)
+        self.assertEqual(pool.affinity.ttl, 7200)
+
+
+class LeaseWrapperTests(unittest.TestCase):
+    def test_lease_released_when_wrapped_response_closes(self):
+        import wb_proxy
+
+        account = make_account("wrapped")
+        account.max_in_flight = 1
+        self.assertTrue(account.acquire())
+
+        class FakeResponse(object):
+            def __init__(self):
+                self.closed = False
+                self.lines = [b"data: {}\n"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                self.close()
+                return False
+
+            def __iter__(self):
+                return iter(self.lines)
+
+            def close(self):
+                self.closed = True
+
+        fake = FakeResponse()
+        wrapped = wb_proxy._LeasedResponse(fake, account)
+        with wrapped:
+            for _line in wrapped:
+                pass
+        self.assertTrue(fake.closed)
+        self.assertEqual(account.in_flight, 0)
+        self.assertTrue(account.acquire())
+
+    def test_close_without_context_still_releases(self):
+        import wb_proxy
+
+        account = make_account("closed-directly")
+        self.assertTrue(account.acquire())
+
+        class FakeResponse(object):
+            def close(self):
+                pass
+
+        wrapped = wb_proxy._LeasedResponse(FakeResponse(), account)
+        wrapped.close()
+        wrapped.close()
+        self.assertEqual(account.in_flight, 0)
+
+
+class RateLimitClassifierTests(unittest.TestCase):
+    def test_reset_time_means_model_scoped(self):
+        import wb_proxy
+
+        self.assertFalse(wb_proxy.rate_limit_is_account_level("usage exceeds frequency limit",
+                                                              time.time() + 60))
+
+    def test_missing_reset_time_means_account_soft_limit(self):
+        import wb_proxy
+
+        self.assertTrue(wb_proxy.rate_limit_is_account_level("usage exceeds frequency limit",
+                                                             None))
+        self.assertTrue(wb_proxy.rate_limit_is_account_level("slow down", None))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=1)

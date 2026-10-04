@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from wb_fingerprint import derive_id, generate_request_id
+import wb_pool
 import wb_identity
 import wb_settings
 import wb_webagent
@@ -257,6 +258,19 @@ class Account(object):
         # unknown count.
         self.daily_token_limit = 0
         self.daily_tokens_today = None
+        # Panel-parity governance state (runtime only, like model_cooldowns):
+        # consecutive soft limits, consecutive failures feeding the breaker,
+        # consecutive unknown failures feeding the degrade window, the idle
+        # weight's last-used stamp and the in-flight lease counter.
+        self.pool_cfg = dict(wb_pool.DEFAULTS)
+        self.soft_streak = 0
+        self.fails = 0
+        self.breaker_until = 0.0
+        self.degrade_count = 0
+        self.degrade_until = 0.0
+        self.last_used_at = 0.0
+        self.in_flight = 0
+        self.max_in_flight = 0
         # Serialise token refresh and file writes. Request threads, /health,
         # dashboard polls and the scheduler can all reach refresh()/save() for
         # the same account at once; without a lock the upstream rotates the
@@ -330,6 +344,11 @@ class Account(object):
             "inCooldown": deadline > now,
             "cooldownFor": round(max(0.0, deadline - now)) or None,
             "modelCooldowns": models,
+            "softStreak": int(self.soft_streak),
+            "breakerFor": round(max(0.0, self.breaker_until - now)) or None,
+            "degradeFor": round(max(0.0, self.degrade_until - now)) or None,
+            "inFlight": int(self.in_flight),
+            "maxInFlight": int(self.max_in_flight or 0),
             "addedAt": self.added_at,
             "file": os.path.basename(self.path) if self.path else None,
             "credits": self.credits,
@@ -431,6 +450,10 @@ class Account(object):
         # Today's token budget is spent: keep the seat for tomorrow instead
         # of letting the upstream answer 429 for the rest of the day.
         if self.daily_limit_blocked():
+            return False
+        # In-flight lease: an account already serving its share of concurrent
+        # requests stays out of the picker until one of them finishes.
+        if self.max_in_flight and self.in_flight >= self.max_in_flight:
             return False
         exp = self.expires_at or jwt_exp(self.access_token)
         if not exp:
@@ -837,7 +860,8 @@ class Account(object):
             return 0.0
         now = time.time()
         with self._throttle_lock:
-            wait = max(0.0, self.cooldown_until - now)
+            wait = max(0.0, self.cooldown_until - now,
+                       self.breaker_until - now, self.degrade_until - now)
             if model:
                 wait = max(wait, max(0.0, self.model_cooldowns.get(model, 0.0) - now))
         return wait
@@ -851,6 +875,78 @@ class Account(object):
             if self.last_error or self.cooldown_until:
                 self.last_error = ""
                 self.cooldown_until = 0
+
+    def note_soft_rate(self, message):
+        """Account-level rate limit: soft cooldown with exponential backoff."""
+        cfg = self.pool_cfg
+        with self._throttle_lock:
+            self.soft_streak += 1
+            wait = wb_pool.soft_backoff(self.soft_streak, cfg["soft_rate"],
+                                        cfg["soft_rate_max"])
+            self.last_error = str(message)[:200]
+            self.cooldown_until = max(self.cooldown_until, time.time() + wait)
+        return wait
+
+    def note_failure(self, message):
+        """5xx / transport failure: feed the breaker counter (no cooldown yet)."""
+        cfg = self.pool_cfg
+        with self._throttle_lock:
+            self.last_error = str(message)[:200]
+            self.fails += 1
+            if self.fails >= int(cfg["breaker_threshold"]):
+                wait = wb_pool.breaker_backoff(self.fails, cfg["breaker_threshold"],
+                                               cfg["breaker_cooldown"],
+                                               cfg["breaker_cooldown_max"])
+                self.breaker_until = max(self.breaker_until, time.time() + wait)
+        return self.breaker_until
+
+    def note_unknown_failure(self, message):
+        """Unknown error: degrade counter plus the shared breaker counter."""
+        cfg = self.pool_cfg
+        with self._throttle_lock:
+            self.last_error = str(message)[:200]
+            self.degrade_count += 1
+            self.fails += 1
+            now = time.time()
+            if self.degrade_count >= int(cfg["degrade_threshold"]):
+                wait = wb_pool.degrade_backoff(self.degrade_count,
+                                               cfg["degrade_threshold"],
+                                               cfg["degrade_cooldown"],
+                                               cfg["degrade_cooldown_max"])
+                self.degrade_until = max(self.degrade_until, now + wait)
+            if self.fails >= int(cfg["breaker_threshold"]):
+                wait = wb_pool.breaker_backoff(self.fails, cfg["breaker_threshold"],
+                                               cfg["breaker_cooldown"],
+                                               cfg["breaker_cooldown_max"])
+                self.breaker_until = max(self.breaker_until, now + wait)
+        return self.degrade_until
+
+    def note_success(self, model=None):
+        """A served request clears the account-level penalties."""
+        with self._throttle_lock:
+            if model:
+                self.model_cooldowns.pop(model, None)
+            self.soft_streak = 0
+            self.fails = 0
+            self.degrade_count = 0
+            self.breaker_until = 0.0
+            self.degrade_until = 0.0
+            self.last_error = ""
+            self.cooldown_until = 0.0
+
+    def acquire(self):
+        """Reserve one in-flight slot; False when the account is at its cap."""
+        with self._throttle_lock:
+            cap = int(self.max_in_flight or 0)
+            if cap and self.in_flight >= cap:
+                return False
+            self.in_flight += 1
+            return True
+
+    def release(self):
+        with self._throttle_lock:
+            if self.in_flight > 0:
+                self.in_flight -= 1
 
 def _human_delta(seconds):
     if seconds is None: return None
@@ -898,6 +994,7 @@ class AccountPool(object):
         self.logins = {}
         self._lock = threading.RLock()
         self._cursor = 0
+        self.pool_cfg = wb_pool.normalize(None)
         self.affinity = SessionAffinity()
 
     def load(self):
@@ -915,6 +1012,7 @@ class AccountPool(object):
                     continue
                 if account.uid:
                     self.accounts.append(account)
+            self.apply_pool_config()
             self.apply_reserve_credits()
             return self.accounts
 
@@ -949,6 +1047,7 @@ class AccountPool(object):
             else:
                 self.accounts.append(account)
             account.save(self.dir)
+            self.apply_pool_config()
             self.apply_proxy_slots()
             self.apply_reserve_credits()
             return account
@@ -1075,6 +1174,27 @@ class AccountPool(object):
                 else:
                     account.proxy = account.proxy_legacy
 
+    def apply_pool_config(self, cfg=None):
+        """Re-resolve the panel-parity pool rules for every account.
+
+        Values mirror the panel project: weighted picking, soft-rate /
+        breaker / degrade backoff windows, per-realm in-flight caps and the
+        affinity store size. Passing None re-reads settings.json.
+        """
+        if cfg is None:
+            cfg = wb_settings.pool_config(self.dir)
+        cfg = wb_pool.normalize(cfg)
+        with self._lock:
+            self.pool_cfg = cfg
+            for account in self.accounts:
+                account.pool_cfg = cfg
+                cap = (cfg["max_in_flight_global"] if account.realm == "intl"
+                       else cfg["max_in_flight"])
+                account.max_in_flight = int(cap or 0)
+            self.affinity.ttl = int(cfg["affinity_ttl"])
+            self.affinity.max_entries = int(cfg["affinity_max_entries"])
+        return cfg
+
     def apply_reserve_credits(self, value=None):
         """Re-resolve the low-credit guard for every account.
 
@@ -1178,20 +1298,42 @@ class AccountPool(object):
         return account
 
     def pick(self, realm=None, exclude=None, model=None):
+        """Pick the next account for model.
+
+        Weighted mode (default, panel parity): healthy candidates are ranked
+        by credits share plus idle compensation, the Top-5 shortlist is drawn
+        from, and a candidate used within the last 100ms is skipped so a burst
+        cannot stampede one credential. weighted_pick=false restores the
+        legacy cursor round-robin for anyone who wants the old order.
+        """
         exclude = exclude or set()
+        now = time.time()
         with self._lock:
-            snapshot = [a for a in self.accounts if not realm or a.realm == realm]
+            snapshot = [a for a in self.accounts
+                        if (not realm or a.realm == realm) and a.uid not in exclude]
             start = self._cursor
-        total = len(snapshot)
-        if total == 0: return None
-        for offset in range(total):
-            index = (start + offset) % total
-            account = snapshot[index]
-            if account.uid in exclude: continue
-            if account.ready(model=model):
-                with self._lock: self._cursor = (index + 1) % total
-                return account
-        return None
+            cfg = dict(self.pool_cfg)
+        if not snapshot:
+            return None
+        if cfg.get("weighted_pick", True):
+            candidates = [a for a in snapshot if a.ready(model=model)]
+            if not candidates:
+                return None
+            account = wb_pool.choose(candidates, cfg, now=now)
+        else:
+            total = len(snapshot)
+            account = None
+            for offset in range(total):
+                index = (start + offset) % total
+                cand = snapshot[index]
+                if cand.ready(model=model):
+                    account = cand
+                    with self._lock:
+                        self._cursor = (index + 1) % total
+                    break
+        if account is not None:
+            account.last_used_at = now
+        return account
 
     def representative(self, realm=None):
         with self._lock:

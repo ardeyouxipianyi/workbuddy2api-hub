@@ -36,6 +36,7 @@ import urllib.error
 import urllib.request
 import uuid
 import wb_accounts
+import wb_pool
 import wb_catalog
 import wb_settings
 import wb_webtools
@@ -1550,6 +1551,7 @@ def runtime_settings_view():
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
+        "pool": wb_settings.pool_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -3262,6 +3264,18 @@ def is_transient(exc):
     return any(m in t for m in markers)
 
 
+def rate_limit_is_account_level(detail, reset_at):
+    """True when a 429 is a soft account limit rather than a model park.
+
+    The upstream names a reset wall clock for the model-scoped form (code
+    6004, "usage exceeds frequency limit"). A 429 without one is a soft
+    limit on the credential, which the panel project cools with an
+    exponential backoff instead of parking just one model. The detail is
+    kept for call-site symmetry and stays available for logging.
+    """
+    return reset_at is None
+
+
 def parse_rate_limit_reset(detail):
     """Pull the reset time out of an upstream 429 body, if it names one.
 
@@ -3286,6 +3300,63 @@ def parse_rate_limit_reset(detail):
         return base - offset
     except Exception:
         return None
+
+
+class _LeasedResponse(object):
+    """Wrap an upstream response so its in-flight lease is released on close.
+
+    Callers use `with upstream:` for both the streaming and the buffered
+    paths, so delegating __enter__/__exit__ (plus close) covers every exit,
+    including a client disconnecting midway through a stream.
+    """
+
+    def __init__(self, response, account):
+        self._response = response
+        self._account = account
+        self._released = False
+
+    def __getattr__(self, name):
+        return getattr(self._response, name)
+
+    def __iter__(self):
+        return iter(self._response)
+
+    def __enter__(self):
+        enter = getattr(self._response, "__enter__", None)
+        if enter is not None:
+            enter()
+        return self
+
+    def __exit__(self, *exc_info):
+        try:
+            exit_fn = getattr(self._response, "__exit__", None)
+            if exit_fn is not None:
+                return exit_fn(*exc_info)
+            return False
+        finally:
+            self.release()
+
+    def close(self):
+        try:
+            close = getattr(self._response, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self.release()
+
+    def read(self, *args, **kwargs):
+        return self._response.read(*args, **kwargs)
+
+    def readline(self, *args, **kwargs):
+        return self._response.readline(*args, **kwargs)
+
+    def release(self):
+        if not self._released:
+            self._released = True
+            try:
+                self._account.release()
+            except Exception:
+                pass
 
 
 def open_upstream(payload, session_key=None, target_realm=None):
@@ -3344,10 +3415,17 @@ def open_upstream(payload, session_key=None, target_realm=None):
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
                                      headers=account.headers(purpose="chat"))
         try:
-            resp = wb_accounts.urlopen(req, timeout=600, proxy=account.proxy)
-            account.clear_error(model=model)
+            if not account.acquire():
+                tried.add(account.uid)
+                continue
+            try:
+                resp = wb_accounts.urlopen(req, timeout=600, proxy=account.proxy)
+            except Exception:
+                account.release()
+                raise
+            account.note_success(model=model)
             reset_switch_counter(account, model)
-            return resp, account
+            return _LeasedResponse(resp, account), account
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
                 try:
@@ -3355,6 +3433,16 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 except Exception:
                     detail = ""
                 reset_at = parse_rate_limit_reset(detail)
+                if rate_limit_is_account_level(detail, reset_at):
+                    wait = account.note_soft_rate("HTTP 429 (account soft rate)")
+                    log("account %s soft-rate limited, cooling %.0fs (streak %d)"
+                        % (account.uid[:8], wait, account.soft_streak))
+                    if session_key and POOL:
+                        POOL.affinity.unbind(session_key)
+                    last_error = exc
+                    last_429 = exc
+                    last_429_detail = detail
+                    continue
                 wait = max(1.0, reset_at - time.time()) if reset_at else 60.0
                 # Model-scoped: only this model is throttled for this account,
                 # so sibling models stay serviceable on the same credential.
@@ -3401,7 +3489,9 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 continue
             if exc.code in (500, 502, 503, 504):
                 transient_hits += 1
-                log("upstream %s for '%s', retrying" % (exc.code, model))
+                account.note_failure("HTTP %d" % exc.code)
+                log("upstream %s for '%s', retrying (fails=%d)"
+                    % (exc.code, model, account.fails))
                 if session_key and POOL:
                     POOL.affinity.unbind(session_key)
                 last_error = exc
@@ -3412,11 +3502,13 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 POOL.affinity.unbind(session_key)
             if is_transient(exc):
                 transient_hits += 1
-                log("upstream connection hiccup for '%s' (%s), retrying"
-                    % (model, type(exc).__name__))
+                account.note_unknown_failure("connection: %s" % type(exc).__name__)
+                log("upstream connection hiccup for '%s' (%s), retrying (degrade=%d)"
+                    % (model, type(exc).__name__, account.degrade_count))
                 last_error = exc
                 time.sleep(min(0.6 * transient_hits, 2.0))
                 continue
+            account.note_unknown_failure(str(exc)[:120])
             account.note_error(str(exc)[:120], cooldown=60, single_account=(total <= 1))
             last_error = exc
             continue
@@ -5912,6 +6004,18 @@ class Handler(BaseHTTPRequestHandler):
                                    "invalid_request_error")
             wb_settings.set_local_web_tools(ACCOUNTS_DIR, raw)
             reply["local_web_tools"] = raw
+        if "pool" in payload:
+            raw = payload.get("pool")
+            if not isinstance(raw, dict):
+                return self._error(400, "pool must be an object", "invalid_request_error")
+            try:
+                patch = wb_pool.validate_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_pool_config(ACCOUNTS_DIR, patch)
+            if POOL:
+                POOL.apply_pool_config()
+            reply["pool"] = wb_settings.pool_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()

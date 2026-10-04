@@ -17,6 +17,8 @@ import secrets
 import threading
 import time
 
+import wb_pool
+
 DEFAULT_PANEL_PASSWORD = "admin"
 PBKDF2_ROUNDS = 120_000
 SESSION_TTL = 7 * 24 * 3600
@@ -389,6 +391,34 @@ def set_daily_token_limit(accounts_dir, value):
         data["daily_token_limit"] = value
         save(accounts_dir, data)
     return value
+
+
+def pool_config(accounts_dir):
+    """Panel-parity pool rules (weighted picking + backoff windows).
+
+    Stored as one `pool` object in settings.json. Unknown keys are ignored
+    and missing keys fall back to the panel-verified defaults, so an
+    install that never writes this object keeps its previous behaviour
+    plus the new weighted picking.
+    """
+    stored = load(accounts_dir).get("pool")
+    merged = dict(wb_pool.DEFAULTS)
+    if isinstance(stored, dict):
+        merged.update({k: v for k, v in stored.items() if k in wb_pool.DEFAULTS})
+    return wb_pool.normalize(merged)
+
+
+def set_pool_config(accounts_dir, cfg):
+    """Persist the pool rules. Returns the normalized, stored config."""
+    current = pool_config(accounts_dir)
+    if isinstance(cfg, dict):
+        current.update({k: v for k, v in cfg.items() if k in wb_pool.DEFAULTS})
+    clean = wb_pool.normalize(current)
+    with _lock:
+        data = load(accounts_dir)
+        data["pool"] = clean
+        save(accounts_dir, data)
+    return clean
 
 
 def auto_switch_product(accounts_dir):
