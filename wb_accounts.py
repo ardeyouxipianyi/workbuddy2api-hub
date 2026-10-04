@@ -518,11 +518,13 @@ class Account(object):
             return self.refresh()
         return self.refresh()
 
-    def headers(self, purpose="chat"):
+    def headers(self, purpose="chat", session_meta=None):
         """組出這一輪的出站標頭。
 
         chat 用途走 wb_identity（CLI 頭 / WorkBuddy 頭，可切換）；
         billing 用途維持原本的輕量標頭，計費端點不吃那套身分。
+        session_meta 由請求層在輪轉循環外算好（會話頭族的聚合主鍵），
+        同一輪的重試/換號共用；缺省時由 wb_identity 自行生成。
         """
         cfg = get_realm_config(self.realm)
 
@@ -555,14 +557,19 @@ class Account(object):
                 headers["X-Device-Token"] = device_token
             return headers
 
+        meta = session_meta if isinstance(session_meta, dict) else {}
+        conversation_id = meta.get("conversation_id") or getattr(
+            self, "conversation_id", None)
         identity = wb_identity.build_identity_headers(
             product=self.product,
             realm=self.realm,
             uid=self.uid,
             token=self.access_token,
-            conversation_id=getattr(self, "conversation_id", None),
+            conversation_id=conversation_id,
             enterprise_id=self.enterprise_id,
             tenant_id=self.enterprise_id,
+            conversation_request_id=meta.get("conversation_request_id"),
+            trace_id=meta.get("trace_id"),
         )
         headers = {
             "Content-Type": "application/json",

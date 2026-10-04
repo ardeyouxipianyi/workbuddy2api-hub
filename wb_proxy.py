@@ -3275,6 +3275,52 @@ class RateLimited(Exception):
         super().__init__("upstream rate limit: %s" % (self.detail[:200] or "429"))
 
 
+def gateway_hint(status, message):
+    """Panel-parity error.gateway_hint: a gateway-side note beside the raw
+    upstream message (never a replacement). Empty = no hint, not invented.
+
+    Covers the shapes the hub can classify from the upstream body/status:
+    11133 model_param_invalid, 11135 invalid_image_data, rate limits,
+    content review, exhausted credits, dead sessions, missing models,
+    prompt-length rejections and the local no-healthy-account case.
+    """
+    text = str(message or "")
+    lower = text.lower()
+    if ("11133" in lower or "model_param_invalid" in lower
+            or "invalid request parameters" in lower):
+        return ("request parameters were rejected by the model provider; "
+                "check message format and model capabilities")
+    if ("11135" in lower or "invalid_image_data" in lower
+            or "replace the image" in lower):
+        return ("image data rejected by upstream; use a real/valid image, "
+                "may need a new conversation")
+    if "no usable account" in lower or "no healthy account" in lower:
+        return "no healthy account available in pool; check /status or retry later"
+    if ("context length" in lower or "context_length" in lower
+            or "prompt too long" in lower or "too many tokens" in lower
+            or "maximum context" in lower):
+        return ("request context exceeds the model's limit; reduce "
+                "history/message size")
+    if status == 429 or "rate limit" in lower or "frequency limit" in lower:
+        return "rate limited by upstream; retry after reset"
+    if status == 402 or ("insufficient" in lower and "credit" in lower):
+        return ("account credits exhausted at upstream; waiting for daily "
+                "check-in to restore")
+    if "session" in lower and ("not found" in lower or "expired" in lower):
+        return ("account session expired at upstream; the account is disabled "
+                "until re-login")
+    if "content" in lower and ("reject" in lower or "policy" in lower):
+        return ("request content was rejected by content policy; adjust the "
+                "prompt and retry")
+    if ("no such model" in lower or "model not found" in lower
+            or "unsupported model" in lower):
+        return ("upstream has no such model on this backend; switch model or "
+                "retry on another account")
+    if status == 403 and "waf" in lower:
+        return "upstream WAF blocked the gateway; retry after the block window"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # 出站身分自動切換
 #
@@ -3548,7 +3594,8 @@ class _LeasedResponse(object):
                 pass
 
 
-def open_upstream(payload, session_key=None, target_realm=None):
+def open_upstream(payload, session_key=None, target_realm=None,
+                  session_meta=None, inbound_request_id="", trace_id=""):
     # Refresh the daily token guard before picking. The scan underneath is
     # incremental and TTL-cached, so this is a stat() plus a cached dict on
     # the hot path, and an account parked by the guard is skipped like any
@@ -3565,6 +3612,12 @@ def open_upstream(payload, session_key=None, target_realm=None):
         if session_key and AFFINITY_DEBUG:
             log("affinity: derived %s for %d msgs"
                 % (session_key, len(upstream_body.get("messages") or [])))
+    # Session header family: computed once per user send, reused by every
+    # retry / account switch / product switch in this loop (panel issue #35).
+    if session_meta is None:
+        session_meta = session_meta_for(payload, session_key=session_key,
+                                        inbound_request_id=inbound_request_id,
+                                        trace_id=trace_id)
     total = max(1, POOL.count_ready(realm, model=model)) if POOL else 1
     tried = set()
     last_error = None
@@ -3604,8 +3657,9 @@ def open_upstream(payload, session_key=None, target_realm=None):
         else:
             attempt_body = upstream_body
         attempt_data = json.dumps(attempt_body, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
-                                     headers=account.headers(purpose="chat"))
+        req = urllib.request.Request(
+            chat_url, data=attempt_data, method="POST",
+            headers=account.headers(purpose="chat", session_meta=session_meta))
         try:
             if not account.acquire():
                 tried.add(account.uid)
@@ -3774,6 +3828,113 @@ def extract_session_key(headers, payload):
     if key:
         return str(key).strip()
     return None
+
+
+def resolve_conversation_id(payload):
+    """The client's conversationId from the body only (panel parity).
+
+    Metadata wins over top-level, snake_case over camelCase; no user_id
+    fallback - X-Conversation-ID means a conversation, and inventing one
+    would pollute the upstream's aggregation. Missing -> "" (omit the
+    header rather than fabricate).
+    """
+    if not isinstance(payload, dict):
+        return ""
+    meta = payload.get("metadata")
+    if isinstance(meta, dict):
+        for key in ("conversation_id", "conversationId"):
+            value = meta.get(key)
+            if value:
+                return str(value).strip()
+    for key in ("conversation_id", "conversationId"):
+        value = payload.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _content_signature(content):
+    """Deterministic signature of a user message's content.
+
+    Strings sign as-is (legacy key values never drift). Multimodal arrays
+    concatenate text parts and add "[type:sha8]" for non-text parts, so two
+    turns that differ only by an image stay distinct without hashing a whole
+    base64 data URL into the key.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    has_non_text = False
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type") or ""
+        if ptype in ("", "text"):
+            text = part.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+            continue
+        has_non_text = True
+        raw = json.dumps(part, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        parts.append("\n[%s:%s]\n" % (ptype, hashlib.sha256(raw).hexdigest()[:8]))
+    out = "".join(parts)
+    return out.strip() if has_non_text else out
+
+
+def turn_key_from_messages(messages):
+    """Panel-parity turn key: index + signature of the LAST user message.
+
+    The last user message is constant across every upstream call of one user
+    send (tool rounds, retries, account switches) and changes when the user
+    sends the next message - exactly the aggregation unit the upstream
+    backend groups by. The index is part of the key so two turns that repeat
+    the same text ("continue") stay separate.
+    """
+    if not isinstance(messages, list):
+        return ""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        signature = _content_signature(message.get("content"))
+        if not signature:
+            return ""
+        return "u%d:%s" % (index, signature)
+    return ""
+
+
+def session_meta_for(payload, session_key=None, inbound_request_id="", trace_id=""):
+    """Build the per-turn session header family, once per user send.
+
+    conversationRequestID precedence (panel issue #35):
+      inbound passthrough > turn key (mixed with the session key when both
+      exist) > session key > fresh random id. The id is computed outside the
+      retry loop, so every attempt of one turn reuses it and the upstream
+      backend aggregates the turn as one record instead of one per HTTP call.
+    """
+    inbound = str(inbound_request_id or "").strip()
+    if inbound:
+        conversation_request_id = inbound
+    else:
+        messages = payload.get("messages") if isinstance(payload, dict) else None
+        turn_key = turn_key_from_messages(messages)
+        if turn_key and session_key:
+            conversation_request_id = wb_identity.stable_request_id(
+                str(session_key) + ":" + turn_key)
+        elif turn_key:
+            conversation_request_id = wb_identity.stable_request_id(turn_key)
+        elif session_key:
+            conversation_request_id = wb_identity.stable_request_id(str(session_key))
+        else:
+            conversation_request_id = wb_identity.new_message_id()
+    return {
+        "conversation_id": resolve_conversation_id(payload),
+        "conversation_request_id": conversation_request_id,
+        "trace_id": str(trace_id or "").strip(),
+    }
+
 
 def estimate_tokens(text):
     if not text:
@@ -4417,7 +4578,8 @@ def follow_up_with_tool_results(internal_calls, holder, model, session_key, t_st
     body["messages"] = convo
     body["stream"] = True
     return open_upstream(body, session_key=session_key,
-                         target_realm=holder.get("realm"))
+                         target_realm=holder.get("realm"),
+                         session_meta=holder.get("session_meta"))
 
 
 def internal_calls_from_chat(chat_obj, web_tools=False):
@@ -5520,7 +5682,11 @@ class Handler(BaseHTTPRequestHandler):
         # the drain below waits for data that will never arrive.
         self._handle_expect_continue()
         self._discard_body()
-        self._json(code, {"error": {"message": message, "type": err_type, "code": code}})
+        error = {"message": message, "type": err_type, "code": code}
+        hint = gateway_hint(code, message)
+        if hint:
+            error["gateway_hint"] = hint
+        self._json(code, {"error": error})
     def _rate_limited(self, exc):
         """429 with Retry-After, so clients back off instead of hammering.
 
@@ -5543,14 +5709,16 @@ class Handler(BaseHTTPRequestHandler):
         # checked on the way in), so drain it exactly like _error does.
         self._handle_expect_continue()
         self._discard_body()
-        body = json.dumps({
-            "error": {
-                "message": text + detail,
-                "type": "rate_limit_error",
-                "code": 429,
-                "retry_after": wait,
-            }
-        }, ensure_ascii=False).encode("utf-8")
+        error = {
+            "message": text + detail,
+            "type": "rate_limit_error",
+            "code": 429,
+            "retry_after": wait,
+        }
+        hint = gateway_hint(429, text + detail)
+        if hint:
+            error["gateway_hint"] = hint
+        body = json.dumps({"error": error}, ensure_ascii=False).encode("utf-8")
         self.send_response(429)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -6947,7 +7115,14 @@ class Handler(BaseHTTPRequestHandler):
             key_blocked = self._key_model_error(chat_req.get("model"))
             if key_blocked:
                 return self._error(400, key_blocked, "invalid_request_error")
-            upstream, account = open_upstream(chat_req, session_key=session_key, target_realm=req_realm)
+            session_meta = session_meta_for(
+                chat_req, session_key=session_key,
+                inbound_request_id=(self.headers.get("X-Conversation-Request-ID")
+                                    or self.headers.get("X-Root-Request-ID") or ""),
+                trace_id=(self.headers.get("X-Trace-ID") or ""))
+            upstream, account = open_upstream(
+                chat_req, session_key=session_key, target_realm=req_realm,
+                session_meta=session_meta)
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),
@@ -6978,12 +7153,13 @@ class Handler(BaseHTTPRequestHandler):
             if want_stream:
                 return self._responses_stream_response(
                     upstream, model, custom_names, request_meta, fp, account, t_start, ns_map,
-                    base_body=chat_req, session_key=session_key, realm=req_realm)
+                    base_body=chat_req, session_key=session_key, realm=req_realm,
+                    session_meta=session_meta)
             return self._responses_nonstream_response(
                 upstream, model, custom_names, request_meta, fp, account, t_start, ns_map,
                 base_body=chat_req, session_key=session_key, realm=req_realm)
 
-    def _responses_stream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None, base_body=None, session_key=None, realm=None):
+    def _responses_stream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None, base_body=None, session_key=None, realm=None, session_meta=None):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -6997,7 +7173,8 @@ class Handler(BaseHTTPRequestHandler):
                   "base_body": base_body,
                   "base_messages": (base_body or {}).get("messages"),
                   "session_key": session_key,
-                  "realm": realm}
+                  "realm": realm,
+                  "session_meta": session_meta}
         first_ms = None
         try:
             # 一輪跑完如果模型要的是 web_search / web_fetch，就由反代
@@ -7204,7 +7381,11 @@ class Handler(BaseHTTPRequestHandler):
             key_blocked = self._key_model_error(payload.get("model"))
             if key_blocked:
                 return self._error(400, key_blocked, "invalid_request_error")
-            upstream, account = open_upstream(payload, session_key=session_key, target_realm=req_realm)
+            upstream, account = open_upstream(
+                payload, session_key=session_key, target_realm=req_realm,
+                inbound_request_id=(self.headers.get("X-Conversation-Request-ID")
+                                    or self.headers.get("X-Root-Request-ID") or ""),
+                trace_id=(self.headers.get("X-Trace-ID") or ""))
         except ContentRejected as exc:
             record_error(model, 403, exc.detail[:200],
                          elapsed_ms=int((time.time() - t_start) * 1000),

@@ -182,7 +182,7 @@ class FakeHandler(object):
 opened = []
 
 
-def fake_open_upstream(body, session_key=None, target_realm=None):
+def fake_open_upstream(body, session_key=None, target_realm=None, **kwargs):
     opened.append(body)
     return FakeUpstream(sse(ANSWER_CHUNKS)), FakeAccount()
 
@@ -233,7 +233,7 @@ print("[5] when the rounds run out the tools are withdrawn, not faked")
 calls = {"n": 0}
 
 
-def always_tool_body(body, session_key=None, target_realm=None):
+def always_tool_body(body, session_key=None, target_realm=None, **kwargs):
     calls["n"] += 1
     calls.setdefault("bodies", []).append(body)
     if calls["n"] > W.MAX_WEB_ROUNDS:
@@ -321,7 +321,7 @@ def fake_aggregate(upstream, model, sink, *a, **k):
     return CHAT_CALL if seen["aggregate"] == 1 else CHAT_DONE
 
 
-def capture_open(body, session_key=None, target_realm=None):
+def capture_open(body, session_key=None, target_realm=None, **kwargs):
     seen["bodies"].append(body)
     return FakeUpstream(sse(ANSWER_CHUNKS)), FakeAccount()
 
@@ -372,7 +372,7 @@ print("[9] with the switch off the client's own call is forwarded, not run")
 passthrough = []
 
 
-def passthrough_open(body, session_key=None, target_realm=None):
+def passthrough_open(body, session_key=None, target_realm=None, **kwargs):
     passthrough.append(body)
     return FakeUpstream(sse(ANSWER_CHUNKS)), FakeAccount()
 
