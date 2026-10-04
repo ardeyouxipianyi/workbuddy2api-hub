@@ -1558,6 +1558,7 @@ def runtime_settings_view():
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
         "pool": wb_settings.pool_config(ACCOUNTS_DIR),
         "schedule": wb_settings.schedule_config(ACCOUNTS_DIR),
+        "redis": wb_settings.redis_config(ACCOUNTS_DIR),
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
@@ -6059,6 +6060,18 @@ class Handler(BaseHTTPRequestHandler):
             if SCHEDULER:
                 SCHEDULER.apply_settings()
             reply["schedule"] = wb_settings.schedule_config(ACCOUNTS_DIR)
+        if "redis" in payload:
+            raw = payload.get("redis")
+            if not isinstance(raw, dict):
+                return self._error(400, "redis must be an object", "invalid_request_error")
+            try:
+                patch = wb_settings.validate_redis_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_redis_config(ACCOUNTS_DIR, patch)
+            if POOL:
+                POOL.apply_pool_config()
+            reply["redis"] = wb_settings.redis_config(ACCOUNTS_DIR)
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()

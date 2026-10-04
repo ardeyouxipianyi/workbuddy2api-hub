@@ -523,6 +523,67 @@ def set_schedule_config(accounts_dir, cfg):
     return clean
 
 
+REDIS_DEFAULTS = {
+    "url": "",
+    "token": "",
+    "affinity_mirror": False,
+    "ttl_seconds": 604800,
+}
+
+
+def validate_redis_patch(raw):
+    """Strict validation for a panel-saved redis/upstash patch."""
+    out = {}
+    for key, value in (raw or {}).items():
+        if key in ("url", "token"):
+            if not isinstance(value, str):
+                raise ValueError("%s must be a string" % key)
+            out[key] = value.strip()
+        elif key == "affinity_mirror":
+            if not isinstance(value, bool):
+                raise ValueError("affinity_mirror must be true or false")
+            out[key] = value
+        elif key == "ttl_seconds":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("ttl_seconds must be a whole number")
+            if value < 60:
+                raise ValueError("ttl_seconds cannot be less than 60")
+            out[key] = value
+        else:
+            raise ValueError("unknown redis setting %r" % key)
+    return out
+
+
+def redis_config(accounts_dir):
+    """Optional Upstash mirror for sticky sessions (off by default)."""
+    stored = load(accounts_dir).get("redis")
+    stored = stored if isinstance(stored, dict) else {}
+    out = {}
+    for key, default in REDIS_DEFAULTS.items():
+        value = stored.get(key, default)
+        if key in ("url", "token"):
+            out[key] = value.strip() if isinstance(value, str) else default
+        elif key == "affinity_mirror":
+            out[key] = value if isinstance(value, bool) else default
+        else:
+            out[key] = (value if isinstance(value, int) and not isinstance(value, bool)
+                        and value >= 60 else default)
+    return out
+
+
+def set_redis_config(accounts_dir, cfg):
+    """Persist the redis mirror settings. Returns the stored config."""
+    current = redis_config(accounts_dir)
+    if isinstance(cfg, dict):
+        current.update({k: v for k, v in cfg.items() if k in REDIS_DEFAULTS})
+    clean = validate_redis_patch(current)
+    with _lock:
+        data = load(accounts_dir)
+        data["redis"] = clean
+        save(accounts_dir, data)
+    return clean
+
+
 def auto_switch_product(accounts_dir):
     """Whether an upstream 429 may rotate an account's outbound identity.
 

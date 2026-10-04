@@ -13,6 +13,7 @@ import uuid
 from wb_fingerprint import derive_id, generate_request_id
 import wb_pool
 import wb_identity
+import wb_redisstore
 import wb_settings
 import wb_webagent
 
@@ -1027,33 +1028,87 @@ def _human_delta(seconds):
     return "%d min" % int(seconds / 60)
 
 class SessionAffinity(object):
-    def __init__(self, ttl=7200, max_entries=5000):
+    """Session -> account bindings, optionally mirrored to Redis.
+
+    The mirror is off unless the operator configures one; every mirror
+    call is best-effort, so a dead Redis degrades to the in-memory
+    behaviour instead of breaking a request.
+    """
+
+    def __init__(self, ttl=7200, max_entries=5000, mirror=None, mirror_ttl=604800):
         self.ttl = ttl
         self.max_entries = max_entries
         self.bindings = {}
         self._lock = threading.Lock()
+        self.mirror = mirror
+        try:
+            self.mirror_ttl = int(mirror_ttl or 604800)
+        except (TypeError, ValueError):
+            self.mirror_ttl = 604800
+
+    def configure_mirror(self, mirror, mirror_ttl=None):
+        with self._lock:
+            self.mirror = mirror
+            if mirror_ttl is not None:
+                try:
+                    self.mirror_ttl = int(mirror_ttl)
+                except (TypeError, ValueError):
+                    pass
+
+    def _mirror_key(self, key):
+        return wb_redisstore.PREFIX + str(key)
+
     def get(self, key):
-        if not key: return None
+        if not key:
+            return None
         with self._lock:
             entry = self.bindings.get(key)
-            if not entry: return None
-            uid, exp = entry
-            if time.time() > exp:
+            if entry:
+                uid, exp = entry
+                if time.time() <= exp:
+                    self.bindings[key] = (uid, time.time() + self.ttl)
+                    return uid
                 self.bindings.pop(key, None)
-                return None
+            mirror = self.mirror
+        if mirror is None:
+            return None
+        try:
+            uid = mirror.get(self._mirror_key(key))
+        except Exception:
+            uid = None
+        if not uid:
+            return None
+        with self._lock:
             self.bindings[key] = (uid, time.time() + self.ttl)
-            return uid
+        return uid
+
     def bind(self, key, uid):
-        if not key or not uid: return
+        if not key or not uid:
+            return
         with self._lock:
             if len(self.bindings) >= self.max_entries:
                 now = time.time()
                 self.bindings = {k: v for k, v in self.bindings.items() if v[1] > now}
             self.bindings[key] = (uid, time.time() + self.ttl)
+            mirror = self.mirror
+            mirror_ttl = self.mirror_ttl
+        if mirror is not None:
+            try:
+                mirror.set(self._mirror_key(key), uid, mirror_ttl)
+            except Exception:
+                pass
+
     def unbind(self, key):
-        if not key: return
+        if not key:
+            return
         with self._lock:
             self.bindings.pop(key, None)
+            mirror = self.mirror
+        if mirror is not None:
+            try:
+                mirror.delete(self._mirror_key(key))
+            except Exception:
+                pass
 
 class AccountPool(object):
     def __init__(self, directory, log=None):
@@ -1335,6 +1390,17 @@ class AccountPool(object):
                 account.max_in_flight = int(cap or 0)
             self.affinity.ttl = int(cfg["affinity_ttl"])
             self.affinity.max_entries = int(cfg["affinity_max_entries"])
+        mirror = None
+        mirror_ttl = 604800
+        try:
+            redis_cfg = wb_settings.redis_config(self.dir)
+        except Exception:
+            redis_cfg = None
+        if redis_cfg and redis_cfg.get("affinity_mirror") and redis_cfg.get("url"):
+            mirror = wb_redisstore.build_mirror(redis_cfg.get("url"),
+                                                redis_cfg.get("token"))
+            mirror_ttl = int(redis_cfg.get("ttl_seconds") or 604800)
+        self.affinity.configure_mirror(mirror, mirror_ttl)
         return cfg
 
     def apply_reserve_credits(self, value=None):
