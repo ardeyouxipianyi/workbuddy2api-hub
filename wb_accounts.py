@@ -35,7 +35,9 @@ import wb_webagent
 # 打卡在桌面端对话之外，再走一次这条网页通道，并且把它跑到 completed。
 # ---------------------------------------------------------------------------
 WEB_ORIGIN = "https://www.workbuddy.ai"
+WEB_ORIGIN_CN = "https://www.workbuddy.cn"
 WEB_CONVERSATIONS_URL = WEB_ORIGIN + "/console/as/conversations/"
+PROFILE_PATH = "/console/account"
 WEB_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0")
 DAILY_CHAT_MODEL = "deepseek-v4.1-flash"
@@ -55,6 +57,42 @@ def _retryable(exc):
     if isinstance(exc, (TimeoutError, ConnectionResetError, ConnectionAbortedError, OSError)):
         return True
     return False
+
+
+def web_origin_for(realm):
+    """Web-console origin per realm (CN vs international), panel webBase parity."""
+    return WEB_ORIGIN_CN if str(realm or "").lower() == "cn" else WEB_ORIGIN
+
+
+def fetch_account_profile(account, timeout=15):
+    """Web-console account profile -> (uid, nickname), nothing else.
+
+    The endpoint also returns phoneNumber and other personal fields; this
+    function parses only uid and nickname, so sensitive values never enter
+    logs, responses or storage. A uid mismatch against the credential raises
+    (wrong-account guard).
+    """
+    origin = web_origin_for(getattr(account, "realm", ""))
+    req = urllib.request.Request(
+        origin + PROFILE_PATH, method="GET",
+        headers={
+            "Authorization": "Bearer " + str(account.access_token or ""),
+            "Accept": "application/json, text/plain, */*",
+            "x-client-platform": "web",
+            "Origin": WEB_ORIGIN_CN,
+            "Referer": WEB_ORIGIN_CN + "/profile/account-settings",
+            "User-Agent": WEB_USER_AGENT,
+        },
+    )
+    with urlopen(req, timeout=timeout, proxy=getattr(account, "proxy", "")) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise RuntimeError("profile response is not an object")
+    uid = str(data.get("uid") or "")
+    if uid and account.uid and uid != account.uid:
+        raise RuntimeError("profile uid mismatch")
+    nickname = data.get("nickname")
+    return uid, nickname.strip() if isinstance(nickname, str) else ""
 
 
 _OPENER_CACHE = {}
@@ -594,6 +632,22 @@ class Account(object):
         if not directory:
             return ""
         return resolve_device_token(directory)
+
+    def sync_nickname(self):
+        """Manual web-console nickname refresh (panel issue #94).
+
+        Only called from the explicit dashboard/API action - never from the
+        balance scheduler - and persists the new nickname immediately.
+        """
+        _uid, nickname = fetch_account_profile(self)
+        if nickname and nickname != self.nickname:
+            self.nickname = nickname
+            directory = getattr(self, "accounts_dir", "")
+            if not directory and self.path:
+                directory = os.path.dirname(self.path)
+            if directory:
+                self.save(directory)
+        return nickname
 
     def set_product(self, value):
         """切換出站身分（cli <-> workbuddy）。回傳 True 表示真的換了。
