@@ -6,6 +6,7 @@ No upstream credentials or outbound network are used.
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -165,6 +166,90 @@ class SchedulerConfigTests(unittest.TestCase):
                                       return_value={"logs": []}):
                 sched._run_cycle("test")
             self.assertEqual(queue.calls, 1)
+
+    def test_each_family_only_runs_in_its_own_hours(self):
+        events = []
+
+        class FakeQueue(object):
+            def start(self):
+                events.append("growth")
+                return {"started": True, "total": 1}
+
+        class CN(object):
+            uid = "cn-1"
+            realm = "cn"
+            enabled = True
+            nickname = "CN"
+
+            def __init__(self):
+                self.expires_at = time.time() + 60
+
+            def refresh(self):
+                events.append("refresh")
+                return True
+
+            def can_checkin(self):
+                return True
+
+            def checkin(self):
+                events.append("checkin")
+                return {"ok": True, "msg": "ok"}
+
+        class INTL(object):
+            uid = "intl-1"
+            realm = "intl"
+            enabled = True
+            nickname = "INTL"
+
+            def __init__(self):
+                self.expires_at = time.time() + 60
+
+            def refresh(self):
+                events.append("refresh")
+                return True
+
+            def can_daily_chat(self):
+                return True
+
+            def daily_chat(self):
+                events.append("daily_chat")
+                return {"ok": True}
+
+        def travel(acc):
+            events.append("travel")
+            return {"action": None, "msg": ""}
+
+        def streak(acc):
+            events.append("streak")
+            return {"logs": []}
+
+        def night(acc):
+            events.append("night")
+            return {"logs": []}
+
+        with tempfile.TemporaryDirectory() as directory:
+            sched = self.make_scheduler(directory, {
+                "checkin_hours": [9], "travel_hours": [10],
+                "keepalive_hours": [11], "cat_hours": [12],
+                "daily_chat_hours": [13], "growth_hours": [14]})
+            sched.pool.accounts = [CN(), INTL()]
+            sched.task_queue = FakeQueue()
+            for hour, expected in ((9, {"checkin", "streak"}),
+                                   (11, {"refresh"}),
+                                   (13, {"daily_chat"}),
+                                   (14, {"growth"})):
+                events.clear()
+                stamp = type("T", (), {"tm_hour": hour})()
+                with mock.patch.object(wb_scheduler.time, "sleep", return_value=None), \
+                        mock.patch.object(wb_scheduler.time, "localtime",
+                                          return_value=stamp), \
+                        mock.patch.object(wb_scheduler, "do_cat_travel", side_effect=travel), \
+                        mock.patch.object(wb_tasks, "run_streak_bonus", side_effect=streak), \
+                        mock.patch.object(wb_tasks, "fetch_streak_days", return_value=None), \
+                        mock.patch.object(wb_tasks, "run_night_growth", side_effect=night):
+                    sched._run_cycle("test")
+                self.assertEqual(set(events), expected,
+                                 "hour %d -> %r" % (hour, events))
 
     def test_status_exposes_schedule(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -5,7 +5,6 @@ stamping are pure transformations, so every case feeds a synthetic payload and
 asserts the shape that leaves for the upstream and the shape that returns to
 the client.
 """
-import json
 import os
 import sys
 

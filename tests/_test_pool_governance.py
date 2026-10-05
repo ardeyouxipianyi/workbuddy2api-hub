@@ -53,6 +53,11 @@ class BackoffMathTests(unittest.TestCase):
         self.assertNotIn("bogus", cfg)
         self.assertEqual(cfg["breaker_threshold"],
                          wb_pool.DEFAULTS["breaker_threshold"])
+        # Audit #11: 0/1 are honoured, other non-bools fall back to default.
+        self.assertFalse(wb_pool.normalize({"weighted_pick": 0})["weighted_pick"])
+        self.assertTrue(wb_pool.normalize({"weighted_pick": 1})["weighted_pick"])
+        self.assertTrue(wb_pool.normalize(
+            {"weighted_pick": "no"})["weighted_pick"])
 
     def test_validate_patch_rejects_bad_shapes(self):
         with self.assertRaises(ValueError):
@@ -215,6 +220,16 @@ class PoolSettingsTests(unittest.TestCase):
         self.assertEqual(cn.max_in_flight, 3)
         self.assertEqual(intl.max_in_flight, 2)
         self.assertEqual(pool.affinity.ttl, 7200)
+        # Audit #9: global=0 falls back to the per-account cap; only
+        # max_in_flight=0 means unlimited (leases off).
+        pool.apply_pool_config(wb_pool.normalize({"max_in_flight": 4,
+                                                  "max_in_flight_global": 0}))
+        self.assertEqual(cn.max_in_flight, 4)
+        self.assertEqual(intl.max_in_flight, 4)
+        pool.apply_pool_config(wb_pool.normalize({"max_in_flight": 0,
+                                                  "max_in_flight_global": 0}))
+        self.assertEqual(cn.max_in_flight, 0)
+        self.assertEqual(intl.max_in_flight, 0)
 
 
 class LeaseWrapperTests(unittest.TestCase):
@@ -435,6 +450,105 @@ class CostRecordingTests(unittest.TestCase):
         finally:
             wb_proxy.POOL = old
         self.assertEqual(seen, [("acct-1", "m", 0.25)])
+
+    def test_missing_credit_stays_unknown_not_free(self):
+        """BUG-4: no credit field -> do not write tier 0."""
+        import wb_proxy
+
+        seen = []
+
+        class StubPool(object):
+            def get(self, uid):
+                return None
+
+            def note_model_cost(self, uid, model, credit):
+                seen.append((uid, model, credit))
+
+        old = wb_proxy.POOL
+        wb_proxy.POOL = StubPool()
+        try:
+            wb_proxy.record_usage("m", {"total_tokens": 10}, account="acct-1")
+        finally:
+            wb_proxy.POOL = old
+        self.assertEqual(seen, [])
+
+    def test_explicit_zero_credit_still_records_free(self):
+        import wb_proxy
+
+        seen = []
+
+        class StubPool(object):
+            def get(self, uid):
+                return None
+
+            def note_model_cost(self, uid, model, credit):
+                seen.append((uid, model, credit))
+
+        old = wb_proxy.POOL
+        wb_proxy.POOL = StubPool()
+        try:
+            wb_proxy.record_usage("m", {"total_tokens": 10, "credit": 0},
+                                  account="acct-1")
+        finally:
+            wb_proxy.POOL = old
+        self.assertEqual(seen, [("acct-1", "m", 0)])
+
+
+class PoolExhaustionReportingTests(unittest.TestCase):
+    def test_status_mapping_agrees_between_row_and_client(self):
+        import wb_proxy
+
+        self.assertEqual(wb_proxy.upstream_error_status(
+            "no usable account for realm 'cn': all are busy"), 503)
+        self.assertEqual(wb_proxy.upstream_error_status("connection reset"), 502)
+        self.assertEqual(wb_proxy.upstream_error_status(""), 502)
+
+    def test_busy_accounts_are_named_in_the_reason(self):
+        import wb_proxy
+
+        class Fake(object):
+            pass
+
+        busy = Fake()
+        busy.max_in_flight = 3
+        busy.in_flight = 3
+        idle = Fake()
+        idle.max_in_flight = 3
+        idle.in_flight = 0
+        busy_msg = wb_proxy.no_usable_account_message("cn", [busy])
+        idle_msg = wb_proxy.no_usable_account_message("cn", [idle])
+        self.assertIn("busy", busy_msg)
+        self.assertIn("in-flight cap", busy_msg)
+        self.assertNotIn("busy", idle_msg)
+        self.assertIn("disabled", idle_msg)
+
+    def test_handler_records_and_answers_with_the_same_status(self):
+        import wb_proxy
+
+        calls = []
+
+        class Handler(wb_proxy.Handler):
+            def __init__(self):
+                pass
+
+            def _error(self, status, message, kind=""):
+                return status, message
+
+        handler = Handler()
+        with mock.patch.object(wb_proxy, "record_error",
+                               side_effect=lambda *a, **k: calls.append((a, k))):
+            code, _message = handler._open_upstream_error(
+                RuntimeError("no usable account for realm 'cn': all are busy"),
+                "m", 0.0)
+        self.assertEqual(code, 503)
+        self.assertEqual(calls[0][0][1], 503)
+        calls.clear()
+        with mock.patch.object(wb_proxy, "record_error",
+                               side_effect=lambda *a, **k: calls.append((a, k))):
+            code, _message = handler._open_upstream_error(
+                RuntimeError("connection reset"), "m", 0.0)
+        self.assertEqual(code, 502)
+        self.assertEqual(calls[0][0][1], 502)
 
 
 if __name__ == "__main__":

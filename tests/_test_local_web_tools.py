@@ -434,5 +434,66 @@ check("private markers never reach the upstream body",
           dict(chat_on, _namespace_map={"js": "node_repl"}, _web_tools=True))))
 
 print()
+print("[11] the non-stream web-tool path returns its in-flight lease")
+
+
+class LeaseAccount(object):
+    uid = "acct-lease"
+
+    def __init__(self):
+        self.in_flight = 0
+
+    def acquire(self):
+        self.in_flight += 1
+        return True
+
+    def release(self):
+        if self.in_flight > 0:
+            self.in_flight -= 1
+
+
+lease_account = LeaseAccount()
+lease_streams = []
+
+
+def lease_open(body, session_key=None, target_realm=None, **kwargs):
+    lease_account.acquire()
+    stream = proxy._LeasedResponse(FakeUpstream(sse(ANSWER_CHUNKS)), lease_account)
+    lease_streams.append(stream)
+    return stream, lease_account
+
+
+lease_seen = {"aggregate": 0}
+
+
+def lease_aggregate(upstream, model, sink, *a, **k):
+    lease_seen["aggregate"] += 1
+    return CHAT_CALL if lease_seen["aggregate"] == 1 else CHAT_DONE
+
+
+lease_handler = JsonHandler()
+first_stream, first_account = lease_open({})
+with mock.patch.multiple(proxy,
+                         open_upstream=lease_open,
+                         aggregate_stream=lease_aggregate,
+                         record_usage=lambda *a, **k: None,
+                         record_error=lambda *a, **k: None), \
+        mock.patch.object(W, "execute", lambda name, args: SAMPLE):
+    lease_handler._responses_nonstream_response(
+        first_stream, "deepseek-v4.1-flash", set(), {}, "fp", first_account, 0.0, None,
+        base_body=dict(chat_body), session_key="sess", realm="intl")
+
+check("the tool round was followed by a second upstream",
+      len(lease_streams) == 2, len(lease_streams))
+check("the first upstream was closed before the follow-up",
+      lease_streams and lease_streams[0]._response.closed,
+      lease_streams[0]._response.closed if lease_streams else None)
+check("the final upstream is closed too",
+      lease_streams and lease_streams[-1]._response.closed,
+      lease_streams[-1]._response.closed if lease_streams else None)
+check("the in-flight lease is back to zero",
+      lease_account.in_flight == 0, lease_account.in_flight)
+
+print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

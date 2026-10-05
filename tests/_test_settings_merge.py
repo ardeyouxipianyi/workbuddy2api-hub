@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 _startup_dir = tempfile.TemporaryDirectory(prefix="settings-merge-")
 os.environ["ACCOUNTS_DIR"] = _startup_dir.name
@@ -88,6 +89,38 @@ class SettingsPreservationTests(unittest.TestCase):
             stored = self.read(directory)
         self.assertEqual(stored["user_custom_top"], {"keep": 1})
         self.assertEqual(stored["reserve_credits"], 10)
+
+
+class SettingsCacheTests(unittest.TestCase):
+    def test_load_reuses_the_parse_until_the_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wb_settings.save(directory, {"a": 1})
+            real_load = json.load
+            calls = {"n": 0}
+
+            def counting_load(fh):
+                calls["n"] += 1
+                return real_load(fh)
+
+            with mock.patch.object(wb_settings.json, "load",
+                                   side_effect=counting_load):
+                first = wb_settings.load(directory)
+                second = wb_settings.load(directory)
+            self.assertEqual(calls["n"], 1)
+            self.assertEqual(first, {"a": 1})
+            self.assertEqual(second, {"a": 1})
+            # save() invalidates the entry, so a panel change lands at once.
+            wb_settings.save(directory, {"a": 2})
+            self.assertEqual(wb_settings.load(directory)["a"], 2)
+
+    def test_load_notices_an_external_edit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wb_settings.save(directory, {"a": 1})
+            self.assertEqual(wb_settings.load(directory)["a"], 1)
+            with open(wb_settings.settings_path(directory), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"a": 222}, fh)
+            self.assertEqual(wb_settings.load(directory)["a"], 222)
 
 
 if __name__ == "__main__":

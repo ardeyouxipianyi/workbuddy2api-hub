@@ -8,7 +8,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 _startup_dir = tempfile.TemporaryDirectory(prefix="session-headers-")
 os.environ["ACCOUNTS_DIR"] = _startup_dir.name

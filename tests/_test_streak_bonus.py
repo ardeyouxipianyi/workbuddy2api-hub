@@ -192,7 +192,7 @@ class SchedulerWiringTests(unittest.TestCase):
                 mock.patch.object(wb_scheduler, "do_cat_travel",
                                   return_value={"action": None, "msg": ""}), \
                 mock.patch.object(wb_scheduler.time, "localtime",
-                                  return_value=type("T", (), {"tm_hour": 12})()):
+                                  return_value=type("T", (), {"tm_hour": 9})()):
             self.scheduler._run_cycle("test")
         self.assertTrue(any("连登天数未增加" in line for line in self.scheduler.logs),
                         self.scheduler.logs)
@@ -205,7 +205,7 @@ class SchedulerWiringTests(unittest.TestCase):
                 mock.patch.object(wb_scheduler, "do_cat_travel",
                                   return_value={"action": None, "msg": ""}), \
                 mock.patch.object(wb_scheduler.time, "localtime",
-                                  return_value=type("T", (), {"tm_hour": 12})()):
+                                  return_value=type("T", (), {"tm_hour": 9})()):
             self.scheduler._run_cycle("test")
         self.assertFalse(any("连登天数未增加" in line for line in self.scheduler.logs),
                          self.scheduler.logs)

@@ -93,7 +93,15 @@ def normalize(cfg):
         raw.update({k: v for k, v in cfg.items() if k in DEFAULTS})
     out = dict(DEFAULTS)
     for key in _BOOL_KEYS:
-        out[key] = raw.get(key) is not False
+        value = raw.get(key)
+        if isinstance(value, bool):
+            out[key] = value
+        elif isinstance(value, int) and value in (0, 1):
+            # A hand-edited 0/1 means off/on; the old `is not False` test
+            # turned 0 into True - the opposite intent (audit #11).
+            out[key] = bool(value)
+        else:
+            out[key] = DEFAULTS[key]
     for key, minimum in _INT_MIN.items():
         out[key] = _positive_int(raw.get(key), DEFAULTS[key], minimum)
     for key in _FLOAT_KEYS:

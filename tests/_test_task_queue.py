@@ -96,6 +96,37 @@ class ScanTests(unittest.TestCase):
                          ["automation_1"])
 
 
+class ScanTimeoutTests(unittest.TestCase):
+    def test_late_worker_results_do_not_reach_the_returned_scan(self):
+        accounts = [FakeAccount("uid-1", "One")]
+        release = threading.Event()
+        started = threading.Event()
+
+        def slow_fetch(account, mp=False):
+            started.set()
+            release.wait(timeout=5)
+            return [task("chat_5")]
+
+        class NoWaitThread(threading.Thread):
+            def join(self, timeout=None):
+                # Simulate the 60s join window elapsing while the worker runs.
+                return None
+
+        queue = wb_taskqueue.TaskQueue(FakePool(accounts),
+                                       runner=lambda a, c: (True, "ok", 0))
+        with mock.patch.object(wb_taskqueue.wb_tasks, "fetch_growth_tasks",
+                               side_effect=slow_fetch), \
+                mock.patch.object(wb_taskqueue.threading, "Thread", NoWaitThread):
+            result = queue.scan()
+        self.assertTrue(started.wait(timeout=2), "the worker never started")
+        self.assertTrue(result["timed_out"])
+        self.assertEqual(result["accounts"], [])
+        release.set()
+        time.sleep(0.3)  # let the late worker try to write its result
+        self.assertEqual(result["accounts"], [],
+                         "a late worker mutated the returned scan")
+
+
 class QueueRunTests(unittest.TestCase):
     def make_queue(self, accounts, runner, concurrency=1):
         return wb_taskqueue.TaskQueue(FakePool(accounts), runner=runner,
@@ -182,6 +213,38 @@ class QueueRunTests(unittest.TestCase):
             self.assertFalse(second["started"])
             release.set()
             self.assertTrue(queue.wait(timeout=10))
+
+    def test_concurrent_start_calls_only_one_wins(self):
+        """BUG-2: the scan window must not let a second start through."""
+        accounts = [FakeAccount("uid-1")]
+        release = threading.Event()
+        scan_started = threading.Event()
+
+        def slow_fetch(account):
+            scan_started.set()
+            release.wait(timeout=5)
+            return [task("chat_5")]
+
+        def runner(account, code):
+            return True, "ok", 0
+
+        queue = self.make_queue(accounts, runner)
+        results = []
+        with mock.patch.object(wb_taskqueue.wb_tasks, "fetch_growth_tasks",
+                               side_effect=slow_fetch):
+            first = threading.Thread(target=lambda: results.append(queue.start()))
+            second = threading.Thread(target=lambda: results.append(queue.start()))
+            first.start()
+            self.assertTrue(scan_started.wait(timeout=5),
+                            "the first scan never started")
+            second.start()
+            time.sleep(0.3)  # let the second caller reach the guard
+            release.set()
+            first.join(timeout=10)
+            second.join(timeout=10)
+            self.assertTrue(queue.wait(timeout=10))
+        started = [r for r in results if r.get("started")]
+        self.assertEqual(len(started), 1, results)
 
     def test_no_pending_items_reports_cleanly(self):
         queue = self.make_queue([FakeAccount("uid-1")], lambda a, c: (True, "", 0))

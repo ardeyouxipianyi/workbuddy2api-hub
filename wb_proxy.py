@@ -311,6 +311,10 @@ def _extract_usage(usage):
         "cached_tokens": _best_cached_tokens(usage),
         "total_tokens": usage.get("total_tokens") or 0,
         "credit": usage.get("credit") or 0,
+        # PANEL's hasCredit: a usage block without a credit field means the
+        # cost is unknown (tier 1), not measured-free (tier 0). Only a real
+        # observation may move (account, model) into the cost ledger.
+        "has_credit": "credit" in usage,
     }
 def row_realm(row):
     """The realm a log row belongs to.
@@ -476,7 +480,8 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = acc.realm if acc else CURRENT_REALM
     row.update(_request_context_fields())
-    if account and POOL and not usage_missing and fields.get("total_tokens"):
+    if (account and POOL and not usage_missing and fields.get("total_tokens")
+            and fields.get("has_credit")):
         try:
             POOL.note_model_cost(account, model, fields.get("credit"))
         except Exception:
@@ -580,8 +585,11 @@ def _persist_usage(row, fail_label):
     """
     try:
         os.makedirs(USAGE_DIR, exist_ok=True)
-        with open(USAGE_LOG, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        # Share wb_reqlog's lock so an append can never race the read->replace
+        # window of a rotation (audit BUG-3).
+        with wb_reqlog.LOCK:
+            with open(USAGE_LOG, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception as exc:
         log("%s: %s" % (fail_label, exc))
         return
@@ -3844,6 +3852,36 @@ class _LeasedResponse(object):
                 pass
 
 
+def upstream_error_status(message):
+    """The one HTTP status for both the log row and the client reply.
+
+    A genuinely unusable pool is a 503 (retryable, operator action needed);
+    every other open_upstream failure is a 502. The two used to disagree -
+    the row said 502 while the client got 503 - so an audit of the real
+    deployment could not find the 503 in usage.jsonl (audit BUG-5).
+    """
+    return 503 if str(message or "").startswith("no usable account") else 502
+
+
+def no_usable_account_message(realm, accounts):
+    """Explain why no pool candidate was usable.
+
+    A full per-account in-flight cap is called out explicitly: it is the one
+    cause an operator cannot see in the account table, and the audit's
+    real-account 503 was exactly that (audit BUG-5).
+    """
+    busy = [a for a in accounts
+            if int(getattr(a, "max_in_flight", 0) or 0)
+            and getattr(a, "in_flight", 0) >= int(getattr(a, "max_in_flight", 0) or 0)]
+    if busy:
+        why = ("all are busy (in-flight cap reached) or otherwise unavailable: "
+               "disabled, cooling down, expired or parked by the daily token limit")
+    else:
+        why = ("all are disabled, cooling down, expired or parked by the "
+               "daily token limit")
+    return "no usable account for realm '%s': %s" % (realm, why)
+
+
 def open_upstream(payload, session_key=None, target_realm=None,
                   session_meta=None, inbound_request_id="", trace_id=""):
     # Refresh the daily token guard before picking. The scan underneath is
@@ -4076,8 +4114,7 @@ def open_upstream(payload, session_key=None, target_realm=None,
                   % wb_settings.daily_token_limit(ACCOUNTS_DIR))
         raise RateLimited(None, reason,
                           wait=seconds_until_local_midnight(), message=reason)
-    raise RuntimeError(f"no usable account for realm '{realm}': all are disabled, "
-                       f"cooling down, expired or parked by the daily token limit")
+    raise RuntimeError(no_usable_account_message(realm, enabled))
 def extract_session_key(headers, payload):
     key = (
         headers.get("X-Conversation-Id") or
@@ -6637,24 +6674,27 @@ class Handler(BaseHTTPRequestHandler):
         except BadJSON:
             self._error(400, "invalid JSON body", "invalid_request_error")
             return None
-    def _handle_settings_save(self):
-        """Persist panel-managed settings from the web settings tab."""
-        payload = self._payload_or_error()
-        if payload is None:
-            return
-        reply = {}
+    def _validate_settings_save(self, payload):
+        """Validate the whole panel save before anything is written.
+
+        /settings/save used to persist each block as it went, so a later
+        block failing validation returned 400 while the earlier blocks had
+        already landed. This pass only builds a plan; the caller applies it
+        once the plan is complete (audit #12).
+        """
+        plan = {}
         if "api_keys" in payload:
             raw = payload.get("api_keys")
             if not isinstance(raw, list):
-                return self._error(400, "api_keys must be a list", "invalid_request_error")
+                return None, self._error(400, "api_keys must be a list", "invalid_request_error")
             # The panel only ever shows a masked key, so a blank value means
             # "keep what is stored" for that row rather than "clear it".
             existing = {entry.get("id"): entry for entry in configured_keys()}
             cleaned = []
             for item in raw:
                 if not isinstance(item, dict):
-                    return self._error(400, "each api key must be an object",
-                                       "invalid_request_error")
+                    return None, self._error(400, "each api key must be an object",
+                                             "invalid_request_error")
                 entry_id = str(item.get("id") or "").strip()
                 value = str(item.get("key") or "").strip()
                 if not value and entry_id and entry_id in existing:
@@ -6664,15 +6704,15 @@ class Handler(BaseHTTPRequestHandler):
                 # of rows deleted earlier, and two rows sharing an id made
                 # /settings/reveal answer with the wrong key.
                 if value and len(value) < 4:
-                    return self._error(400, "api key must be at least 4 characters",
-                                       "invalid_request_error")
+                    return None, self._error(400, "api key must be at least 4 characters",
+                                             "invalid_request_error")
                 if not value:
-                    return self._error(400, "a key entry is empty - fill it in or remove the row",
-                                       "invalid_request_error")
+                    return None, self._error(400, "a key entry is empty - fill it in or remove the row",
+                                             "invalid_request_error")
                 realm = str(item.get("realm") or "").strip().lower()
                 if realm not in ("", "intl", "cn"):
-                    return self._error(400, "realm must be intl, cn or empty",
-                                       "invalid_request_error")
+                    return None, self._error(400, "realm must be intl, cn or empty",
+                                             "invalid_request_error")
                 # An older cached panel does not know this field at all, so a
                 # row that omits it keeps whatever is stored instead of
                 # silently dropping the restriction.
@@ -6690,154 +6730,192 @@ class Handler(BaseHTTPRequestHandler):
                     "enabled": item.get("enabled", True) is not False,
                     "created_at": created_at,
                 })
-            wb_settings.set_api_keys(ACCOUNTS_DIR, cleaned)
-            reply["api_keys_saved"] = len(cleaned)
+            plan["api_keys"] = cleaned
         if "auth_disabled" in payload:
-            wb_settings.set_auth_disabled(ACCOUNTS_DIR, payload.get("auth_disabled"))
-            reply["auth_disabled"] = bool(payload.get("auth_disabled"))
+            plan["auth_disabled"] = payload.get("auth_disabled")
         if "reserve_credits" in payload:
             try:
                 reserve = int(payload.get("reserve_credits"))
             except (TypeError, ValueError):
-                return self._error(400, "reserve_credits must be a whole number",
-                                   "invalid_request_error")
+                return None, self._error(400, "reserve_credits must be a whole number",
+                                         "invalid_request_error")
             if reserve < 0:
-                return self._error(400, "reserve_credits cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_reserve_credits(ACCOUNTS_DIR, reserve)
-            if POOL:
-                POOL.apply_reserve_credits(reserve)
-            reply["reserve_credits"] = reserve
+                return None, self._error(400, "reserve_credits cannot be negative",
+                                         "invalid_request_error")
+            plan["reserve_credits"] = reserve
         if "daily_token_limit" in payload:
             raw = payload.get("daily_token_limit")
             if isinstance(raw, bool) or raw is None:
-                return self._error(400, "daily_token_limit must be a whole number",
-                                   "invalid_request_error")
+                return None, self._error(400, "daily_token_limit must be a whole number",
+                                         "invalid_request_error")
             try:
                 limit = int(raw)
             except (TypeError, ValueError):
-                return self._error(400, "daily_token_limit must be a whole number",
-                                   "invalid_request_error")
+                return None, self._error(400, "daily_token_limit must be a whole number",
+                                         "invalid_request_error")
             if limit < 0:
-                return self._error(400, "daily_token_limit cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_daily_token_limit(ACCOUNTS_DIR, limit)
-            apply_daily_token_limit(refresh=True)
-            reply["daily_token_limit"] = limit
+                return None, self._error(400, "daily_token_limit cannot be negative",
+                                         "invalid_request_error")
+            plan["daily_token_limit"] = limit
         if "auto_switch_product" in payload:
             # Strictly a JSON boolean: a string like "false" would be truthy and
             # silently switch the feature on, which is the one thing an operator
             # turning it off must not get.
             raw = payload.get("auto_switch_product")
             if not isinstance(raw, bool):
-                return self._error(400, "auto_switch_product must be true or false",
-                                   "invalid_request_error")
-            wb_settings.set_auto_switch_product(ACCOUNTS_DIR, raw)
-            reply["auto_switch_product"] = raw
+                return None, self._error(400, "auto_switch_product must be true or false",
+                                         "invalid_request_error")
+            plan["auto_switch_product"] = raw
         if "daily_chat_web" in payload:
             raw = payload.get("daily_chat_web")
             if not isinstance(raw, bool):
-                return self._error(400, "daily_chat_web must be true or false",
-                                   "invalid_request_error")
-            wb_settings.set_daily_chat_web(ACCOUNTS_DIR, raw)
-            reply["daily_chat_web"] = raw
+                return None, self._error(400, "daily_chat_web must be true or false",
+                                         "invalid_request_error")
+            plan["daily_chat_web"] = raw
         if "local_web_tools" in payload:
             raw = payload.get("local_web_tools")
             if not isinstance(raw, bool):
-                return self._error(400, "local_web_tools must be true or false",
-                                   "invalid_request_error")
-            wb_settings.set_local_web_tools(ACCOUNTS_DIR, raw)
-            reply["local_web_tools"] = raw
+                return None, self._error(400, "local_web_tools must be true or false",
+                                         "invalid_request_error")
+            plan["local_web_tools"] = raw
         if "pool" in payload:
             raw = payload.get("pool")
             if not isinstance(raw, dict):
-                return self._error(400, "pool must be an object", "invalid_request_error")
+                return None, self._error(400, "pool must be an object", "invalid_request_error")
             try:
-                patch = wb_pool.validate_patch(raw)
+                plan["pool"] = wb_pool.validate_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_pool_config(ACCOUNTS_DIR, patch)
-            if POOL:
-                POOL.apply_pool_config()
-            reply["pool"] = wb_settings.pool_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         if "schedule" in payload:
             raw = payload.get("schedule")
             if not isinstance(raw, dict):
-                return self._error(400, "schedule must be an object",
-                                   "invalid_request_error")
+                return None, self._error(400, "schedule must be an object",
+                                         "invalid_request_error")
             try:
-                patch = wb_settings.validate_schedule_patch(raw)
+                plan["schedule"] = wb_settings.validate_schedule_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_schedule_config(ACCOUNTS_DIR, patch)
-            if SCHEDULER:
-                SCHEDULER.apply_settings()
-            reply["schedule"] = wb_settings.schedule_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         if "redis" in payload:
             raw = payload.get("redis")
             if not isinstance(raw, dict):
-                return self._error(400, "redis must be an object", "invalid_request_error")
+                return None, self._error(400, "redis must be an object", "invalid_request_error")
             try:
-                patch = wb_settings.validate_redis_patch(raw)
+                plan["redis"] = wb_settings.validate_redis_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_redis_config(ACCOUNTS_DIR, patch)
-            if POOL:
-                POOL.apply_pool_config()
-            reply["redis"] = wb_settings.redis_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         if "upstream" in payload:
             raw = payload.get("upstream")
             if not isinstance(raw, dict):
-                return self._error(400, "upstream must be an object",
-                                   "invalid_request_error")
+                return None, self._error(400, "upstream must be an object",
+                                         "invalid_request_error")
             try:
-                patch = wb_settings.validate_upstream_patch(raw)
+                plan["upstream"] = wb_settings.validate_upstream_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_upstream_config(ACCOUNTS_DIR, patch)
-            reply["upstream"] = wb_settings.upstream_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         if "prompt" in payload:
             raw = payload.get("prompt")
             if not isinstance(raw, dict):
-                return self._error(400, "prompt must be an object",
-                                   "invalid_request_error")
+                return None, self._error(400, "prompt must be an object",
+                                         "invalid_request_error")
             try:
-                patch = wb_settings.validate_prompt_patch(raw)
+                plan["prompt"] = wb_settings.validate_prompt_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_prompt_config(ACCOUNTS_DIR, patch)
-            reply["prompt"] = wb_settings.prompt_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         if "logging" in payload:
             raw = payload.get("logging")
             if not isinstance(raw, dict):
-                return self._error(400, "logging must be an object",
-                                   "invalid_request_error")
+                return None, self._error(400, "logging must be an object",
+                                         "invalid_request_error")
             try:
-                patch = wb_settings.validate_logging_patch(raw)
+                plan["logging"] = wb_settings.validate_logging_patch(raw)
             except ValueError as exc:
-                return self._error(400, str(exc), "invalid_request_error")
-            wb_settings.set_logging_config(ACCOUNTS_DIR, patch)
-            _LOGGING_CFG_CACHE["cfg"] = None
-            reply["logging"] = wb_settings.logging_config(ACCOUNTS_DIR)
+                return None, self._error(400, str(exc), "invalid_request_error")
         new_key = payload.get("api_key")
         if new_key is not None:
             new_key = str(new_key).strip()
             if new_key and len(new_key) < 4:
-                return self._error(400, "api key must be at least 4 characters",
-                                   "invalid_request_error")
+                return None, self._error(400, "api key must be at least 4 characters",
+                                         "invalid_request_error")
+            plan["api_key"] = new_key
+        if payload.get("restart_scheduler"):
+            plan["restart_scheduler"] = True
+        return plan, None
+
+    def _handle_settings_save(self):
+        """Persist panel-managed settings from the web settings tab."""
+        payload = self._payload_or_error()
+        if payload is None:
+            return
+        plan, error = self._validate_settings_save(payload)
+        if error is not None:
+            return error
+        reply = {}
+        if "api_keys" in plan:
+            cleaned = plan["api_keys"]
+            wb_settings.set_api_keys(ACCOUNTS_DIR, cleaned)
+            reply["api_keys_saved"] = len(cleaned)
+        if "auth_disabled" in plan:
+            wb_settings.set_auth_disabled(ACCOUNTS_DIR, plan["auth_disabled"])
+            reply["auth_disabled"] = bool(plan["auth_disabled"])
+        if "reserve_credits" in plan:
+            reserve = plan["reserve_credits"]
+            wb_settings.set_reserve_credits(ACCOUNTS_DIR, reserve)
+            if POOL:
+                POOL.apply_reserve_credits(reserve)
+            reply["reserve_credits"] = reserve
+        if "daily_token_limit" in plan:
+            limit = plan["daily_token_limit"]
+            wb_settings.set_daily_token_limit(ACCOUNTS_DIR, limit)
+            apply_daily_token_limit(refresh=True)
+            reply["daily_token_limit"] = limit
+        if "auto_switch_product" in plan:
+            wb_settings.set_auto_switch_product(ACCOUNTS_DIR, plan["auto_switch_product"])
+            reply["auto_switch_product"] = plan["auto_switch_product"]
+        if "daily_chat_web" in plan:
+            wb_settings.set_daily_chat_web(ACCOUNTS_DIR, plan["daily_chat_web"])
+            reply["daily_chat_web"] = plan["daily_chat_web"]
+        if "local_web_tools" in plan:
+            wb_settings.set_local_web_tools(ACCOUNTS_DIR, plan["local_web_tools"])
+            reply["local_web_tools"] = plan["local_web_tools"]
+        if "pool" in plan:
+            wb_settings.set_pool_config(ACCOUNTS_DIR, plan["pool"])
+            if POOL:
+                POOL.apply_pool_config()
+            reply["pool"] = wb_settings.pool_config(ACCOUNTS_DIR)
+        if "schedule" in plan:
+            wb_settings.set_schedule_config(ACCOUNTS_DIR, plan["schedule"])
+            if SCHEDULER:
+                SCHEDULER.apply_settings()
+            reply["schedule"] = wb_settings.schedule_config(ACCOUNTS_DIR)
+        if "redis" in plan:
+            wb_settings.set_redis_config(ACCOUNTS_DIR, plan["redis"])
+            if POOL:
+                POOL.apply_pool_config()
+            reply["redis"] = wb_settings.redis_config(ACCOUNTS_DIR)
+        if "upstream" in plan:
+            wb_settings.set_upstream_config(ACCOUNTS_DIR, plan["upstream"])
+            reply["upstream"] = wb_settings.upstream_config(ACCOUNTS_DIR)
+        if "prompt" in plan:
+            wb_settings.set_prompt_config(ACCOUNTS_DIR, plan["prompt"])
+            reply["prompt"] = wb_settings.prompt_config(ACCOUNTS_DIR)
+        if "logging" in plan:
+            wb_settings.set_logging_config(ACCOUNTS_DIR, plan["logging"])
+            _LOGGING_CFG_CACHE["cfg"] = None
+            reply["logging"] = wb_settings.logging_config(ACCOUNTS_DIR)
+        if "api_key" in plan:
+            new_key = plan["api_key"]
             global API_KEY, API_KEY_FILE_SET
             wb_settings.set_api_key(ACCOUNTS_DIR, new_key)
             API_KEY = new_key
             API_KEY_FILE_SET = True
             reply["api_key_set"] = bool(new_key)
-        if payload.get("restart_scheduler"):
+        if plan.get("restart_scheduler"):
             if SCHEDULER:
                 SCHEDULER.stop()
                 SCHEDULER.start()
             reply["scheduler"] = "restarted"
         reply.update(runtime_settings_view())
         return self._json(200, reply)
-
     def _handle_proxy_slots(self, path, payload):
         """Proxy-slot management (panel-authenticated)."""
         if path == "/proxy/slots":
@@ -7669,14 +7747,7 @@ class Handler(BaseHTTPRequestHandler):
                          account=getattr(exc, "account_uid", None))
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
-            message = str(exc)
-            record_error(model, 502, message,
-                         elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
-            if message.startswith("no usable account"):
-                return self._error(503, message +
-                                   " - add or enable one at the dashboard (/)")
-            return self._error(502, f"upstream unreachable: {exc}")
+            return self._open_upstream_error(exc, model, t_start)
         with upstream:
             if want_stream:
                 return self._responses_stream_response(
@@ -7779,41 +7850,66 @@ class Handler(BaseHTTPRequestHandler):
         rounds = 0
         # 開關關閉時不攔同名呼叫：那是客戶端自己的工具。
         web_tools = web_tools_active(base_body)
-        while True:
-            try:
-                chat_obj = aggregate_stream(upstream, model, None)
-            except Exception as exc:
-                record_error(model, 502, str(exc),
-                             elapsed_ms=int((time.time() - t_start) * 1000),
-                             account=account.uid)
-                return self._error(502, f"upstream stream error: {exc}")
-            calls = internal_calls_from_chat(chat_obj, web_tools=web_tools)
-            if not calls:
-                break
-            rounds += 1
-            give_up = rounds > wb_webtools.MAX_WEB_ROUNDS
+        try:
+            while True:
+                try:
+                    chat_obj = aggregate_stream(upstream, model, None)
+                except Exception as exc:
+                    record_error(model, 502, str(exc),
+                                 elapsed_ms=int((time.time() - t_start) * 1000),
+                                 account=account.uid)
+                    return self._error(502, f"upstream stream error: {exc}")
+                calls = internal_calls_from_chat(chat_obj, web_tools=web_tools)
+                if not calls:
+                    break
+                rounds += 1
+                give_up = rounds > wb_webtools.MAX_WEB_ROUNDS
+                try:
+                    upstream.close()
+                except Exception:
+                    pass
+                holder = {"base_messages": (base_body or {}).get("messages"),
+                          "base_body": base_body, "realm": realm,
+                          "web_sources": sources}
+                try:
+                    upstream, account = follow_up_with_tool_results(
+                        calls, holder, model, session_key, t_start, drop_tools=give_up)
+                except Exception as exc:
+                    record_error(model, 502, "web tool follow-up failed: %s" % exc,
+                                 elapsed_ms=int((time.time() - t_start) * 1000),
+                                 account=account.uid)
+                    return self._error(502, "web tool follow-up failed: %s" % exc)
+                sources = holder.get("web_sources") or sources
+            wall = int((time.time() - t_start) * 1000)
+            result = chat_to_response(chat_obj, model, custom_names, request_meta, namespace_map,
+                                      sources=sources)
+            record_usage(model, chat_obj.get("usage"), stream=False, elapsed_ms=wall, fp=fp,
+                         account=account.uid)
+            return self._json(200, result)
+        finally:
+            # follow-up 會把 upstream 換成新的一條，外層的 with 只認得最開始
+            # 那一條；最後一條（或中途早退時的當前那條）必須在這裡收掉，
+            # 否則在途租約會永久卡住（非流式 Responses + 內建網路工具的 P1）。
+            # _LeasedResponse.release 有防重入，重複關閉是安全的。
             try:
                 upstream.close()
             except Exception:
                 pass
-            holder = {"base_messages": (base_body or {}).get("messages"),
-                      "base_body": base_body, "realm": realm,
-                      "web_sources": sources}
-            try:
-                upstream, account = follow_up_with_tool_results(
-                    calls, holder, model, session_key, t_start, drop_tools=give_up)
-            except Exception as exc:
-                record_error(model, 502, "web tool follow-up failed: %s" % exc,
-                             elapsed_ms=int((time.time() - t_start) * 1000),
-                             account=account.uid)
-                return self._error(502, "web tool follow-up failed: %s" % exc)
-            sources = holder.get("web_sources") or sources
-        wall = int((time.time() - t_start) * 1000)
-        result = chat_to_response(chat_obj, model, custom_names, request_meta, namespace_map,
-                                  sources=sources)
-        record_usage(model, chat_obj.get("usage"), stream=False, elapsed_ms=wall, fp=fp,
-                     account=account.uid)
-        return self._json(200, result)
+    def _open_upstream_error(self, exc, model, t_start):
+        """Record and answer an open_upstream failure with one status.
+
+        The usage row and the client reply must agree (audit BUG-5): a
+        genuinely unusable pool is a 503, everything else a 502.
+        """
+        message = str(exc)
+        status = upstream_error_status(message)
+        record_error(model, status, message,
+                     elapsed_ms=int((time.time() - t_start) * 1000),
+                     account=getattr(exc, "account_uid", None))
+        if status == 503:
+            return self._error(503, message +
+                               " - add or enable one at the dashboard (/)")
+        return self._error(502, f"upstream unreachable: {exc}")
 
     def do_POST(self):
         path = self.path.split("?")[0]
@@ -7946,15 +8042,8 @@ class Handler(BaseHTTPRequestHandler):
                          account=getattr(exc, "account_uid", None))
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
-            message = str(exc)
-            record_error(model, 502, message, elapsed_ms=int((time.time() - t_start) * 1000),
-                         account=getattr(exc, "account_uid", None))
-            if message.startswith("no usable account"):
-                # Only a genuinely empty/cooling pool is a 503. A throttled model
-                # is reported as 429 by _rate_limited above instead.
-                return self._error(503, message +
-                                   " - add or enable one at the dashboard (/)")
-            return self._error(502, f"upstream unreachable: {exc}")
+            # A throttled model is reported as 429 by _rate_limited instead.
+            return self._open_upstream_error(exc, model, t_start)
         with upstream:
             if want_stream:
                 return self._chat_stream_response(

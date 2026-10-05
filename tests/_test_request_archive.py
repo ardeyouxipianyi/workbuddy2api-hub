@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -115,6 +116,100 @@ class ArchiveTests(unittest.TestCase):
                 archived = [json.loads(line) for line in fh if line.strip()]
             self.assertEqual([r["request_id"] for r in archived],
                              ["old-%d" % i for i in range(30)])
+
+    def test_append_during_rotation_is_not_lost(self):
+        """BUG-3: an append that races the read->replace window survives."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "usage.jsonl")
+            now = time.time()
+            old_rows = []
+            for i in range(30):
+                item = row(now - 10 * 86400, request_id="old-%d" % i)
+                item["pad"] = "x" * (40 * 1024)
+                old_rows.append(item)
+            self.write_rows(path, old_rows + [row(now - 60, request_id="recent")])
+
+            appended = threading.Event()
+            state = {"injected": False}
+            real_loads = json.loads
+
+            def append_now():
+                with wb_reqlog.LOCK:
+                    with open(path, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(row(time.time(), request_id="during")) + "\n")
+                appended.set()
+
+            def slow_loads(line, *args, **kwargs):
+                if not state["injected"]:
+                    state["injected"] = True
+                    threading.Thread(target=append_now).start()
+                    time.sleep(0.25)  # let the append reach the lock
+                return real_loads(line, *args, **kwargs)
+
+            with mock.patch.object(wb_reqlog.json, "loads", side_effect=slow_loads):
+                changed = wb_reqlog.compact_main(path, max_mb=1, retention_days=7, now=now)
+            self.assertTrue(changed)
+            self.assertTrue(appended.wait(timeout=5),
+                            "the concurrent append never completed")
+            with open(path, encoding="utf-8") as fh:
+                ids = [json.loads(line)["request_id"] for line in fh if line.strip()]
+        self.assertIn("during", ids)
+
+    def test_read_rows_is_cached_until_a_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "usage.jsonl")
+            now = time.time()
+            self.write_rows(path, [row(now - 100, request_id="one")])
+            calls = {"n": 0}
+            real_iter = wb_reqlog._iter_rows
+
+            def counting_iter(path, *args, **kwargs):
+                calls["n"] += 1
+                return real_iter(path, *args, **kwargs)
+
+            with mock.patch.object(wb_reqlog, "_iter_rows",
+                                   side_effect=counting_iter):
+                first = wb_reqlog.read_rows(directory)
+                second = wb_reqlog.read_rows(directory)
+                self.assertEqual(calls["n"], 1)
+                self.write_rows(path, [row(now - 100, request_id="one"),
+                                       row(now - 50, request_id="two")])
+                third = wb_reqlog.read_rows(directory)
+            self.assertEqual(calls["n"], 2)
+            self.assertEqual([r["request_id"] for r in first], ["one"])
+            self.assertEqual([r["request_id"] for r in second], ["one"])
+            self.assertEqual([r["request_id"] for r in third], ["one", "two"])
+
+    def test_rotation_aborts_if_the_file_changed_after_the_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "usage.jsonl")
+            now = time.time()
+            old_rows = []
+            for i in range(30):
+                item = row(now - 10 * 86400, request_id="old-%d" % i)
+                item["pad"] = "x" * (40 * 1024)
+                old_rows.append(item)
+            self.write_rows(path, old_rows + [row(now - 60, request_id="recent")])
+            with open(path, encoding="utf-8") as fh:
+                before = fh.read()
+            real_stamp = wb_reqlog._file_stamp
+            calls = {"n": 0}
+
+            def racing_stamp(target):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return real_stamp(target)
+                return ("changed", 1)  # a writer slipped in after the read
+
+            with mock.patch.object(wb_reqlog, "_file_stamp",
+                                   side_effect=racing_stamp):
+                changed = wb_reqlog.compact_main(path, max_mb=1,
+                                                 retention_days=7, now=now)
+            self.assertFalse(changed)
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), before)
+            self.assertFalse(os.path.exists(path + ".rotate.tmp"))
+            self.assertEqual(wb_reqlog.archive_files(directory), [])
 
     def test_prune_archives(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -39,6 +39,7 @@ class FakeRequest(object):
 
     _key_model_error = proxy.Handler._key_model_error
     _handle_settings_save = proxy.Handler._handle_settings_save
+    _validate_settings_save = proxy.Handler._validate_settings_save
 
     def __init__(self, key_entry=None, payload=None):
         self.key_entry = key_entry
@@ -168,6 +169,25 @@ check("so it still reaches every model",
 S.set_api_keys(d4, [{"id": "k1", "name": "legacy row", "key": "key-legacy"}])
 check("a row saved without the field is unrestricted too",
       S.api_keys(d4)[0]["models"] == [], S.api_keys(d4))
+
+print()
+print("[7] /settings/save validates the whole payload before writing anything")
+
+d5 = tempfile.mkdtemp(prefix="wb-keymodels-")
+S.set_reserve_credits(d5, 7)
+with mock.patch.multiple(proxy, ACCOUNTS_DIR=d5, POOL=None, SCHEDULER=None):
+    request = FakeRequest(payload={"reserve_credits": 123,
+                                   "pool": {"soft_rate": -1}})
+    status, _message = proxy.Handler._handle_settings_save(request)
+    check("the invalid later block is rejected", status == 400, request.answering)
+    check("the earlier block was not written", S.reserve_credits(d5) == 7,
+          S.reserve_credits(d5))
+    request = FakeRequest(payload={"reserve_credits": 123,
+                                   "pool": {"soft_rate": 30}})
+    status, _payload = proxy.Handler._handle_settings_save(request)
+    check("a fully valid payload still saves", status == 200, request.answering)
+    check("the reserve was applied", S.reserve_credits(d5) == 123,
+          S.reserve_credits(d5))
 
 print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))

@@ -249,13 +249,17 @@ class Scheduler:
         checkin_count = 0
         travel_count = 0
         daily_chat_count = 0
+        # Each family below is gated by its own hour list, not just by the
+        # wake-up union: otherwise checkin/travel/keepalive/daily_chat ran at
+        # whichever family's hour happened to fire first (audit #8).
+        now_hour = time.localtime().tm_hour
 
         for acc in list(self.pool.accounts):
             if not self._account_eligible(acc):
                 continue
             uid8 = acc.uid[:8] if acc.uid else "?"
             # 1. 检查 Token 剩余寿命 (小于 2 小时自动刷新保活)
-            if self.keepalive_enabled:
+            if self.keepalive_enabled and now_hour in self.keepalive_hours:
                 exp = acc.expires_at or 0
                 if exp and (exp - time.time()) < 7200:
                     self.log(f"账号 [{uid8}] Token 即将到期，执行主动保活刷新...")
@@ -267,7 +271,8 @@ class Scheduler:
 
             # 2. 如果是国内版账号，检查每日签到与猫猫旅行
             if acc.realm == "cn":
-                if self.checkin_enabled and acc.can_checkin():
+                if (self.checkin_enabled and now_hour in self.checkin_hours
+                        and acc.can_checkin()):
                     self.log(f"检测到国内版账号 [{uid8}] 今日尚未签到，执行自动签到...")
                     # C6: read the streak before/after so a 200 that silently
                     # fails to register is visible instead of looking fine.
@@ -285,11 +290,11 @@ class Scheduler:
                         self.log(f"! 账号 [{uid8}] 自动签到未成功: {res.get('error') or res.get('msg')}")
                     time.sleep(1.0)
                 # C3: 連登管家（每日一次）——補簽、兌換解鎖檔位、抽完所有次數。
-                if self.checkin_enabled:
+                if self.checkin_enabled and now_hour in self.checkin_hours:
                     self._maybe_streak_bonus(acc, uid8)
 
                 # 检查猫猫旅行
-                if self.travel_enabled:
+                if self.travel_enabled and now_hour in self.travel_hours:
                     tr = do_cat_travel(acc)
                     if tr.get("action") in ("claim", "depart"):
                         travel_count += 1
@@ -298,14 +303,15 @@ class Scheduler:
 
                 # 01:00 夜猫子专属任务: black_cat 只在 23:00-08:00 上报计数,
                 # 之前这个整点只是空转通用巡检, 从未真正上报过夜猫事件。
-                if self.cat_enabled and time.localtime().tm_hour in self.cat_hours:
+                if self.cat_enabled and now_hour in self.cat_hours:
                     night = wb_tasks.run_night_growth(acc)
                     for line in night.get("logs", []):
                         self.log(f"🌙 {line}")
                     time.sleep(1.0)
 
             # 3. 如果是国际版账号，检查每日活跃对话 (送 30/50 积分福利)
-            if acc.realm == "intl" and self.daily_chat_enabled:
+            if (acc.realm == "intl" and self.daily_chat_enabled
+                    and now_hour in self.daily_chat_hours):
                 if acc.can_daily_chat():
                     self.log(f"检测到国际版账号 [{uid8}] 今日尚未活跃，执行每日活跃打卡对话...")
                     res = acc.daily_chat()
@@ -319,7 +325,7 @@ class Scheduler:
         # C4: 每日 01:00（可配）自動跑一次任務中心佇列：掃描全部待辦 →
         # 帳號內串行/帳號間併發執行；Sequential 族每日零點解鎖一環，這裡自然接上。
         if (self.growth_enabled and self.task_queue is not None
-                and time.localtime().tm_hour in self.growth_hours):
+                and now_hour in self.growth_hours):
             try:
                 started = self.task_queue.start()
             except Exception as exc:

@@ -12,7 +12,6 @@
 預設為 repo 下的 accounts/）。純標準庫；所有動作冪等，可重複執行。
 """
 import argparse
-import json
 import os
 import sys
 

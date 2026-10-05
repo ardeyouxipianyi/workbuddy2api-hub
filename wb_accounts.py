@@ -1504,8 +1504,13 @@ class AccountPool(object):
             for account in self.accounts:
                 account.pool_cfg = cfg
                 account.accounts_dir = self.dir
-                cap = (cfg["max_in_flight_global"] if account.realm == "intl"
-                       else cfg["max_in_flight"])
+                # PANEL parity (audit #9): max_in_flight_global = 0 means
+                # "not configured" and falls back to max_in_flight; only
+                # max_in_flight itself treats 0 as unlimited (leases off).
+                if account.realm == "intl" and cfg["max_in_flight_global"]:
+                    cap = cfg["max_in_flight_global"]
+                else:
+                    cap = cfg["max_in_flight"]
                 account.max_in_flight = int(cap or 0)
             self.affinity.ttl = int(cfg["affinity_ttl"])
             self.affinity.max_entries = int(cfg["affinity_max_entries"])

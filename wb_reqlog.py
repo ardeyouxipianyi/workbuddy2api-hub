@@ -18,11 +18,25 @@ usage.jsonl 是既有的事實來源（每請求一行 JSON）。本模組補上
 import glob
 import json
 import os
+import threading
 import time
 
 _last_check = {}
 CHECK_INTERVAL_SECONDS = 60
 ARCHIVE_PREFIX = "usage-archive-"
+
+# Appends (wb_proxy._persist_usage) and the rotate read->replace chain share
+# this lock, so a row written by another thread can never land on the file
+# that rotation is about to replace (BUG-3 in the 2026-10-05 audit).
+LOCK = threading.RLock()
+
+
+def _file_stamp(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
 
 
 def archive_files(usage_dir):
@@ -66,14 +80,43 @@ def _iter_rows(path, max_bytes=8 * 1024 * 1024):
             yield row
 
 
-def read_rows(usage_dir, limit=None, main_name="usage.jsonl"):
-    rows = []
+def _files_stamp(usage_dir, main_name):
+    """(path, mtime_ns, size) for every file that contributes rows."""
+    stamp = []
     for path in log_files(usage_dir, main_name):
-        rows.extend(_iter_rows(path))
-    rows.sort(key=lambda row: float(row.get("at") or 0))
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        stamp.append((path, st.st_mtime_ns, st.st_size))
+    return tuple(stamp)
+
+
+_rows_cache = {}
+
+
+def read_rows(usage_dir, limit=None, main_name="usage.jsonl"):
+    """All rows, oldest first; cached until a contributing file changes.
+
+    /requests and /requests/metrics both parse the main log and every archive
+    on the dashboard's 5s poll; the stamp cache makes that one parse per file
+    change instead (audit #7).
+    """
+    key = (os.path.abspath(str(usage_dir or ".")), main_name)
+    stamp = _files_stamp(usage_dir, main_name)
+    with LOCK:
+        hit = _rows_cache.get(key)
+        rows = hit[1] if (hit and hit[0] == stamp) else None
+    if rows is None:
+        rows = []
+        for path in log_files(usage_dir, main_name):
+            rows.extend(_iter_rows(path))
+        rows.sort(key=lambda row: float(row.get("at") or 0))
+        with LOCK:
+            _rows_cache[key] = (stamp, rows)
     if limit:
-        rows = rows[-int(limit):]
-    return rows
+        return list(rows[-int(limit):])
+    return list(rows)
 
 
 def filter_rows(rows, model=None, account=None, status=None, outcome=None,
@@ -155,59 +198,76 @@ def prune_archives(usage_dir, retention_days, now=None, log=None):
 def compact_main(path, max_mb, retention_days, now=None, log=None):
     """Move rows outside the retention window / size budget into an archive."""
     now = time.time() if now is None else float(now)
-    if not os.path.exists(path):
-        return False
-    max_bytes = max(1, int(max_mb)) * 1024 * 1024
-    try:
-        if os.path.getsize(path) < max_bytes:
+    # The read -> tmp -> os.replace chain and every append share LOCK, so an
+    # append from another thread waits here and then lands on the rotated file
+    # instead of being erased with the old one (audit BUG-3).
+    with LOCK:
+        if not os.path.exists(path):
             return False
-    except OSError:
-        return False
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return False
-    cutoff = now - max(1, int(retention_days)) * 86400
-    keep, archived = [], []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
+        max_bytes = max(1, int(max_mb)) * 1024 * 1024
         try:
-            row = json.loads(stripped)
-            at = float(row.get("at") or 0)
-        except Exception:
-            keep.append(line)
-            continue
-        if at and at < cutoff:
-            archived.append(line)
-        else:
-            keep.append(line)
-    size = sum(len(line.encode("utf-8")) for line in keep)
-    while keep and size > max_bytes:
-        dropped = keep.pop(0)
-        size -= len(dropped.encode("utf-8"))
-        archived.append(dropped)
-    if not archived:
-        return False
-    usage_dir = os.path.dirname(path)
-    stamp = time.strftime("%Y%m%d", time.localtime(now))
-    archive = os.path.join(usage_dir, ARCHIVE_PREFIX + stamp + ".jsonl")
-    try:
-        with open(archive, "a", encoding="utf-8") as fh:
-            fh.writelines(archived)
+            if os.path.getsize(path) < max_bytes:
+                return False
+        except OSError:
+            return False
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+            read_stamp = _file_stamp(path)
+        except OSError:
+            return False
+        cutoff = now - max(1, int(retention_days)) * 86400
+        keep, archived = [], []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+                at = float(row.get("at") or 0)
+            except Exception:
+                keep.append(line)
+                continue
+            if at and at < cutoff:
+                archived.append(line)
+            else:
+                keep.append(line)
+        size = sum(len(line.encode("utf-8")) for line in keep)
+        while keep and size > max_bytes:
+            dropped = keep.pop(0)
+            size -= len(dropped.encode("utf-8"))
+            archived.append(dropped)
+        if not archived:
+            return False
+        usage_dir = os.path.dirname(path)
+        stamp = time.strftime("%Y%m%d", time.localtime(now))
+        archive = os.path.join(usage_dir, ARCHIVE_PREFIX + stamp + ".jsonl")
         tmp = path + ".rotate.tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.writelines(keep)
-        os.replace(tmp, path)
-    except OSError:
-        return False
-    if log:
-        log("request archive: rotated %d row(s) into %s"
-            % (len(archived), os.path.basename(archive)))
-    return True
-
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.writelines(keep)
+        except OSError:
+            return False
+        # Cooperating writers are held off by LOCK; this check narrows the
+        # window for a writer that ignores the lock: if the file grew while
+        # the keep/archive split was being written, abandon the rotation
+        # instead of replacing its freshly appended row (audit BUG-3).
+        if _file_stamp(path) != read_stamp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
+        try:
+            with open(archive, "a", encoding="utf-8") as fh:
+                fh.writelines(archived)
+            os.replace(tmp, path)
+        except OSError:
+            return False
+        if log:
+            log("request archive: rotated %d row(s) into %s"
+                % (len(archived), os.path.basename(archive)))
+        return True
 
 def rotate_if_needed(path, max_mb, retention_days, now=None, log=None):
     """Throttled rotation check (at most once per CHECK_INTERVAL_SECONDS)."""

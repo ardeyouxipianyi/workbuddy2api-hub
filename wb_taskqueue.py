@@ -26,6 +26,7 @@ class TaskQueue(object):
         self._lock = threading.RLock()
         self._items = []
         self._running = False
+        self._starting = False
         self._started_at = 0.0
         self._seq = 0
         self._account_locks = {}
@@ -72,6 +73,11 @@ class TaskQueue(object):
                     and (not wanted or a.uid in wanted)]
         results = []
         results_lock = threading.Lock()
+        # A scan gives up on a worker after 60s; bumping the token under the
+        # same lock makes any late worker drop its result instead of writing
+        # into the list this scan is about to return (audit #10).
+        state = {"token": object()}
+        token = state["token"]
 
         def worker(account):
             tasks = wb_tasks.fetch_growth_tasks(account)
@@ -93,6 +99,8 @@ class TaskQueue(object):
                 "growth_error": "" if tasks else "无法获取任务清单",
             }
             with results_lock:
+                if state["token"] is not token:
+                    return
                 results.append(item)
 
         threads = []
@@ -102,42 +110,55 @@ class TaskQueue(object):
             threads.append(thread)
         for thread in threads:
             thread.join(timeout=60)
+        timed_out = any(thread.is_alive() for thread in threads)
+        with results_lock:
+            if timed_out:
+                state["token"] = None
+            snapshot = list(results)
         order = {account.uid: index for index, account in enumerate(accounts)}
-        results.sort(key=lambda item: order.get(item["uid"], 0))
-        return {"ok": True, "accounts": results,
-                "pending_count": sum(len(item["growth"]) for item in results)}
-
+        snapshot.sort(key=lambda item: order.get(item["uid"], 0))
+        return {"ok": True, "accounts": snapshot,
+                "pending_count": sum(len(item["growth"]) for item in snapshot),
+                "timed_out": timed_out}
     def start(self, uids=None, codes=None, concurrency=None):
         """Queue every pending task and run it in the background."""
         with self._lock:
-            if self._running:
+            if self._running or self._starting:
                 return {"ok": True, "started": False, "total": 0,
                         "seq": self._seq, "msg": "队列已在运行"}
-        scan = self.scan(uids=uids)
-        code_filter = set(codes or [])
-        items = []
-        for account in scan["accounts"]:
-            for task in account["growth"]:
-                if code_filter and task["task_code"] not in code_filter:
-                    continue
-                items.append({
-                    "uid": account["uid"],
-                    "nickname": account["nickname"],
-                    "kind": "growth",
-                    "code": task["task_code"],
-                    "name": task.get("name") or task["task_code"],
-                    "status": "pending",
-                    "message": "",
-                })
-        if not items:
-            return {"ok": True, "started": False, "total": 0, "seq": self._seq,
-                    "msg": "没有待办任务"}
-        with self._lock:
-            self._items = items
-            self._running = True
-            self._started_at = time.time()
-            self._seq += 1
-            seq = self._seq
+            # scan() can take seconds (network). Keeping _starting set until the
+            # finally below stops a second caller from slipping through the
+            # running check while the first one is still scanning.
+            self._starting = True
+        try:
+            scan = self.scan(uids=uids)
+            code_filter = set(codes or [])
+            items = []
+            for account in scan["accounts"]:
+                for task in account["growth"]:
+                    if code_filter and task["task_code"] not in code_filter:
+                        continue
+                    items.append({
+                        "uid": account["uid"],
+                        "nickname": account["nickname"],
+                        "kind": "growth",
+                        "code": task["task_code"],
+                        "name": task.get("name") or task["task_code"],
+                        "status": "pending",
+                        "message": "",
+                    })
+            if not items:
+                return {"ok": True, "started": False, "total": 0, "seq": self._seq,
+                        "msg": "没有待办任务"}
+            with self._lock:
+                self._items = items
+                self._running = True
+                self._started_at = time.time()
+                self._seq += 1
+                seq = self._seq
+        finally:
+            with self._lock:
+                self._starting = False
         concurrency = self.clamp_concurrency(
             concurrency if concurrency is not None else self._default_concurrency)
         thread = threading.Thread(target=self._run, args=(items, concurrency),
@@ -147,7 +168,6 @@ class TaskQueue(object):
                   % (len(items), concurrency))
         return {"ok": True, "started": True, "total": len(items), "seq": seq,
                 "concurrency": concurrency, "msg": "队列已启动"}
-
     def _run(self, items, concurrency):
         semaphore = threading.Semaphore(concurrency)
         threads = []

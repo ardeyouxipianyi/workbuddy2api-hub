@@ -7,6 +7,7 @@ password is never stored in clear text - only a PBKDF2-SHA256 digest.
 Only the Python standard library is required.
 """
 
+import copy
 import fnmatch
 import hashlib
 import hmac
@@ -24,6 +25,11 @@ PBKDF2_ROUNDS = 120_000
 SESSION_TTL = 7 * 24 * 3600
 
 _lock = threading.RLock()
+SETTINGS_CACHE_TTL = 5.0
+# abspath -> (read_at, (mtime_ns, size), data). The chat path reads settings
+# 3-4 times per request; the cache removes the repeated open+parse while the
+# stamp check still notices an edit made outside save() (audit #6).
+_settings_cache = {}
 
 
 def settings_path(accounts_dir):
@@ -36,19 +42,43 @@ def _digest(password, salt_hex, rounds=PBKDF2_ROUNDS):
     ).hex()
 
 
+def _settings_stamp(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def load(accounts_dir):
-    """Return the persisted settings, or an empty dict on a fresh install."""
+    """Return the persisted settings, or an empty dict on a fresh install.
+
+    Cached for SETTINGS_CACHE_TTL seconds, keyed on the file's mtime+size so
+    an edit made outside save() is still noticed; save() drops its own entry
+    immediately (audit #6).
+    """
     path = settings_path(accounts_dir)
+    key = os.path.abspath(path)
+    stamp = _settings_stamp(path)
+    now = time.time()
+    with _lock:
+        hit = _settings_cache.get(key)
+        if (hit and now - hit[0] < SETTINGS_CACHE_TTL
+                and hit[1] == stamp):
+            return copy.deepcopy(hit[2])
+    data = {}
     try:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        if isinstance(data, dict):
-            return data
+            parsed = json.load(fh)
+        if isinstance(parsed, dict):
+            data = parsed
     except FileNotFoundError:
         pass
     except Exception:
         pass
-    return {}
+    with _lock:
+        _settings_cache[key] = (now, stamp, data)
+    return copy.deepcopy(data)
 
 
 def save(accounts_dir, data):
@@ -60,6 +90,7 @@ def save(accounts_dir, data):
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
+        _settings_cache.pop(os.path.abspath(path), None)
         return path
 
 
