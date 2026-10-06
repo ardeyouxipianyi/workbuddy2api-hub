@@ -91,37 +91,68 @@
 
 ### 5. Docker 容器化部署
 
-自带完整容器配置，零外部依赖：
+本项目提供预编译双架构镜像（`linux/amd64` 与 `linux/arm64`），公开发布在 GHCR 及 Docker Hub，**无需克隆代码、无需本地编译**，提供多种开箱即用的部署与更新方式：
+
+#### 方式一：一键快速部署与更新（推荐，小白与云服务器首选）
+
+在终端中执行以下命令，脚本将全自动检测环境、创建配置并完成拉取启动：
 
 ```bash
-docker compose up -d          # 后台启动（自动构建）
-docker compose logs -f        # 查看网关日志
+curl -fsSL https://raw.githubusercontent.com/ardeyouxipianyi/workbuddy2api-hub/main/quick-deploy.sh | bash
 ```
 
-也可直接用 `docker run`：
+- **后续升级**：再次运行相同的这一行命令即可无感平滑升级，账号配置与用量数据绝不丢失。
+
+#### 方式二：NAS / Web 面板单文件 Compose 部署（飞牛 fnOS / 群晖 / 1Panel 等）
+
+在 NAS 或面板的 Compose 界面直接新建项目并粘贴以下内容保存启动，无需拉取项目源码：
+
+```yaml
+services:
+  wb-proxy:
+    image: ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest   # 或 ardeyouxipianyi/workbuddy2api-hub:latest
+    container_name: wb-proxy
+    restart: unless-stopped
+    ports:
+      - "8788:8788"          # 左侧宿主端口可自选；右侧必须与下面的 PORT 一致
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8788
+      # - API_KEY=your_secret_key   # 留空则自动生成并打印在启动日志
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./accounts:/app/accounts    # 账号凭证与配置（更新/重建容器不丢）
+      - ./usage:/app/usage          # 用量流水日志（更新/重建容器不丢）
+```
+
+- **更新方法**：在面板中点击「拉取最新镜像并重启」，或在对应目录执行：
+  ```bash
+  docker compose pull && docker compose up -d
+  ```
+
+#### 方式三：Watchtower 全自动静默更新（彻底躺平）
+
+希望系统在每次 GitHub 发布新版本时自动静默升级，可启动 Watchtower 仅监控 `wb-proxy`（每 24 小时检查一次更新）：
 
 ```bash
-docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
-  -v $(pwd)/accounts:/app/accounts -v $(pwd)/usage:/app/usage \
-  -e API_KEY=your_secret_key $(docker build -q .)
+docker run -d --name wb-proxy-watchtower --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower:latest --interval 86400 --cleanup wb-proxy
 ```
 
-每次 GitHub Release 发布后，也可从 GHCR 拉取预编译镜像运行（正式版同步更新 `latest`，预发布版只有版本标签）：
+#### 补充说明与排错
 
-```bash
-docker pull ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
-docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
-  -v $(pwd)/accounts:/app/accounts -v $(pwd)/usage:/app/usage \
-  -e API_KEY=your_secret_key ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
-```
-
-GHCR 新包默认私有；如需免登录拉取，首次发布后在 Packages 设置中将其改为 Public。保持私有时需先登录 `ghcr.io`。
-
-- **持久化目录**：`./accounts`（账号凭证与活动区域）与 `./usage`（请求流水与指标快照）；
-- **配置参数**：环境变量 `API_KEY`、`PORT`；
-- **改 `PORT` 要同步改端口映射**：`PORT` 只决定容器内监听哪个端口，`-p HOST:CONTAINER` 的**右侧必须与之一致**，例如 `-e PORT=9000 -p 9000:9000`；只改 `PORT` 而映射仍是 `8788:8788`，请求会打到没人监听的端口上。用 compose 时 `ports` 与 `PORT` 要同时改（默认的 `8788:8788` + `PORT=8788` 本来就一致）。
-- **鉴权**：容器以 `--lan` 启动（监听 `0.0.0.0`），会生成 API Key 写入 `./accounts/settings.json`，并打印在启动日志里：
-  `docker compose logs wb-proxy | grep -i "api key"`。不带这个 Key 调 `/v1` 会收到 401；想用自己的 Key 就传 `-e API_KEY=...`。
+- **持久化数据安全**：`./accounts` 与 `./usage` 两个目录由宿主机持久化挂载，容器更新或销毁重建均不会影响已保存的账号和请求用量。
+- **命令行快捷启动（docker run）**：
+  ```bash
+  docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
+    -v $(pwd)/accounts:/app/accounts -v $(pwd)/usage:/app/usage \
+    ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
+  ```
+- **开发者本地源码构建**：需调试或修改代码时，运行 `docker compose -f docker-compose.build.yml up -d --build`。
+- **鉴权说明**：容器以 `--lan` 启动，无显式 `API_KEY` 时会自动生成高强度 Key 写入 `./accounts/settings.json` 并打印在日志中：
+  `docker compose logs wb-proxy | grep -i "api key"`。
+- **报错 `pull access denied ... repository does not exist`**：镜像名若省略了 Registry 地址（如写成了 `ardeyouxipianyi/workbuddy2api-hub`），Docker 默认访问 Docker Hub。若遇网络受阻，请确保镜像名补全为 `ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest`；GHCR 包是公开的，拉取无需登录。
 
 ### 6. 测试
 

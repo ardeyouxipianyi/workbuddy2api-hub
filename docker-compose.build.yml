@@ -1,0 +1,18 @@
+# 本地源码构建（开发者 / 修改代码测试用）：
+#   docker compose -f docker-compose.build.yml up -d --build
+services:
+  wb-proxy:
+    build: .
+    image: wb-proxy:local
+    container_name: wb-proxy
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8788
+      # - API_KEY=your_secret_key
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./accounts:/app/accounts
+      - ./usage:/app/usage
