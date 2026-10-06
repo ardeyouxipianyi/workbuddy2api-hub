@@ -162,6 +162,13 @@ class DailyTokenLimitTests(unittest.TestCase):
             def apply_daily_token_limit(self, value=None, usage=None):
                 return value or 0
 
+            def apply_daily_credit_limit(self, value=None, credits=None,
+                                         free_models=None):
+                return value or 0
+
+            def apply_model_daily_token_limit(self, value=None, per_model=None):
+                return value or 0
+
         old_pool = P.POOL
         P.POOL = Pool()
         try:

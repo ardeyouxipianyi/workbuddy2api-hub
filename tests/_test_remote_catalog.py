@@ -88,6 +88,42 @@ class RemoteCatalogTests(unittest.TestCase):
         (P.fetch_remote_product_config, P.read_product_config_models,
          P.fetch_endpoint_models, P.product_config_path) = self._orig
 
+    def test_credits_follow_the_endpoint_and_fall_back_for_a_pinned_model(self):
+        """What the multiplier badge can follow, and what it cannot.
+
+        The badge renders whatever /v1/models reports, so the question is where
+        that value comes from. A model the endpoint still lists follows the
+        endpoint; a model it no longer lists - the cn free hy4-preview-f, pinned
+        by the curated table since #85 - keeps the bundled value, which by
+        definition cannot follow a price change until the endpoint lists it
+        again. Both halves, plus the model_entry() hop the panel reads.
+        """
+        # 1. The endpoint declares a new price for a curated model: it wins.
+        meta = dict(INTL_META)
+        meta["hy4-preview-f"] = {"credits": "x0.29"}
+        P.fetch_remote_product_config = (
+            lambda realm: (INTL_IDS, meta) if realm == "intl" else None)
+        entries = dict(P.fetch_models("intl"))
+        self.assertEqual(entries["hy4-preview-f"]["credits"], "x0.29")
+        self.assertEqual(
+            P.model_entry("hy4-preview-f", entries["hy4-preview-f"])["credits"],
+            "x0.29")
+
+        # 2. The endpoint stops listing it: the bundled value survives, and that
+        #    is exactly what the panel then shows.
+        ids = [m for m in INTL_IDS if m != "hy4-preview-f"]
+        meta = dict(INTL_META)
+        meta.pop("hy4-preview-f", None)
+        P.fetch_remote_product_config = (
+            lambda realm: (ids, meta) if realm == "intl" else None)
+        P._models_cache["intl"] = {"at": 0.0, "data": None}
+        entries = dict(P.fetch_models("intl"))
+        self.assertIn("hy4-preview-f", entries)
+        self.assertEqual(entries["hy4-preview-f"]["credits"], "x0.00")
+        self.assertEqual(
+            P.model_entry("hy4-preview-f", entries["hy4-preview-f"])["credits"],
+            "x0.00")
+
     def test_parse_keeps_order_and_metadata(self):
         ids, meta = P.parse_remote_catalog(payload(INTL_IDS, INTL_META))
         self.assertEqual(ids, INTL_IDS)
@@ -160,6 +196,45 @@ class RemoteCatalogTests(unittest.TestCase):
         self.assertIn("kimi-k3", ids)
         self.assertIn("grok-4.7", ids)   # the bundled snapshot still fills names
         self.assertNotIn("internal-only-model", ids)  # endpoint keeps the table filter
+
+    def test_live_reasoning_efforts_win_over_the_bundled_table(self):
+        """The endpoint's reasoning block is the source of truth.
+
+        deepseek-v4.1-flash used to be pinned to low/high/max in code, which
+        silently overwrote whatever the live catalogue declared (the pin dates
+        from before the gateway called /v3/config at all).
+        """
+        meta = dict(INTL_META)
+        meta["deepseek-v4.1-flash"] = {
+            "credits": "x0.00",
+            "reasoning": {"supportedEfforts": ["low", "medium", "high"],
+                          "defaultEffort": "medium"},
+        }
+        P.fetch_remote_product_config = (
+            lambda realm: (INTL_IDS, meta) if realm == "intl" else None)
+        entries = dict(P.fetch_models("intl"))
+        item = P.model_entry("deepseek-v4.1-flash",
+                             entries["deepseek-v4.1-flash"])
+        self.assertEqual(item["reasoning_efforts"], ["low", "medium", "high"])
+        self.assertEqual(item["reasoning_default_effort"], "medium")
+
+    def test_bundled_efforts_fill_in_when_the_live_entry_has_none(self):
+        """A silent live entry falls back to the snapshot, and says so once."""
+        logged = []
+        original_log = P.log
+        P.log = lambda message, **kw: logged.append(message)
+        try:
+            P.fetch_remote_product_config = (
+                lambda realm: (INTL_IDS, dict(INTL_META)) if realm == "intl" else None)
+            P._catalog_fallback_log.pop("intl", None)
+            entries = dict(P.fetch_models("intl"))
+        finally:
+            P.log = original_log
+        item = P.model_entry("deepseek-v4.1-flash",
+                             entries["deepseek-v4.1-flash"])
+        self.assertEqual(item["reasoning_efforts"], ["low", "high", "max"])
+        self.assertEqual(item["reasoning_default_effort"], "high")
+        self.assertTrue(any("bundled table" in m for m in logged), logged)
 
     def test_parse_reads_the_desktop_cache_shape(self):
         """The cache file is the same document without the "data" envelope."""

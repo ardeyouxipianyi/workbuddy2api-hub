@@ -12,6 +12,9 @@ import urllib.request
 import uuid
 from wb_fingerprint import derive_id, generate_request_id
 import wb_pool
+
+
+import wb_atrest
 import wb_identity
 import wb_redisstore
 import wb_settings
@@ -189,6 +192,10 @@ LOGIN_ACCOUNT_PATH = "/v2/plugin/login/account"
 REFRESH_PATH = "/v2/plugin/auth/token/refresh"
 CHECKIN_PATH = "/v2/billing/meter/daily-checkin"
 GET_RESOURCE_PATH = "/v2/billing/meter/get-user-resource"
+RESOURCE_SUMMARY_PATH = "/billing/meter/get-user-resource-summary"
+RESOURCE_FREE_PACKAGES_PATH = "/billing/meter/get-user-resource-free-packages"
+RESOURCE_PAID_PACKAGES_PATH = "/billing/meter/get-user-resource-paid-packages"
+CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status"
 
 LOGIN_PENDING = 11217
 LOGIN_TTL_SECONDS = 600
@@ -227,12 +234,60 @@ def normalize_epoch(value):
         number /= 1000.0
     return int(number)
 
-def detect_realm_from_token(token, domain=None):
+#: token / 域名里能认出区域的字样。国内版历史上换过出口：copilot.tencent.com →
+#: codebuddy.cn → workbuddy.cn（新版国内客户端的 JWT issuer 就是
+#: https://www.workbuddy.cn/…），三个都得认；只认前两个会把 workbuddy.cn 的
+#: 国内账号判成国际版——手动导入 JSON 时"明明是国内的却进了国际版"就是这么来的。
+CN_REALM_MARKERS = ("copilot.tencent.com", "codebuddy.cn", "workbuddy.cn")
+INTL_REALM_MARKERS = ("workbuddy.ai", "codebuddy.ai")
+REALM_MARKERS = {"cn": CN_REALM_MARKERS, "intl": INTL_REALM_MARKERS}
+
+def realm_evidence(token, domain=None):
+    """从 token / 域名里看区域，看不出返回 None（不要瞎猜成 intl）。
+
+    先看 token 自己的 issuer，再看域名：域名是客户端随手记下来的字段，可能过期
+    或干脆是另一边的（同一台机器切区登录过就会这样），token 才是要拿去请求的
+    那一串，冲突时以它为准。
+    """
     iss = jwt_issuer(token).lower()
-    dom = str(domain or "").lower()
-    if "copilot.tencent.com" in dom or "codebuddy.cn" in dom or "copilot.tencent.com" in iss or "codebuddy.cn" in iss:
+    if any(marker in iss for marker in CN_REALM_MARKERS):
         return "cn"
-    return "intl"
+    if any(marker in iss for marker in INTL_REALM_MARKERS):
+        return "intl"
+    dom = str(domain or "").lower()
+    if any(marker in dom for marker in CN_REALM_MARKERS):
+        return "cn"
+    if any(marker in dom for marker in INTL_REALM_MARKERS):
+        return "intl"
+    return None
+
+def detect_realm_from_token(token, domain=None):
+    return realm_evidence(token, domain) or "intl"
+
+def domain_for_realm(realm, domain):
+    """把域名对齐到区域：域名写着另一个区域时换成该区域的规范域名。
+
+    出站请求的 X-Domain 头跟着它走，区域既然以 token 为准，就不能让一个过期
+    域名再把请求带回另一边的出口。域名本身看不出区域时原样保留。
+    """
+    dom = str(domain or "").strip()
+    other = "intl" if realm == "cn" else "cn"
+    if dom and not any(marker in dom.lower() for marker in REALM_MARKERS[other]):
+        return dom
+    return get_realm_config(realm)["domain"]
+
+def desktop_effective_realm(hint, token, domain=None):
+    """桌面凭据归哪个区域：token / 域名说了算，文件名只作兜底。
+
+    文件名（workbuddy-desktop.info → 国内、workbuddy-desktop-ai.info → 国际）
+    只是客户端两套安装的默认约定：同一个文件里完全可能登录另一个区域的账号
+    （切区登录就是这么用的）。按 token 判定才不会把国内账号塞进国际版列表——
+    那种账号导入后每个请求都会打到错区域的出口上。
+    """
+    evidence = realm_evidence(token, domain)
+    if evidence:
+        return evidence
+    return hint if hint in ("intl", "cn") else "intl"
 
 _DEVICE_TOKEN_CACHE = {"key": None, "token": "", "at": 0.0}
 _DEVICE_TOKEN_LOCK = threading.Lock()
@@ -335,7 +390,7 @@ class Account(object):
         # today stops being handed out, so a client that would burn the rest
         # of the day's quota rotates to another account instead of hitting
         # the upstream wall. Resolved from the global setting by
-        # AccountPool.apply_daily_token_limit(); 0 disables it.
+        # AccountPool.apply_daily_token_limit(); 0 disables the guard.
         # daily_tokens_today stays None until the proxy has folded the usage
         # log at least once, so a fresh process never parks anyone on an
         # unknown count.
@@ -357,6 +412,26 @@ class Account(object):
         self.balance_until = 0.0
         self.balance_cooled = False
         self.session_dead_fails = 0
+
+
+        # Daily credit guard: paid models only. Once today's counted spend
+        # reaches the limit the account keeps serving models the catalogue
+        # marks free ("x0.00") and is skipped for everything else, so the
+        # free tier never goes dark just because the balance is capped.
+        # Resolved from the global setting by
+        # AccountPool.apply_daily_credit_limit(); 0 disables the guard.
+        self.daily_credit_limit = 0
+        self.daily_credits_today = None
+        # The realm's free model ids, pushed by the same apply call. Empty
+        # until then, and an unknown model counts as paid, so the guard
+        # fails closed instead of leaking spend through unseen names.
+        self.free_models = frozenset()
+        # Per-model daily guard: once ONE model burned the configured tokens
+        # today the account stops being handed out for that model only -
+        # every other model keeps working. Resolved from the global setting
+        # by AccountPool.apply_model_daily_token_limit(); 0 disables it.
+        self.model_daily_token_limit = 0
+        self.model_daily_tokens = None
         # Serialise token refresh and file writes. Request threads, /health,
         # dashboard polls and the scheduler can all reach refresh()/save() for
         # the same account at once; without a lock the upstream rotates the
@@ -450,6 +525,16 @@ class Account(object):
                                  if isinstance(self.daily_tokens_today, int)
                                  else None),
             "dailyLimitBlocked": self.daily_limit_blocked(),
+            "dailyCreditLimit": int(self.daily_credit_limit or 0),
+            "dailyCreditsToday": (round(float(self.daily_credits_today), 2)
+                                  if isinstance(self.daily_credits_today, (int, float))
+                                  else None),
+            "creditLimitReached": self.credit_limit_reached(),
+            "modelDailyTokenLimit": int(self.model_daily_token_limit or 0),
+            "modelDailyTokens": ({str(k): int(v)
+                                  for k, v in self.model_daily_tokens.items()}
+                                 if isinstance(self.model_daily_tokens, dict)
+                                 else None),
             "lastCheckin": self.last_checkin,
             "lastDailyChat": self.last_daily_chat,
             "canCheckin": self.realm == "cn",
@@ -529,6 +614,82 @@ class Account(object):
         except (TypeError, ValueError):
             return False
 
+    def model_is_free(self, model):
+        """True when the realm catalogue marks `model` as a free one."""
+        return bool(model) and model in (self.free_models or ())
+
+    def credit_limit_reached(self):
+        """True when today's counted spend reached the daily credit limit.
+
+        The account-level fact, independent of which model is asked for:
+        ready() pairs it with model_is_free() so free models keep serving,
+        and the dashboard shows it as the guard's state.
+        """
+        try:
+            limit = int(self.daily_credit_limit or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0:
+            return False
+        used = self.daily_credits_today
+        if used is None:
+            return False
+        try:
+            return float(used) >= limit
+        except (TypeError, ValueError):
+            return False
+
+    def credit_limit_blocked(self, model=None):
+        """True when the credit guard should keep this account off `model`.
+
+        A free model stays available even after the cap is reached - that is
+        the point of the guard. Without a model to judge (model is None) the
+        account is not blocked here, because the caller cannot know whether
+        the request would spend anything.
+        """
+        if not model or self.model_is_free(model):
+            return False
+        return self.credit_limit_reached()
+
+    def model_token_limit_blocked(self, model=None):
+        """True when `model` already burned its daily token budget today.
+
+        Only the named model is refused; the account's other models keep
+        working, and an uncounted model never blocks.
+        """
+        try:
+            limit = int(self.model_daily_token_limit or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        if limit <= 0 or not model:
+            return False
+        per = self.model_daily_tokens
+        if not isinstance(per, dict):
+            return False
+        used = per.get(model)
+        if used is None:
+            return False
+        try:
+            return int(used) >= limit
+        except (TypeError, ValueError):
+            return False
+
+    def blocked_model_names(self):
+        """The models currently out of budget, as a set.
+
+        Used by AccountPool.apply_model_daily_token_limit() to log only the
+        models whose state actually changed instead of one line per model
+        on every refresh.
+        """
+        per = self.model_daily_tokens
+        if not isinstance(per, dict):
+            return set()
+        out = set()
+        for mid, used in per.items():
+            if self.model_token_limit_blocked(mid):
+                out.add(mid)
+        return out
+
     def ready(self, model=None):
         if not self.enabled or not self.access_token:
             return False
@@ -541,6 +702,14 @@ class Account(object):
         # Today's token budget is spent: keep the seat for tomorrow instead
         # of letting the upstream answer 429 for the rest of the day.
         if self.daily_limit_blocked():
+            return False
+        # The day's credit spend reached the cap: paid models stop, free
+        # ones keep serving (see credit_limit_blocked).
+        if self.credit_limit_blocked(model):
+            return False
+        # One model out of budget does not take the account with it: only
+        # that model is refused here.
+        if self.model_token_limit_blocked(model):
             return False
         # In-flight lease: an account already serving its share of concurrent
         # requests stays out of the picker until one of them finishes.
@@ -919,7 +1088,213 @@ class Account(object):
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def fetch_credits(self):
+    def _parse_package_account(self, acc):
+        pkg_name = acc.get("PackageName") or "Package"
+        pkg_code = acc.get("PackageCode") or ""
+
+        def _val(*keys):
+            for k in keys:
+                v = acc.get(k)
+                if v is not None and v != "":
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        pass
+            return 0.0
+
+        size = _val("CycleCapacitySizePrecise", "CycleCapacitySize", "CapacitySizePrecise", "CapacitySize")
+        remain = _val("CycleCapacityRemainPrecise", "CycleCapacityRemain", "CapacityRemainPrecise", "CapacityRemain")
+        used = _val("CycleCapacityUsedPrecise", "CycleCapacityUsed", "CapacityUsedPrecise", "CapacityUsed")
+
+        if size > 0 and used <= 0 and remain <= size:
+            used = max(0.0, size - remain)
+        elif size > 0 and remain <= 0 and used < size:
+            remain = max(0.0, size - used)
+
+        # 提取发放原因（如“官方活动发放”、“拉新奖励”等）
+        grant_reason = ""
+        for attr in (acc.get("AccountAttributes") or []):
+            if isinstance(attr, dict) and attr.get("Key") == "grantReason":
+                grant_reason = str(attr.get("Value") or "")
+                break
+
+        # 提取创建时间（毫秒时间戳转换）
+        create_time = ""
+        raw_create = acc.get("CreateTime")
+        if raw_create:
+            try:
+                ts = float(raw_create)
+                if ts > 1e11:
+                    ts /= 1000.0
+                create_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+            except Exception:
+                create_time = str(raw_create)
+
+        end_time_str = acc.get("CycleEndTime") or acc.get("ExpiredTime") or ""
+        days_left = None
+        is_expired = False
+        if end_time_str:
+            try:
+                clean_time = end_time_str.replace("T", " ")[:19]
+                end_ts = time.mktime(time.strptime(clean_time, "%Y-%m-%d %H:%M:%S"))
+                diff_sec = end_ts - time.time()
+                days_left = round(diff_sec / 86400.0, 1)
+                is_expired = diff_sec < 0
+            except Exception:
+                pass
+
+        in_usage = bool(acc.get("InUsage"))
+        if not in_usage and not is_expired and remain > 0 and used > 0:
+            in_usage = True
+
+        return {
+            "name": pkg_name,
+            "package_code": pkg_code,
+            "product_name": acc.get("ProductName") or "",
+            "sub_product_name": acc.get("SubProductName") or "",
+            "grant_reason": grant_reason,
+            "resource_id": acc.get("ResourceId") or "",
+            "deal_name": acc.get("DealName") or "",
+            "create_time": create_time,
+            "remain": round(remain, 2),
+            "used": round(used, 2),
+            "size": round(size, 2),
+            "unit": acc.get("CapacityUnit") or "credits",
+            "in_usage": in_usage,
+            "auto_renew": bool(acc.get("AutoRenewFlag") or acc.get("SupportAutoRenew")),
+            "cycle_start_time": acc.get("CycleStartTime") or "",
+            "cycle_end_time": end_time_str,
+            "days_left": days_left,
+            "is_expired": is_expired,
+            "status": acc.get("Status", 0),
+        }
+
+    def _fetch_credits_cn_detailed(self):
+        cfg = get_realm_config(self.realm)
+        headers = self.headers(purpose="billing")
+        headers["X-Client-Platform"] = "web"
+        base_billing = cfg["billing_upstream"]
+
+        # 1. 套餐概览
+        summary_url = base_billing + RESOURCE_SUMMARY_PATH
+        s_res = http_json(summary_url, data=b"{}", method="POST", headers=headers,
+                          timeout=15, proxy=self.proxy)
+        if s_res.get("code") != 0:
+            return {"ok": False, "error": s_res.get("msg") or f"code {s_res.get('code')}"}
+        s_data = s_res.get("data") or {}
+        summary_pkgs = s_data.get("Packages") or []
+        pkg_codes = [p.get("PackageCode") for p in summary_pkgs if p.get("PackageCode")]
+
+        # 2. 免费包
+        free_accs = []
+        if pkg_codes:
+            free_url = base_billing + RESOURCE_FREE_PACKAGES_PATH
+            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0]}
+            try:
+                f_res = http_json(free_url, data=json.dumps(body).encode(), method="POST",
+                                  headers=headers, timeout=15, proxy=self.proxy)
+                free_accs = (f_res.get("data") or {}).get("Accounts") or []
+            except Exception:
+                pass
+
+        # 3. 付费包
+        paid_accs = []
+        if pkg_codes:
+            paid_url = base_billing + RESOURCE_PAID_PACKAGES_PATH
+            body = {"PackageCodes": pkg_codes, "PageNumber": 1, "PageSize": 200, "Status": [0, 3], "NeedRenewInfo": True}
+            try:
+                p_res = http_json(paid_url, data=json.dumps(body).encode(), method="POST",
+                                  headers=headers, timeout=15, proxy=self.proxy)
+                paid_accs = (p_res.get("data") or {}).get("Accounts") or []
+            except Exception:
+                pass
+
+        # 4. 每日签到状态
+        checkin_info = None
+        try:
+            checkin_url = cfg.get("chat_upstream", "https://copilot.tencent.com") + CHECKIN_STATUS_PATH
+            c_res = http_json(checkin_url, data=b"{}", method="POST", headers=headers,
+                              timeout=10, proxy=self.proxy)
+            c_data = c_res.get("data") or {}
+            if c_data:
+                checkin_info = {
+                    "today_checked_in": c_data.get("today_checked_in", False),
+                    "streak_days": c_data.get("streak_days", 0),
+                    "daily_credit": c_data.get("daily_credit", 0),
+                    "today_credit": c_data.get("today_credit", 0),
+                    "active": c_data.get("active", True),
+                }
+        except Exception:
+            pass
+
+        packages = []
+        seen_account_ids = set()
+        for raw_acc in (free_accs + paid_accs):
+            acc_id = raw_acc.get("AccountId")
+            if acc_id and acc_id in seen_account_ids:
+                continue
+            if acc_id:
+                seen_account_ids.add(acc_id)
+            packages.append(self._parse_package_account(raw_acc))
+
+        tot_remain = sum(p["remain"] for p in packages)
+        tot_used = sum(p["used"] for p in packages)
+        tot_size = sum(p["size"] for p in packages)
+
+        # 若具体包为空且 summary 含有汇总容量，则使用 summaryPkgs
+        if not packages and summary_pkgs:
+            for sp in summary_pkgs:
+                tot_size += float(sp.get("CycleTotalCapacity") or 0)
+                tot_remain += float(sp.get("CycleRemainCapacity") or 0)
+                tot_used += float(sp.get("CycleUsedCapacity") or 0)
+
+        tot_remain = round(tot_remain, 2)
+        tot_used = round(tot_used, 2)
+        tot_size = round(tot_size, 2)
+
+        # 排序：使用中优先 -> 未过期中按到期时间升序 -> 已过期排最后
+        def _pkg_sort_key(p):
+            in_use_score = 0 if p.get("in_usage") else 1
+            expired_score = 1 if p.get("is_expired") else 0
+            days = p.get("days_left") if p.get("days_left") is not None else 99999
+            if days < 0:
+                days = 99999 + abs(days)
+            return (in_use_score, expired_score, days, -p.get("remain", 0))
+
+        packages.sort(key=_pkg_sort_key)
+
+        # 查找最早到期的有效包（有剩余积分且未过期）
+        active_pkgs = [p for p in packages if p.get("remain", 0) > 0 and not p.get("is_expired") and p.get("days_left") is not None]
+        active_pkgs.sort(key=lambda p: p["days_left"])
+        earliest_expiring = None
+        if active_pkgs:
+            ep = active_pkgs[0]
+            earliest_expiring = {
+                "name": ep["name"],
+                "package_code": ep.get("package_code", ""),
+                "remain": ep["remain"],
+                "cycle_end_time": ep["cycle_end_time"],
+                "days_left": ep["days_left"],
+            }
+
+        self.credits = {
+            "remain": tot_remain,
+            "used": tot_used,
+            "size": tot_size,
+            "used_percent": f"{(tot_used / tot_size * 100):.1f}%" if tot_size > 0 else "0.0%",
+            "remain_percent": f"{(tot_remain / tot_size * 100):.1f}%" if tot_size > 0 else "100.0%",
+            "is_paid_user": bool(s_data.get("IsPaidUser")),
+            "checkin": checkin_info,
+            "earliest_expiring": earliest_expiring,
+            "packages": packages,
+            "updated_at": time.time(),
+            "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if self.path and os.path.exists(os.path.dirname(self.path)):
+            self.save(os.path.dirname(self.path))
+        return {"ok": True, "credits": self.credits}
+
+    def _fetch_credits_fallback(self):
         cfg = get_realm_config(self.realm)
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         body = {
@@ -939,29 +1314,46 @@ class Account(object):
             return {"ok": False, "error": str(exc)}
         data = res.get("data", {}).get("Response", {}).get("Data", {})
         accounts = data.get("Accounts") or []
-        tot_remain, tot_used, tot_size = 0, 0, 0
         packages = []
         for a in accounts:
-            pkg_name = a.get("PackageName") or "Package"
-            if a.get("CycleCapacitySize", 0) > 0:
-                remain = a.get("CycleCapacityRemain", 0)
-                size = a.get("CycleCapacitySize", 0)
-                used = max(0, size - remain)
-                if a.get("CycleCapacityUsed", 0) > used:
-                    used = a["CycleCapacityUsed"]
-                    remain = max(0, size - used)
-            else:
-                remain = a.get("CapacityRemain", 0)
-                used = a.get("CapacityUsed", 0)
-                size = a.get("CapacitySize", 0)
-            tot_remain += remain
-            tot_used += used
-            tot_size += size
-            packages.append({"name": pkg_name, "remain": remain, "used": used, "size": size})
+            packages.append(self._parse_package_account(a))
+
+        tot_remain = round(sum(p["remain"] for p in packages), 2)
+        tot_used = round(sum(p["used"] for p in packages), 2)
+        tot_size = round(sum(p["size"] for p in packages), 2)
+
+        def _pkg_sort_key(p):
+            in_use_score = 0 if p.get("in_usage") else 1
+            expired_score = 1 if p.get("is_expired") else 0
+            days = p.get("days_left") if p.get("days_left") is not None else 99999
+            if days < 0:
+                days = 99999 + abs(days)
+            return (in_use_score, expired_score, days, -p.get("remain", 0))
+
+        packages.sort(key=_pkg_sort_key)
+
+        active_pkgs = [p for p in packages if p.get("remain", 0) > 0 and not p.get("is_expired") and p.get("days_left") is not None]
+        active_pkgs.sort(key=lambda p: p["days_left"])
+        earliest_expiring = None
+        if active_pkgs:
+            ep = active_pkgs[0]
+            earliest_expiring = {
+                "name": ep["name"],
+                "package_code": ep.get("package_code", ""),
+                "remain": ep["remain"],
+                "cycle_end_time": ep["cycle_end_time"],
+                "days_left": ep["days_left"],
+            }
+
         self.credits = {
             "remain": tot_remain,
             "used": tot_used,
             "size": tot_size,
+            "used_percent": f"{(tot_used / tot_size * 100):.1f}%" if tot_size > 0 else "0.0%",
+            "remain_percent": f"{(tot_remain / tot_size * 100):.1f}%" if tot_size > 0 else "100.0%",
+            "is_paid_user": False,
+            "checkin": getattr(self, "credits", {}).get("checkin") if isinstance(getattr(self, "credits", None), dict) else None,
+            "earliest_expiring": earliest_expiring,
             "packages": packages,
             "updated_at": time.time(),
             "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -970,6 +1362,16 @@ class Account(object):
         if self.path and os.path.exists(os.path.dirname(self.path)):
             self.save(os.path.dirname(self.path))
         return {"ok": True, "credits": self.credits}
+
+    def fetch_credits(self):
+        if self.realm == "cn":
+            try:
+                res = self._fetch_credits_cn_detailed()
+                if res.get("ok"):
+                    return res
+            except Exception:
+                pass
+        return self._fetch_credits_fallback()
 
     def _set_last_error(self, message):
         """Record refresh errors alongside the state shown in the panel."""
@@ -1589,6 +1991,87 @@ class AccountPool(object):
                                  % str(account.uid)[:8])
         return value
 
+    def apply_daily_credit_limit(self, value=None, credits=None, free_models=None):
+        """Re-resolve the daily credit guard for every account.
+
+        Same shape as apply_daily_token_limit(): settings.json holds the
+        limit, while `credits` (uid -> spent today) and `free_models`
+        (realm -> free model ids) come from the caller, because only the
+        proxy reads the usage log and the model catalogue. Passing None
+        keeps the last known values, so a settings change never turns them
+        into "unknown".
+        """
+        import wb_settings
+
+        if value is None:
+            value = wb_settings.daily_credit_limit(self.dir)
+        try:
+            value = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            value = 0
+        with self._lock:
+            for account in self.accounts:
+                was_blocked = account.credit_limit_reached()
+                account.daily_credit_limit = value
+                if credits is not None:
+                    try:
+                        account.daily_credits_today = float(
+                            credits.get(account.uid, 0) or 0)
+                    except (TypeError, ValueError):
+                        account.daily_credits_today = None
+                if free_models is not None:
+                    account.free_models = frozenset(
+                        free_models.get(account.realm) or ())
+                now_blocked = account.credit_limit_reached()
+                if now_blocked != was_blocked:
+                    if now_blocked:
+                        self.log("account %s capped: daily credit limit reached "
+                                 "(%s/%s credits today), free models only"
+                                 % (str(account.uid)[:8],
+                                    account.daily_credits_today, value))
+                    else:
+                        self.log("account %s resumed: daily credit limit cleared"
+                                 % str(account.uid)[:8])
+        return value
+
+    def apply_model_daily_token_limit(self, value=None, per_model=None):
+        """Re-resolve the per-model daily token guard for every account.
+
+        `per_model` is uid -> {model: tokens counted today}; None keeps the
+        last known counts. A blocked model never takes the whole account
+        with it - ready(model) refuses exactly the models that are out of
+        budget, and only their state changes are logged.
+        """
+        import wb_settings
+
+        if value is None:
+            value = wb_settings.model_daily_token_limit(self.dir)
+        try:
+            value = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            value = 0
+        with self._lock:
+            for account in self.accounts:
+                was_blocked = account.blocked_model_names()
+                account.model_daily_token_limit = value
+                if per_model is not None:
+                    raw = per_model.get(account.uid) or {}
+                    try:
+                        account.model_daily_tokens = {str(k): int(v)
+                                                      for k, v in raw.items()}
+                    except (TypeError, ValueError, AttributeError):
+                        account.model_daily_tokens = None
+                now_blocked = account.blocked_model_names()
+                for mid in sorted(now_blocked - was_blocked):
+                    self.log("account %s model %s parked: daily token limit "
+                             "reached (%s/%s tokens today)"
+                             % (str(account.uid)[:8], mid,
+                                (account.model_daily_tokens or {}).get(mid), value))
+                for mid in sorted(was_blocked - now_blocked):
+                    self.log("account %s model %s resumed: daily token limit "
+                             "cleared" % (str(account.uid)[:8], mid))
+        return value
+
     def set_proxy_slot(self, uid, slot_id):
         account = self.get(uid)
         if account is None:
@@ -1786,19 +2269,26 @@ class AccountPool(object):
             blob = json.load(fh)
         auth = blob.get("auth") or {}
         profile = blob.get("account") or {}
-        token = str(auth.get("accessToken") or "")
+        token, key = desktop_decrypt_tokens(auth, log=self.log)
         if not token: raise RuntimeError("no accessToken in %s" % path)
-        detected_realm = realm or detect_realm_from_token(token, auth.get("domain"))
+        detected_realm = desktop_effective_realm(realm, token, auth.get("domain"))
+        if realm and detected_realm != realm:
+            self.log("desktop credential %s is a %s account (file hints %s) - importing as %s"
+                     % (os.path.basename(path), detected_realm, realm, detected_realm))
         cfg = get_realm_config(detected_realm)
+        nickname = profile.get("nickname")
+        if key is not None and wb_atrest.is_envelope(nickname):
+            # 国内版桌面端把昵称也一起加密了，能解就顺手解出来，省得只显示 UID 前缀
+            nickname = wb_atrest.decrypt_field(key, nickname) or ""
         account = Account({
             "uid": profile.get("uid") or jwt_uid(token),
-            "nickname": profile.get("nickname") or "",
-            "domain": auth.get("domain") or cfg["domain"],
+            "nickname": nickname if isinstance(nickname, str) else "",
+            "domain": domain_for_realm(detected_realm, auth.get("domain")),
             "realm": detected_realm,
             "platform": "CLI",
             "enterpriseId": profile.get("enterpriseId") or "",
             "accessToken": token,
-            "refreshToken": auth.get("refreshToken") or "",
+            "refreshToken": desktop_refresh_token(auth, key),
             "expiresAt": normalize_epoch(auth.get("expiresAt")) or jwt_exp(token),
             "source": source,
             "enabled": True,
@@ -1808,6 +2298,42 @@ class AccountPool(object):
             try: account.checkin()
             except Exception: pass
         return account
+
+def desktop_atrest_key(force=False, log=None):
+    """拿到桌面端 at-rest 密钥（内存里有就直接用，没有才去进程内存里找回）。
+
+    只有真的遇到加密信封才会走到这里，所以旧客户端 / 明文凭据完全不受影响。
+    回收失败（客户端没开、系统不是 Windows、权限不够）时抛 wb_atrest.AtRestError，
+    由调用方翻译成给用户看的话。
+    """
+    return wb_atrest.recover_key(force=force, log=log or (lambda msg: None))
+
+
+def desktop_decrypt_tokens(auth, log=None):
+    """返回 (accessToken 明文, 密钥或 None)。
+
+    桌面客户端 2026-09-24 之后把 token 存成 `$wbEncrypted` 信封，这里统一在
+    读取处解密；仍然是明文的旧客户端原样返回、不去碰密钥。
+    """
+    raw = auth.get("accessToken")
+    if not wb_atrest.is_envelope(raw):
+        return str(raw or ""), None
+    key = desktop_atrest_key(log=log)
+    return wb_atrest.decrypt_field(key, raw) or "", key
+
+
+def desktop_refresh_token(auth, key):
+    """refreshToken 同样可能是信封；解不开时留空（有 accessToken 就还能跑）。"""
+    raw = auth.get("refreshToken")
+    if not wb_atrest.is_envelope(raw):
+        return raw if isinstance(raw, str) else ""
+    if key is None:
+        return ""
+    try:
+        return wb_atrest.decrypt_field(key, raw) or ""
+    except Exception:
+        return ""
+
 
 def desktop_auth_dirs():
     """Directories where the desktop client may keep its *.info credentials.
@@ -1855,8 +2381,13 @@ def scan_desktop_credentials():
     Read-only: nothing is added to the pool. The dashboard shows the result
     and lets the user decide which ones to import, so the proxy never
     silently adopts the desktop client's login.
+
+    桌面端加密之后（2026-09-24 起）扫描要多分辨一种情况：凭据是加密信封，
+    得先把密钥回收回来才能读。这里只查内存里已有的密钥，不触发回收（回收要
+    扫客户端进程内存，得由用户在弹窗里显式点一次），所以扫描始终是秒回的。
     """
     found = []
+    key = None
     for path, realm in desktop_credential_candidates():
         cfg = get_realm_config(realm)
         item = {
@@ -1867,6 +2398,8 @@ def scan_desktop_credentials():
             "domain": cfg["domain"],
             "readable": False,
             "valid": False,
+            "encrypted": False,
+            "needsKey": False,
             "uid": "",
             "nickname": "",
             "expiresAt": 0,
@@ -1877,18 +2410,43 @@ def scan_desktop_credentials():
                 blob = json.load(fh)
             auth = blob.get("auth") or {}
             profile = blob.get("account") or {}
-            token = str(auth.get("accessToken") or "")
+            raw = auth.get("accessToken")
             item["readable"] = True
+            if wb_atrest.is_envelope(raw):
+                item["encrypted"] = True
+                if key is None:
+                    try:
+                        key = wb_atrest.cached_key()
+                    except Exception:
+                        key = None
+                if key is None:
+                    item["needsKey"] = True
+                    item["error"] = "凭据已加密：先点「回收密钥」，再回来导入"
+                    found.append(item)
+                    continue
+                token = wb_atrest.decrypt_field(key, raw) or ""
+            else:
+                token = str(raw or "")
             if not token:
                 item["error"] = "no accessToken inside the file"
                 found.append(item)
                 continue
+            nickname = profile.get("nickname")
+            if key is not None and wb_atrest.is_envelope(nickname):
+                nickname = wb_atrest.decrypt_field(key, nickname)
             exp = normalize_epoch(auth.get("expiresAt")) or jwt_exp(token) or 0
+            # 区域以 token 为准（文件名只兜底），跟导入时用的是同一套判断，
+            # 免得列表里标着国内版、导入却跑进国际版
+            item_realm = desktop_effective_realm(realm, token, auth.get("domain"))
+            item_cfg = get_realm_config(item_realm)
             item.update({
                 "valid": True,
                 "uid": profile.get("uid") or jwt_uid(token),
-                "nickname": profile.get("nickname") or "",
-                "domain": auth.get("domain") or cfg["domain"],
+                "nickname": nickname if isinstance(nickname, str) else "",
+                "realm": item_realm,
+                "realmName": item_cfg["name"],
+                "realmHint": realm if item_realm != realm else "",
+                "domain": domain_for_realm(item_realm, auth.get("domain")),
                 "expiresAt": exp,
                 "expiresIn": _human_delta(exp - time.time()) if exp else None,
             })
@@ -2037,8 +2595,21 @@ def normalise_import_row(row, realm=None):
     if token.count(".") != 2:
         raise ValueError("accessToken is not a JWT")
 
-    detected = str(realm or pick("realm") or "").strip().lower()
-    if detected not in ("intl", "cn"):
+    # Where the account belongs. A realm forced by the caller still wins (that
+    # is what the API option is for), otherwise the token/domain decides: a row
+    # carrying a stale "realm" (an account once filed under the wrong region,
+    # then exported again) must not keep dragging itself back there, and the
+    # wrong region sends every request to the wrong upstream.
+    forced = str(realm or "").strip().lower()
+    evidence = realm_evidence(token, pick("domain"))
+    row_realm = str(pick("realm") or "").strip().lower()
+    if forced in ("intl", "cn"):
+        detected = forced
+    elif evidence:
+        detected = evidence
+    elif row_realm in ("intl", "cn"):
+        detected = row_realm
+    else:
         detected = detect_realm_from_token(token, pick("domain"))
     cfg = get_realm_config(detected)
 
@@ -2050,7 +2621,7 @@ def normalise_import_row(row, realm=None):
     return {
         "uid": uid,
         "nickname": str(pick("nickname") or ""),
-        "domain": str(pick("domain") or cfg["domain"]),
+        "domain": domain_for_realm(detected, pick("domain")),
         "realm": detected,
         "platform": str(pick("platform") or "CLI"),
         "enterpriseId": str(pick("enterpriseId") or ""),

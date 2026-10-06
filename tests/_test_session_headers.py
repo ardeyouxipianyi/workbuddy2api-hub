@@ -197,6 +197,12 @@ class OpenUpstreamHeaderTests(unittest.TestCase):
             def apply_daily_token_limit(self, value=None, usage=None):
                 return value or 0
 
+            def apply_daily_credit_limit(self, value=None, credits=None, free_models=None):
+                return value or 0
+
+            def apply_model_daily_token_limit(self, value=None, per_model=None):
+                return value or 0
+
         return Pool()
 
     def test_retries_reuse_one_conversation_request_id(self):
@@ -221,7 +227,7 @@ class OpenUpstreamHeaderTests(unittest.TestCase):
                 payload = {"model": "deepseek-v4.1-flash",
                            "messages": [{"role": "user", "content": "hello"}]}
                 for _ in range(2):
-                    upstream, _account = wb_proxy.open_upstream(
+                    upstream, _account, _effort = wb_proxy.open_upstream(
                         payload, session_key="conv-1", target_realm="intl")
                     upstream.close()
             finally:
@@ -259,7 +265,7 @@ class OpenUpstreamHeaderTests(unittest.TestCase):
             wb_proxy.POOL = self.make_pool(account)
             wb_accounts.urlopen = fake_urlopen
             try:
-                upstream, _account = wb_proxy.open_upstream(
+                upstream, _account, _effort = wb_proxy.open_upstream(
                     {"model": "deepseek-v4.1-flash",
                      "messages": [{"role": "user", "content": "hello"}]},
                     session_key="conv-1", target_realm="intl",

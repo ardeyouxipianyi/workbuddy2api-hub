@@ -285,12 +285,18 @@ class StreamTimeoutTests(unittest.TestCase):
                 def apply_daily_token_limit(self, value=None, usage=None):
                     return value or 0
 
+                def apply_daily_credit_limit(self, value=None, credits=None, free_models=None):
+                    return value or 0
+
+                def apply_model_daily_token_limit(self, value=None, per_model=None):
+                    return value or 0
+
             old_pool, old_urlopen = wb_proxy.POOL, wb_accounts.urlopen
             wb_proxy.POOL = Pool()
             wb_accounts.urlopen = fake_urlopen
             try:
                 with mock.patch.object(wb_proxy, "ACCOUNTS_DIR", directory):
-                    upstream, picked = wb_proxy.open_upstream(
+                    upstream, picked, _effort = wb_proxy.open_upstream(
                         {"model": "deepseek-v4.1-flash",
                          "messages": [{"role": "user", "content": "hi"}]},
                         target_realm="intl")

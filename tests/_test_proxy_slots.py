@@ -46,7 +46,9 @@ check(
 check("blank id auto-assigned", slots[1]["id"] == "slot-2", slots[1]["id"])
 check("missing enabled defaults True", slots[1]["enabled"] is True)
 check("name preserved when present", slots[1]["name"] == "auto", slots[1]["name"])
-check("name defaults to id when blank", slots[2]["name"] == "slot-3", slots[2]["name"])
+# A blank name stays blank: the panel labels such a slot by its exit
+# ("美国 住宅") and only falls back to the id when the exit is unknown.
+check("a blank name stays blank", slots[2]["name"] == "", slots[2]["name"])
 check("enabled False preserved", slots[2]["enabled"] is False)
 check("url trimmed", slots[0]["url"] == "http://a:1")
 

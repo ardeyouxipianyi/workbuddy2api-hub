@@ -9,6 +9,10 @@ background requests straight at the catalogue from outside the model picker.
 These cases pin the storage shape, the matching rules and the enforcement
 point, plus the upgrade path: every key written before this field existed has
 to read back as unrestricted. No network access required.
+
+A limited key that names no model is refused rather than waved through: the
+request cannot be shown to be asking for something the key may use, and
+forwarding it would only reach the upstream with an empty model.
 """
 
 import os
@@ -103,6 +107,12 @@ check("an exact name does not cover its suffixes",
       not S.key_allows_model({"models": ["gpt-6-astra"]}, "gpt-6-astra-high"))
 check("a launcher entry stays unrestricted",
       S.key_allows_model({"models": [], "source": "launcher"}, "gpt-5.6-terra"))
+check("a limited key that names no model is refused",
+      not S.key_allows_model(limited, ""))
+check("a limited key that omits the model is refused too",
+      not S.key_allows_model(limited, None))
+check("an unrestricted key is unaffected by a missing model",
+      S.key_allows_model(unlimited, None))
 
 print()
 print("[4] the handler refuses the request instead of forwarding it")
@@ -120,6 +130,11 @@ check("the explanation names the key", "DeepSeek only" in blocked, blocked)
 check("the explanation names the model", "gpt-5.6-terra" in blocked, blocked)
 check("the explanation lists what is allowed", "deepseek/*" in blocked, blocked)
 check("no key entry means no restriction", anonymous._key_model_error("gpt-5.6-terra") == "")
+modelless = restricted._key_model_error("")
+check("a limited key sending no model is refused", bool(modelless), modelless)
+check("the explanation says no model was named", "未指定模型" in modelless, modelless)
+check("an unrestricted key sending no model still passes",
+      unrestricted._key_model_error("") == "")
 
 print()
 print("[5] /settings/save keeps a stored limit when the field is absent")
@@ -188,6 +203,51 @@ with mock.patch.multiple(proxy, ACCOUNTS_DIR=d5, POOL=None, SCHEDULER=None):
     check("a fully valid payload still saves", status == 200, request.answering)
     check("the reserve was applied", S.reserve_credits(d5) == 123,
           S.reserve_credits(d5))
+
+
+print("[7] runtime_settings_view exposes models and round-trips when adding a new key (issue #92)")
+
+d5 = tempfile.mkdtemp(prefix="wb-keymodels-view-")
+S.set_api_keys(d5, [{"id": "k1", "name": "first", "key": "key-first-secret",
+                     "realm": "intl", "models": ["deepseek*"]}])
+with mock.patch.multiple(proxy, ACCOUNTS_DIR=d5, POOL=None, SCHEDULER=None):
+    view = proxy.runtime_settings_view()
+    keys_in_view = view.get("api_keys") or []
+    check("runtime_settings_view returns the key list", len(keys_in_view) == 1, keys_in_view)
+    check("runtime_settings_view includes models", keys_in_view[0].get("models") == ["deepseek*"], keys_in_view[0])
+
+    # Simulates panel round-trip: the panel reads data.api_keys from /settings,
+    # maps them to editable rows, adds a new row, and calls saveApiKeys().
+    mapped_rows = []
+    for k in keys_in_view:
+        mapped_rows.append({
+            "id": k.get("id") or "",
+            "name": k.get("name") or "",
+            "realm": k.get("realm") or "",
+            "models": list(k.get("models") or []),
+            "enabled": k.get("enabled") is not False,
+            "key": "",  # Blank means keep stored secret
+        })
+    # Append a newly created key
+    mapped_rows.append({
+        "id": "",
+        "name": "second",
+        "realm": "cn",
+        "models": ["gpt*"],
+        "enabled": True,
+        "key": "key-second-secret",
+    })
+    req_add = FakeRequest(payload={"api_keys": mapped_rows})
+    proxy.Handler._handle_settings_save(req_add)
+    saved = S.api_keys(d5)
+    by_name = {entry["name"]: entry for entry in saved}
+    check("both keys exist after save", len(saved) == 2, saved)
+    check("the existing key preserves its model restriction",
+          by_name.get("first", {}).get("models") == ["deepseek*"],
+          by_name.get("first"))
+    check("the newly added key gets its own restriction",
+          by_name.get("second", {}).get("models") == ["gpt*"],
+          by_name.get("second"))
 
 print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))

@@ -17,6 +17,23 @@
   --shadow-sm:0 1px 2px 0 rgba(15,23,42,.05);
   --shadow:0 1px 3px 0 rgba(15,23,42,.06),0 1px 2px -1px rgba(15,23,42,.04);
   --shadow-md:0 4px 6px -2px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);
+  --header-bg:rgba(255,255,255,.94);
+  color-scheme:light;
+}
+[data-theme="dark"]{
+  --bg:#0b0f19; --panel:#111827; --panel2:#1e293b; --panel3:#334155;
+  --line:#1f293d; --line-hover:#334155;
+  --fg:#f1f5f9; --dim:#94a3b8; --dim-light:#64748b;
+  --accent:#3b82f6; --accent-hover:#60a5fa; --accent-soft:rgba(59,130,246,.15);
+  --accent2:#22c55e; --accent2-soft:rgba(34,197,94,.15);
+  --warn:#f59e0b; --warn-soft:rgba(245,158,11,.15);
+  --think:#c084fc; --think-soft:rgba(192,132,252,.15);
+  --bad:#f87171; --bad-soft:rgba(248,113,113,.15);
+  --shadow-sm:0 1px 2px 0 rgba(0,0,0,.35);
+  --shadow:0 1px 3px 0 rgba(0,0,0,.45),0 1px 2px -1px rgba(0,0,0,.35);
+  --shadow-md:0 4px 6px -2px rgba(0,0,0,.55),0 2px 4px -2px rgba(0,0,0,.45);
+  --header-bg:rgba(11,15,25,.92);
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
@@ -24,7 +41,7 @@ body{margin:0;background:var(--bg);color:var(--fg);
   -webkit-font-smoothing:antialiased}
 header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;
   align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
-  position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
+  position:sticky;top:0;background:var(--header-bg);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
 h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;color:var(--fg)}
 h1 span{color:var(--dim);font-weight:400;font-size:13px;margin-left:8px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent2);
@@ -60,7 +77,7 @@ th:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
 th:last-child{border-top-right-radius:8px;border-bottom-right-radius:8px}
 th:first-child,td:first-child{text-align:left}
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover{background:rgba(241,245,249,.6)}
+tbody tr:hover{background:var(--panel2)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 /* 输入 / 输出 / 思考：三个数字应该在一行内读完，不拆行 */
 .triple{white-space:nowrap}
@@ -90,6 +107,19 @@ tbody tr:hover{background:rgba(241,245,249,.6)}
 .cool-pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;
   color:#b45309;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.35);white-space:nowrap}
 .empty{color:var(--dim);text-align:center;padding:28px 0;font-size:13px}
+/* 价格悬停气泡：自绘，才能对齐单价并截图验收；pointer-events:none 让它不会
+   抢走鼠标、把 hover 打断。 */
+.cost-cell{cursor:help}
+#costTip{position:fixed;z-index:80;display:none;max-width:min(480px,94vw);padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);
+  font-size:12px;line-height:1.7;box-shadow:0 14px 34px rgba(15,23,42,.28);pointer-events:none}
+#costTip .ct-h{color:var(--dim);font-size:11px;letter-spacing:.02em}
+#costTip .ct-line{margin-top:2px}
+#costTip .ct-row{display:flex;gap:18px;justify-content:space-between;margin-top:2px}
+#costTip .ct-k{color:var(--dim)}
+#costTip .ct-v{font-variant-numeric:tabular-nums;white-space:nowrap}
+#costTip .ct-note{color:var(--dim);font-size:11px;margin-top:4px}
+#costTip .ct-sep{height:1px;background:var(--line);margin:7px 0}
 .legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin-top:12px;flex-wrap:wrap}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -97,7 +127,7 @@ button{cursor:pointer;font:inherit;font-size:12px;font-weight:500;padding:6px 14
   border:1px solid var(--accent);background:var(--accent);color:#fff;box-shadow:var(--shadow-sm);transition:all .15s ease}
 button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 button:disabled{opacity:.45;cursor:not-allowed}
-button.sec{background:#fff;border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
+button.sec{background:var(--panel);border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
 button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
 button.danger{border-color:rgba(220,38,38,.3);background:rgba(220,38,38,.06);color:var(--bad)}
 button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
@@ -115,7 +145,7 @@ button.mini{padding:3px 9px;font-size:11px}
 .modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
   backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px;z-index:100}
 .modal-mask.show{display:flex}
-.modal{background:#fff;border:1px solid var(--line);border-radius:14px;
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
   width:min(620px,100%);max-height:88vh;overflow:auto;box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.05)}
 .modal-hd{display:flex;align-items:center;justify-content:space-between;
   padding:16px 20px;border-bottom:1px solid var(--line)}
@@ -128,7 +158,7 @@ button.mini{padding:3px 9px;font-size:11px}
 .login-link{display:block;word-break:break-all;background:var(--panel2);
   border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;
   color:var(--accent);text-decoration:none;font-size:12px}
-.login-link:hover{border-color:var(--accent);background:#fff}
+.login-link:hover{border-color:var(--accent);background:var(--panel)}
 .hint{color:var(--dim);font-size:12px;margin:8px 0}
 .step{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
 .step .n{flex:0 0 20px;height:20px;border-radius:50%;background:var(--panel2);
@@ -145,19 +175,19 @@ a:hover{text-decoration:underline}
 .realm-pill:hover{color:var(--fg)}
 .realm-pill.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
 .key-card{
-  background:#ffffff;border:1px solid var(--line);border-radius:12px;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
   padding:16px 20px;margin-bottom:12px;box-shadow:var(--shadow);
   transition:all .15s ease;
 }
 .key-card:hover{border-color:var(--line-hover);box-shadow:var(--shadow-md)}
-.key-card.disabled{opacity:.75;background:rgba(241,245,249,.5)}
+.key-card.disabled{opacity:.75;background:var(--panel2)}
 .key-card-main{
   display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
 }
 .key-action-btn{
   display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:20px;
   font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--line);
-  background:#ffffff;color:var(--fg);transition:all .15s ease;box-shadow:var(--shadow-sm);
+  background:var(--panel);color:var(--fg);transition:all .15s ease;box-shadow:var(--shadow-sm);
 }
 .key-action-btn:hover{background:var(--panel2);border-color:var(--line-hover)}
 .key-action-btn.danger{
@@ -171,7 +201,7 @@ a:hover{text-decoration:underline}
 .badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:rgba(124,58,237,.12);color:var(--think);border:1px solid rgba(124,58,237,.3);font-weight:600}
 .realm-filter{display:inline-flex;gap:6px;margin-left:8px}
 .realm-filter button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:11px}
-.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:#fff}
+.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:var(--panel)}
 
 .realm-card{
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -181,7 +211,7 @@ a:hover{text-decoration:underline}
 }
 .realm-card:hover{border-color:var(--line-hover);transform:translateY(-1px);box-shadow:var(--shadow-md)}
 .realm-card.active{
-  border-color:var(--accent);background:#ffffff;
+  border-color:var(--accent);background:var(--panel);
   box-shadow:0 0 0 1px var(--accent), var(--shadow-md);
 }
 .realm-card.active#tabCn{
@@ -192,25 +222,73 @@ a:hover{text-decoration:underline}
 }
 .realm-card.gateway-ctrl:hover{transform:none;border-color:var(--line);box-shadow:var(--shadow)}
 .toggle-realm-btn{
-  background:#fff;border:1px solid var(--accent);color:var(--accent);
+  background:var(--panel);border:1px solid var(--accent);color:var(--accent);
   padding:8px 18px;font-size:13px;font-weight:600;border-radius:8px;box-shadow:var(--shadow-sm);cursor:pointer;
   transition:all .15s ease;
 }
-.toggle-realm-btn:hover{background:rgba(0,0,0,.04);box-shadow:var(--shadow-md)}
+.toggle-realm-btn:hover{background:var(--panel2);box-shadow:var(--shadow-md)}
 .realm-endpoint-info{font-size:12px;color:var(--dim)}
 
 .main-nav{display:inline-flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;border:1px solid var(--line)}
 .main-nav-btn{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s ease}
-.main-nav-btn:hover{color:var(--fg);background:#fff}
-.main-nav-btn.active{background:#fff;color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
+.main-nav-btn:hover{color:var(--fg);background:var(--panel)}
+.main-nav-btn.active{background:var(--panel);color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
 /* 项目仓库入口：与顶部导航同行，但不作为一个 Tab 标签。 */
 .gh-link{display:inline-flex;align-items:center;justify-content:center;
   width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
-  background:#fff;color:var(--dim);box-shadow:var(--shadow-sm);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
   transition:all .15s ease}
 .gh-link:hover{color:var(--fg);border-color:var(--line-hover);
   background:var(--panel2);text-decoration:none;box-shadow:var(--shadow-md)}
 .gh-link svg{width:17px;height:17px;display:block;fill:currentColor}
+
+/* 顶部右侧区域与主题切换组件 (黑白单色、极简线条Outline、符合规范) */
+.header-right{display:flex;align-items:center;gap:10px}
+.theme-dropdown-wrap{position:relative;display:inline-flex}
+.theme-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  cursor:pointer;padding:0;transition:all .15s ease;
+}
+.theme-btn:hover{
+  color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);box-shadow:var(--shadow-md);
+}
+.theme-btn-icon{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+.theme-btn-icon svg{width:16px;height:16px;display:block}
+.theme-dropdown{
+  display:none;position:absolute;top:calc(100% + 6px);right:0;
+  min-width:130px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:4px;box-shadow:var(--shadow-md);
+  z-index:100;backdrop-filter:blur(8px);
+}
+.theme-dropdown.open{display:block;animation:themePop .12s cubic-bezier(0,0,.2,1)}
+@keyframes themePop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.theme-option{
+  width:100%;display:flex;align-items:center;gap:8px;padding:7px 10px;
+  border-radius:6px;border:none;background:transparent;color:var(--fg);
+  font-size:12px;cursor:pointer;text-align:left;transition:background .12s ease;
+  box-shadow:none;
+}
+.theme-option:hover{background:var(--panel2)}
+.theme-opt-icon{width:14px;height:14px;flex-shrink:0;color:var(--dim)}
+.theme-option:hover .theme-opt-icon{color:var(--fg)}
+.theme-opt-text{flex:1;font-weight:500}
+.theme-opt-check{width:13px;height:13px;flex-shrink:0;opacity:0;color:var(--accent)}
+.theme-option.active .theme-opt-check{opacity:1}
+.theme-option.active{font-weight:600;color:var(--accent)}
+.theme-option.active .theme-opt-icon{color:var(--accent)}
+
+[data-theme="dark"] .badge.ok{color:#4ade80;background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.32)}
+[data-theme="dark"] .badge.s{color:#60a5fa;background:rgba(59,130,246,.16);border-color:rgba(59,130,246,.32)}
+[data-theme="dark"] .badge.off{color:#94a3b8;background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.22)}
+[data-theme="dark"] .badge.warn{color:#fbbf24;background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.35)}
+[data-theme="dark"] .badge.bad{color:#f87171;background:rgba(248,113,113,.16);border-color:rgba(248,113,113,.35)}
+[data-theme="dark"] .cool-pill{color:#fbbf24;background:rgba(245,158,11,.18);border-color:rgba(245,158,11,.38)}
+[data-theme="dark"] .realm-badge-intl{color:#38bdf8;background:rgba(2,132,199,.2);border-color:rgba(2,132,199,.4)}
+[data-theme="dark"] .realm-badge-cn{color:#f87171;background:rgba(220,38,38,.2);border-color:rgba(220,38,38,.4)}
+[data-theme="dark"] .modal-mask{background:rgba(0,0,0,.65)}
 /* The page sections are toggled by a class so the inline head script can
    choose one before the body is parsed, avoiding a flash of the wrong
    page on every reload. */
@@ -220,7 +298,7 @@ a:hover{text-decoration:underline}
 .range-btn:hover{color:var(--fg)}
 .range-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
 #analyticsKpiCards{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
-#analyticsKpiCards .card{padding:12px 16px;min-width:0;overflow:hidden;border-radius:12px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow)}
+#analyticsKpiCards .card{padding:12px 16px;min-width:0;overflow:hidden;border-radius:12px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
 #analyticsKpiCards .card .v{font-size:19px;font-weight:700;white-space:nowrap}
 #analyticsKpiCards .card .k{font-size:11px;white-space:nowrap;margin-bottom:3px;font-weight:600;color:var(--dim)}
 #analyticsKpiCards .card .s{font-size:10px;white-space:normal;line-height:1.35;margin-top:2px;color:var(--dim)}
@@ -255,13 +333,15 @@ a:hover{text-decoration:underline}
   #pageSettings table:not(.data-cards) td{white-space:normal;word-break:break-all;padding-left:8px;padding-right:8px}
   #pageSettings table:not(.data-cards) td:first-child{width:96px}
   header{padding:10px 12px;gap:8px}
-  header > div:first-child{width:100%;gap:8px}
+  .header-left{width:auto;flex:1;gap:8px;min-width:0}
+  .header-right{display:flex;align-items:center;gap:6px;order:2}
   h1{font-size:15px;flex:1;min-width:0}
   h1 span{font-size:11px;margin-left:6px}
-  .gh-link{width:40px;height:40px;flex-shrink:0;order:2}
+  .gh-link{width:36px;height:36px;flex-shrink:0}
+  .theme-btn{width:36px;height:36px}
   .main-nav{display:flex;width:100%;gap:2px;padding:3px;order:3}
-  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:40px;white-space:nowrap}
-  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5}
+  .main-nav-btn{flex:1;justify-content:center;padding:8px 4px;font-size:12px;min-height:36px;white-space:nowrap}
+  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5;order:4}
   .meta .meta-secondary{display:none}
   /* Table → card */
   .table-wrap{overflow:visible}
@@ -348,6 +428,114 @@ a:hover{text-decoration:underline}
    first one painted. Kept inline and dependency-free on purpose: an
    external or deferred script would run too late to avoid the flash. */
 (function(){
+  var THEME_KEY = 'wb-theme';
+  var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function getPref(){
+    try { return localStorage.getItem(THEME_KEY) || 'system'; } catch(e){ return 'system'; }
+  }
+  function resolve(pref){
+    if(pref === 'dark' || pref === 'light') return pref;
+    return (mq && mq.matches) ? 'dark' : 'light';
+  }
+
+  // 1. 初始化主题（防止闪烁）
+  var savedTheme = getPref();
+  var resolvedTheme = resolve(savedTheme);
+  document.documentElement.setAttribute('data-theme', resolvedTheme);
+  document.documentElement.setAttribute('data-theme-pref', savedTheme);
+  document.documentElement.style.colorScheme = resolvedTheme;
+
+  // 2. 主题切换核心与UI同步逻辑
+  var svgSun = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>';
+  var svgMoon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>';
+  var svgMonitor = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
+
+  function updateThemeUI(pref, resolved){
+    var icon = document.getElementById('themeToggleIcon');
+    var btn = document.getElementById('themeToggleBtn');
+    if(!icon) return;
+    if(pref === 'dark'){
+      icon.innerHTML = svgMoon;
+    } else if(pref === 'light'){
+      icon.innerHTML = svgSun;
+    } else {
+      icon.innerHTML = svgMonitor;
+    }
+    ['light', 'dark', 'system'].forEach(function(val){
+      var opt = document.getElementById('themeOpt' + val.charAt(0).toUpperCase() + val.slice(1));
+      if(opt) opt.classList.toggle('active', pref === val);
+    });
+    var label = pref === 'dark' ? '深色' : (pref === 'light' ? '浅色' : '跟随系统 (' + (resolved === 'dark' ? '当前深色' : '当前浅色') + ')');
+    if(btn) btn.title = '颜色主题: ' + label;
+  }
+
+  window.applyTheme = function(pref){
+    var resolved = resolve(pref);
+    document.documentElement.setAttribute('data-theme', resolved);
+    document.documentElement.setAttribute('data-theme-pref', pref);
+    document.documentElement.style.colorScheme = resolved;
+    try { localStorage.setItem(THEME_KEY, pref); } catch(e){}
+    updateThemeUI(pref, resolved);
+  };
+
+  window.selectTheme = function(pref, evt){
+    if(evt){
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+    window.applyTheme(pref);
+    var menu = document.getElementById('themeDropdown');
+    var btn = document.getElementById('themeToggleBtn');
+    if(menu) menu.classList.remove('open');
+    if(btn) btn.setAttribute('aria-expanded', 'false');
+  };
+
+  window.toggleThemeMenu = function(evt){
+    if(evt){
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+    var menu = document.getElementById('themeDropdown');
+    var btn = document.getElementById('themeToggleBtn');
+    if(!menu) return;
+    var isOpen = menu.classList.toggle('open');
+    if(btn) btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  };
+
+  window.initThemeSystem = function(){
+    var curPref = getPref();
+    updateThemeUI(curPref, resolve(curPref));
+    if(mq && mq.addEventListener){
+      mq.addEventListener('change', function(){
+        if(getPref() === 'system'){
+          window.applyTheme('system');
+        }
+      });
+    }
+    document.addEventListener('click', function(e){
+      var wrap = document.getElementById('themeDropdownWrap');
+      if(wrap && !wrap.contains(e.target)){
+        var menu = document.getElementById('themeDropdown');
+        var btn = document.getElementById('themeToggleBtn');
+        if(menu && menu.classList.contains('open')){
+          menu.classList.remove('open');
+          if(btn) btn.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape'){
+        var menu = document.getElementById('themeDropdown');
+        var btn = document.getElementById('themeToggleBtn');
+        if(menu && menu.classList.contains('open')){
+          menu.classList.remove('open');
+          if(btn) btn.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+  };
+
+  // 3. Tab 初始化
   var TABS = ['gateway','analytics','logs','settings'];
   var pick = null;
   try {
@@ -356,6 +544,7 @@ a:hover{text-decoration:underline}
     pick = [q, s].find(function(t){ return TABS.indexOf(t) !== -1; }) || 'gateway';
   } catch(e) { pick = 'gateway'; }
   window.__MAIN_TAB__ = pick;
+
   document.addEventListener('DOMContentLoaded', function(){
     TABS.forEach(function(t){
       var page = document.getElementById('page' + t.charAt(0).toUpperCase() + t.slice(1));
@@ -363,13 +552,14 @@ a:hover{text-decoration:underline}
       var btn = document.getElementById('btnNav' + t.charAt(0).toUpperCase() + t.slice(1));
       if(btn) btn.classList.toggle('active', t === pick);
     });
+    window.initThemeSystem();
   });
 })();
 </script>
 </head>
 <body>
 <header>
-  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+  <div class="header-left" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
     <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关看板</h1>
     <nav class="main-nav">
       <button class="main-nav-btn active" id="btnNavGateway"  data-action="switchMainTab" data-on="click" data-arg="gateway">
@@ -385,14 +575,47 @@ a:hover{text-decoration:underline}
         设置
       </button>
     </nav>
-<a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
+    <a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
        title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
       </svg>
     </a>
   </div>
-  <div class="meta" id="meta"></div>
+  <div class="header-right">
+    <div class="meta" id="meta"></div>
+    <div class="theme-dropdown-wrap" id="themeDropdownWrap">
+      <button type="button" class="theme-btn" id="themeToggleBtn" data-action="toggleThemeMenu" data-on="click" title="颜色主题" aria-label="切换颜色主题" aria-haspopup="true" aria-expanded="false">
+        <span id="themeToggleIcon" class="theme-btn-icon"></span>
+      </button>
+      <div class="theme-dropdown" id="themeDropdown" role="menu" aria-label="选择颜色主题">
+        <button type="button" class="theme-option" id="themeOptLight" data-action="selectTheme" data-on="click" data-arg="light" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+          <span class="theme-opt-text">浅色</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+        <button type="button" class="theme-option" id="themeOptDark" data-action="selectTheme" data-on="click" data-arg="dark" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+          <span class="theme-opt-text">深色</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+        <button type="button" class="theme-option" id="themeOptSystem" data-action="selectTheme" data-on="click" data-arg="system" role="menuitem">
+          <svg class="theme-opt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <span class="theme-opt-text">跟随系统</span>
+          <svg class="theme-opt-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </button>
+      </div>
+    </div>
+  </div>
 </header>
 <div id="panelGate" style="position:fixed;inset:0;z-index:600;display:none;
      align-items:center;justify-content:center;padding:20px;background:var(--bg)">
@@ -495,10 +718,9 @@ a:hover{text-decoration:underline}
     <button class="sec" id="btnCheckin"  data-action="doCheckin" data-on="click" style="display:none">每日签到 (国内版)</button>
       <button class="sec" id="btnDailyChat"  data-action="doDailyChat" data-on="click" style="display:none">每日活跃打卡 (国际版)</button>
       <button class="sec" id="btnDailyChatWeb"  data-action="doDailyChatWeb" data-on="click" style="display:none">网页通道打卡 (国际版)</button>
-    <!-- 入口暂时隐藏：桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted
-         信封），扫描导入只会得到一串无法使用的信封文本，之后每个请求都 401。等解密
-         打通或改走 OAuth 之后再放出来。scanDesktop() 与后端接口都保留未删。 -->
-    <!-- <button class="sec" id="btnScanDesktop"  data-action="scanDesktop" data-on="click">扫描桌面客户端账号</button> -->
+    <!-- 桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted 信封）。
+         网关会从正在运行的桌面端进程内存里回收静态密钥来解密（只读，密钥只留在内存里，见 wb_atrest.py），所以入口重新放出来。 -->
+    <button class="sec" id="btnScanDesktop"  data-action="scanDesktop" data-on="click">扫描桌面客户端账号</button>
     <button class="sec"  data-action="exportAccounts" data-on="click">导出账号</button>
     <button class="sec"  data-action="openImport" data-on="click">导入账号</button>
     <button class="sec"  data-action="fetchCredits" data-on="click">刷新积分</button>
@@ -668,6 +890,11 @@ a:hover{text-decoration:underline}
         <div class="v" id="kpiReqCount">0 次</div>
         <div class="s" id="kpiReqSuccess">成功率 100% · 失败 0</div>
       </div>
+      <div class="card warn">
+        <div class="k">API 等价花费 <span id="kpiCostRange" style="font-size:11px;font-weight:400;color:var(--dim)"></span></div>
+        <div class="v" id="kpiCostValue">—</div>
+        <div class="s" id="kpiCostDetail">按 OpenRouter 模型价折算的等价 token 花费 <span id="kpiCostToggle"></span></div>
+      </div>
     </div>
 
     <!-- Token 时序 + 积分扣减历史（D5） -->
@@ -717,6 +944,7 @@ a:hover{text-decoration:underline}
               <th>消耗总 Token</th>
               <th>消耗积分 (全出口)</th>
               <th style="text-align:left">调用的模型分布明细 (请求数 · 消耗)</th>
+              <th style="color:var(--warn)">OpenRouter 价估算</th>
             </tr>
           </thead>
           <tbody id="analyticsAccountTbody"></tbody>
@@ -724,7 +952,33 @@ a:hover{text-decoration:underline}
       </div>
     </section>
 
-    <!-- 表格 2：模型用量透视与响应指标 -->
+    <!-- 表格 2：按 API Key 的消耗归属 -->
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 style="margin:0">按 API Key 的消耗归属 <em id="analyticsKeyCount"></em></h2>
+        <div style="font-size:12px;color:var(--dim)">同一批请求按调用方使用的 API Key 再分一次组，用于把消耗归属到人 / 项目</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="analyticsKeyTable" class="data-cards">
+          <thead>
+            <tr>
+              <th style="text-align:left">API Key</th>
+              <th>出口</th>
+              <th>请求次数</th>
+              <th>消耗总 Token</th>
+              <th>输入 · 输出 · 思考</th>
+              <th>缓存命中</th>
+              <th>消耗积分</th>
+              <th style="text-align:left">调用的模型分布 (请求数 · 消耗)</th>
+            </tr>
+          </thead>
+          <tbody id="analyticsKeyTbody"></tbody>
+        </table>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:10px" id="analyticsKeyNote"></div>
+    </section>
+
+    <!-- 表格 3：模型用量透视与响应指标 -->
     <section>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="margin:0">模型性能指标与用量一览 <em id="matrixModelCount"></em></h2>
@@ -791,6 +1045,9 @@ a:hover{text-decoration:underline}
         <button  data-action="addApiKeyRow" data-on="click">+ 添加 API Key</button>
       </div>
       <div id="keyList"></div>
+      <!-- 已删除的 Key 只留名字和日期：密钥已抹掉，所以这里没有「复制」。
+           历史用量按 id 记账，删掉这一行会让那些请求变成「未知 key」。 -->
+      <div id="deletedKeySection"></div>
     </section>
 
     <section>
@@ -845,6 +1102,74 @@ a:hover{text-decoration:underline}
                      style="width:170px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
             </div>
             <button  data-action="saveDailyTokenLimit" data-on="click">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">每日积分限额 <em id="setDailyCreditState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每日上限（积分）</div>
+              <input id="setDailyCreditLimit" type="number" min="0" step="1" value="0"
+                     style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button data-action="saveDailyCreditLimit" data-on="click">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">按模型每日 Token 限额 <em id="setModelDailyTokenState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              账号在单个模型上当日消耗的 token 达到该值后，该模型自动切到其他账号（同一账号的其他模型不受影响）；本地时间 0 点后自动恢复。填 0 表示不限（默认）。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每模型每日上限（token）</div>
+              <input id="setModelDailyTokenLimit" type="number" min="0" step="1000000" value="0"
+                     style="width:190px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button data-action="saveModelDailyTokenLimit" data-on="click">保存</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">定价刷新 <em id="setPricingState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              网关每隔这段时间去 OpenRouter 取一次价：每个模型每份不同的价格存成一条<b>定价策略</b>（内容相同就复用同一条，不重复写），并声明「现在生效的是哪一条」。每条请求按它发生时生效的那一条计价，所以之后调价不会改写之前的数字；请求只记它引用的是哪条策略，不内嵌整份价格。取价时还没有价的模型，用之后第一次取到的价补算并标 <code>*</code>。没人引用、又已经不作数的策略会被清掉（每个模型至少留一条，刚取到的那批不动）。取价间隔以<b>分钟</b>计，默认 5 分钟；填 0 表示不自动刷新（仍可用「立即取价」手动取一次）。<span id="setPricingMeta"></span>
+            </div>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              取价输入 = 内置目录 <b>∪</b> 网关实时目录里新增的模型，上游新上架的名字无需改代码就会进入下一轮取价；两次取价之间就被调用的新模型，第一笔请求即按内存里的目录<b>按需补价</b>。名字带渠道后缀（如 <code>-lkeap</code>）的模型默认按<b>变体后缀继承</b>向基准模型取价（要求唯一命中，命不中照旧显示未定价）；关掉开关即恢复「只有覆盖表与同名匹配才定价」。
+            </div>
+            <div id="setPricingCurrent"></div>
+            <div id="setPricingGaps"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">刷新间隔（分钟）</div>
+              <input id="setPricingMinutes" type="number" min="0" step="1" value="5"
+                     style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            </div>
+            <button data-action="savePricingMinutes" data-on="click">保存</button>
+            <button data-action="refreshPricingNow" data-on="click">立即取价</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setPricingVariant" type="checkbox" style="width:16px;height:16px">
+              变体后缀继承
+            </label>
+            <button data-action="savePricingVariant" data-on="click">保存</button>
           </div>
         </div>
       </section>
@@ -1138,6 +1463,108 @@ a:hover{text-decoration:underline}
   </div>
 </div>
 
+<div class="modal-mask" id="creditsDetailModal" data-action="closeCreditsDetailBackdrop" data-on="click">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(960px,96vw);max-height:92vh;display:flex;flex-direction:column">
+    <div class="modal-hd">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2 id="creditsModalTitle">积分与套餐明细</h2>
+        <span id="creditsModalRealm" class="badge mini"></span>
+        <span id="creditsModalTier" class="badge mini" style="display:none"></span>
+      </div>
+      <button class="modal-x" data-action="closeCreditsDetail" data-on="click" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd" style="overflow-y:auto;flex:1">
+      <div id="creditsModalLoading" style="display:none;text-align:center;padding:30px 0">
+        <div class="hint">正在向上游同步最新积分与权益包明细…</div>
+      </div>
+      <div id="creditsModalContent">
+        <!-- 顶部指标卡片 (4 列卡片) -->
+        <div class="credits-stat-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:12px;margin-bottom:14px">
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">剩余可用积分</div>
+            <div id="cmMetricRemain" style="font-size:22px;font-weight:700;color:var(--accent2);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">已消耗积分</div>
+            <div id="cmMetricUsed" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">总额度容量</div>
+            <div id="cmMetricTotal" style="font-size:22px;font-weight:700;color:var(--fg);margin-top:4px">-</div>
+          </div>
+          <div class="card" style="padding:12px;margin:0;border:1px solid var(--line);background:var(--bg)">
+            <div style="font-size:11px;color:var(--dim)">最近将过期</div>
+            <div id="cmExpiryValue" style="font-size:20px;font-weight:700;color:var(--warn);margin-top:4px">-</div>
+            <div id="cmExpirySub" style="font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="">-</div>
+          </div>
+        </div>
+
+        <!-- 进度条与利用率 -->
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:4px;flex-wrap:wrap;gap:4px">
+            <span>额度利用率: <b id="cmUsedPercent" style="color:var(--fg)">0.0%</b></span>
+            <span id="cmUpdatedText">更新时间: -</span>
+          </div>
+          <div style="height:6px;background:var(--panel2);border:1px solid var(--line);border-radius:3px;overflow:hidden">
+            <div id="cmProgressBar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease"></div>
+          </div>
+        </div>
+
+        <!-- 扩展状态（签到与会员信息） -->
+        <div id="cmCheckinCard" style="display:none;padding:10px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px;margin-bottom:14px;color:var(--fg)">
+          <div id="cmCheckinText"></div>
+        </div>
+
+        <!-- 套餐权益包筛选与排序控制条 -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-weight:600;font-size:13px;color:var(--fg)">套餐权益包明细</span>
+            <span id="cmPkgCountBadge" class="badge mini" style="font-size:11px">共 0 个</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <div class="realm-filter" style="margin:0">
+              <button type="button" class="active" data-filter="all" data-action="filterCreditsPackages" data-on="click" data-arg="all">全部</button>
+              <button type="button" data-filter="active" data-action="filterCreditsPackages" data-on="click" data-arg="active">有剩余</button>
+              <button type="button" data-filter="expiring" data-action="filterCreditsPackages" data-on="click" data-arg="expiring">即将到期</button>
+              <button type="button" data-filter="exhausted" data-action="filterCreditsPackages" data-on="click" data-arg="exhausted">已用完/过期</button>
+            </div>
+            <input id="cmPkgSearch" type="text" placeholder="搜索包名/代码/来源…" data-action="onCreditsSearchInput" data-on="input" style="padding:3px 8px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);width:140px">
+            <select id="cmPkgSort" data-action="onCreditsSortChange" data-on="change" style="padding:3px 6px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)">
+              <option value="expiry_asc">最快到期优先</option>
+              <option value="remain_desc">剩余额度最大</option>
+              <option value="used_desc">已用额度最多</option>
+              <option value="size_desc">总容量最大</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 套餐权益包明细表格 -->
+        <div style="overflow-x:auto;border:1px solid var(--line);border-radius:8px">
+          <table class="data-table" style="width:100%;margin:0;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:var(--panel2);border-bottom:1px solid var(--line)">
+                <th style="text-align:left;padding:8px 10px;min-width:180px">套餐包 / 来源与属性</th>
+                <th style="text-align:center;padding:8px 10px;min-width:140px">到期倒计时 / 有效期</th>
+                <th style="text-align:right;padding:8px 10px">总额度</th>
+                <th style="text-align:right;padding:8px 10px">已用</th>
+                <th style="text-align:right;padding:8px 10px">剩余可用</th>
+                <th style="text-align:center;padding:8px 10px;min-width:100px">利用率</th>
+              </tr>
+            </thead>
+            <tbody id="cmPackagesBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button id="btnRefreshCreditsDetail" class="sec" data-action="reloadCreditsDetail" data-on="click">刷新明细</button>
+      <span style="flex:1"></span>
+      <button class="sec" data-action="closeCreditsDetail" data-on="click">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let loginState = null, loginTimer = null;
 
@@ -1324,12 +1751,10 @@ async function switchViewRealm(r){
   window.VIEW_REALM = r;
   RECENT_PAGE = 1;
   window.updateUI();
-  await loadAccounts();
-  await loadModels();
-  await loadGrowthTasks();
-  await loadSchedulerStatus();
-  await loadAnalytics();
-  await refresh();
+  // 并行发起，不要逐个 await：国内版的成长任务一次要约 2 秒（上游两个接口），
+  // 串行排队时后面那些毫秒级的用量接口全被它堵着，切过去看着就是"过几秒才刷新"。
+  await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                     loadSchedulerStatus(), loadAnalytics(), refresh()]);
 };
 
 async function toggleActiveGatewayRealm(){
@@ -1340,9 +1765,8 @@ async function toggleActiveGatewayRealm(){
     toast("网关默认上游已切换并永久保存为: " + (window.ACTIVE_GATEWAY_REALM === "intl" ? "国际版" : "国内版"));
     window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
     window.updateUI();
-    await loadAccounts();
-    await loadModels();
-    await refresh();
+    await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                       loadSchedulerStatus(), loadAnalytics(), refresh()]);
   }catch(e){
     alert("切换失败: " + e.message);
   }
@@ -1393,16 +1817,22 @@ function renderAvailableModels(){
     return;
   }
   tb.innerHTML = MODELS_DATA.map(m => {
-    // 1. 倍率与折扣
+    // 1. 倍率与折扣 —— 一律以 /v1/models 取回的 credits 为准（活目录优先、
+    //    内置快照兜底）。以前这里还按模型 id 写死了 hy3 / hy4-preview-f /
+    //    国际版 deepseek-v4.1-flash 三个"限时免费"，与 credits 值是 OR 关系，
+    //    上游一旦调价面板会继续宣传免费；cn 的夜间注记在 credits 缺失时还会
+    //    兜底显示写死的 0.79x。现在取不到就不显示数字。
     let credBadge = '-';
-    const c = (m.credits || '').toString().toLowerCase().replace('x', '');
-    if(c === '0.00' || c === '0' || m.id === 'hy3' || m.id === 'hy4-preview-f' || (m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl')){
+    const credText = (m.credits == null ? '' : String(m.credits)).trim();
+    const c = credText.toLowerCase().replace('x', '');
+    if(c === '0.00' || c === '0'){
       credBadge = '<span class="badge ok" style="background:rgba(38,187,130,.15);color:#26bb82">限时免费 0.00x</span>';
-    } else if((m.id === 'glm-5.2' || m.id === 'deepseek-v4-pro') && window.VIEW_REALM === 'cn'){
-      const raw = m.credits ? (m.credits.startsWith('x') ? m.credits.slice(1) + 'x' : m.credits) : '0.79x';
-      credBadge = '<span class="badge s">' + raw + ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span></span>';
-    } else if(m.credits){
-      credBadge = '<span class="badge s">' + esc(m.credits.startsWith('x') ? m.credits.slice(1) + 'x' : m.credits) + '</span>';
+    } else if(credText){
+      // 统一成倍率写法：'x0.79' / '0.79' / 数字 0.5 都显示成 '0.79x' / '0.5x'。
+      const raw = credText.replace(/^x/i, '') + 'x';
+      const night = ((m.id === 'glm-5.2' || m.id === 'deepseek-v4-pro') && window.VIEW_REALM === 'cn')
+        ? ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span>' : '';
+      credBadge = '<span class="badge s">' + esc(raw) + night + '</span>';
     }
 
     // 2. 模型能力 (Vision, Tool calls)
@@ -1887,6 +2317,218 @@ const fmt = n => (n ?? 0).toLocaleString('en-US');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ms = v => v == null ? '—' : (v >= 1000 ? (v/1000).toFixed(2) + ' s' : Math.round(v) + ' ms');
 const pct = v => v == null ? '—' : v.toFixed(1) + '%';
+
+/* ---- OpenRouter 价估算（等价 token 花费） ---- */
+// 后端按权威定价快照把每条请求的 token 折算成人民币；这里只负责展示，
+// 展示货币默认人民币，可切美元（按接口返回的 usd_cny 折算，无需重新请求）。
+let costCurrency = 'CNY';
+try { if(localStorage.getItem('wb-cost-currency') === 'USD') costCurrency = 'USD'; } catch(e) {}
+// 汇率由 /usage、/usage/recent、/usage/analytics 的 usd_cny 字段更新。
+let costUsdRate = 7.1;
+function costSymbol(){ return costCurrency === 'USD' ? '$' : '￥'; }
+// 小额保留更多小数位，避免 0.00x 被显示成 0.00；与费用估算的展示口径一致。
+function fmtCost(cny){
+  if(cny == null || cny === '') return '—';
+  const raw = Number(cny) || 0;
+  const n = costCurrency === 'USD' ? raw / (costUsdRate || 1) : raw;
+  const a = Math.abs(n);
+  if(a > 0 && a < 0.01) return costSymbol() + n.toFixed(4);
+  if(a < 1) return costSymbol() + n.toFixed(3);
+  if(a < 1000) return costSymbol() + n.toFixed(2);
+  return costSymbol() + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function setCostCurrency(cur){
+  costCurrency = (cur === 'USD') ? 'USD' : 'CNY';
+  try { localStorage.setItem('wb-cost-currency', costCurrency); } catch(e) {}
+  renderCostToggle();
+  // 已经渲染出来的表格/卡片就地换算重画，不必等下一轮轮询。
+  if(typeof refreshAllCostViews === 'function') refreshAllCostViews();
+}
+// 悬停里说清这个数是怎么来的：哪条定价策略算的、三档单价多少、落在哪个条件
+// 档、这条价是怎么匹配到 OpenRouter 条目的、是不是补算。
+//
+// 用自绘气泡而不是原生 title：单价要按列对齐才好读，而且原生 tooltip 由浏览器
+// 绘制，截图验收时根本截不到。内容全部来自 /usage/recent 每行自带的 cost_* 字
+// 段，前端一个价都不重算。
+const COST_VIA_TEXT = {
+  direct: '直接匹配（归一化同名且唯一命中）',
+  override: '人工映射表 OVERRIDES',
+  variant: '变体后缀继承'
+};
+// 变体继承剥掉的后缀：基准名是原始名去掉尾部一段（剥的是后缀，留下的基准名
+// 就成了前缀），差值就是被剥的那截。
+function costVariantSuffix(r){
+  const base = r.cost_inherited_from;
+  const name = String(r.model || '');
+  return (base && name.length > base.length && name.slice(0, base.length) === base)
+    ? name.slice(base.length) : '';
+}
+// 每百万 token 的美元原价：按原样显示，不折算、不补齐。
+function fmtRate(v){
+  if(v == null || v === '') return '—';
+  const n = Number(v);
+  if(!isFinite(n)) return '—';
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
+}
+function costUnitLabel(r){
+  const n = Number(r.cost_unit);
+  return (isFinite(n) && n > 0) ? fmt(n) + ' token' : '百万 token';
+}
+// 气泡的结构化内容：{lines: 纯文字行, rates: 三档单价, notes: 补充说明}。
+// 文本与 HTML 两种渲染共用这一份，口径不会两处走样。
+function costTipModel(r){
+  if(!r || r.cost_cny == null){
+    return {lines: [], rates: [], notes: ['该模型暂无定价数据']};
+  }
+  const sym = (r.cost_currency === 'CNY') ? '￥' : '$';
+  const lines = [];
+  if(r.cost_source === 'builtin'){
+    lines.push('定价依据：出厂快照（还没有取到策略）');
+  } else if(r.cost_source){
+    lines.push('定价策略：' + r.cost_source
+      + (r.cost_source_at ? '（' + new Date(r.cost_source_at * 1000).toLocaleString() + ' 首次取到）' : ''));
+  }
+  const via = r.cost_via || 'direct';
+  if(via === 'override'){
+    lines.push('匹配来源：' + COST_VIA_TEXT.override
+      + (r.cost_via_derived ? '（策略早于该字段，按当前映射表推断）' : '')
+      + '：' + (r.cost_override_from || r.model) + ' → ' + (r.cost_or_id || '—'));
+  } else if(via === 'variant'){
+    const cut = costVariantSuffix(r);
+    lines.push('匹配来源：' + COST_VIA_TEXT.variant + '：' + r.model
+      + ' → ' + (r.cost_inherited_from || '—') + '（基准） → ' + (r.cost_or_id || '—'));
+    if(cut) lines.push('剥掉的后缀：' + cut);
+  } else {
+    lines.push('匹配来源：' + COST_VIA_TEXT.direct + '：' + (r.cost_or_id || '—'));
+  }
+  const rates = r.cost_rates || {};
+  const hit = rates.input_cache_hit;
+  const rows = [
+    {k: '输入（缓存未命中）', v: sym + fmtRate(rates.input_cache_miss)},
+    {k: '输入（缓存命中）', v: hit == null ? '未公布，按未命中价计' : sym + fmtRate(hit)},
+    {k: '输出', v: sym + fmtRate(rates.output)}
+  ];
+  const notes = [];
+  if(r.cost_usd_cny != null){
+    notes.push('汇率：1 USD = ' + fmtRate(r.cost_usd_cny) + ' CNY（策略记录的汇率，'
+      + '上面的美元单价按它折算成人民币）');
+  }
+  if(r.cost_band != null){
+    notes.push('条件档位：第 ' + (r.cost_band + 1) + ' 档'
+      + (r.cost_band_note ? ' · ' + r.cost_band_note : '') + '，本行按该档单价计');
+  }
+  if(r.cost_backfilled){
+    notes.push('补算：这条请求发生在该策略取到之前，用之后第一次取到的价补算');
+  }
+  return {lines: lines, rates: rows, notes: notes};
+}
+// 纯文本版（多行），给无气泡的场合与单元测试用。
+function costTitle(r){
+  const m = costTipModel(r);
+  const out = ['按 OpenRouter 公布的模型价折算的等价 token 花费'];
+  out.push.apply(out, m.lines);
+  if(m.rates.length){
+    out.push('单价（USD / ' + costUnitLabel(r) + '，OpenRouter 原始价，未折算）');
+    m.rates.forEach(row => out.push('　' + row.k + '：' + row.v));
+  }
+  out.push.apply(out, m.notes);
+  return out.join('\n');
+}
+function costTipHtml(r){
+  const m = costTipModel(r);
+  if(!m.rates.length && !m.lines.length){
+    return '<div class="ct-note">' + esc(m.notes.join('')) + '</div>';
+  }
+  let html = '<div class="ct-h">按 OpenRouter 公布的模型价折算的等价 token 花费</div>';
+  m.lines.forEach(line => {
+    html += '<div class="ct-line">' + esc(line) + '</div>';
+  });
+  html += '<div class="ct-sep"></div>'
+    + '<div class="ct-h">单价 · USD / ' + esc(costUnitLabel(r)) + ' · 原始价，未折算</div>';
+  m.rates.forEach(row => {
+    html += '<div class="ct-row"><span class="ct-k">' + esc(row.k)
+      + '</span><span class="ct-v">' + esc(row.v) + '</span></div>';
+  });
+  m.notes.forEach(note => {
+    html += '<div class="ct-note">' + esc(note) + '</div>';
+  });
+  return html;
+}
+// 气泡只此一个，挂在 body 上；行数据按本次渲染的 key 索引，重画后按 key 复位。
+let COST_TIP_EL = null;
+let COST_TIP_KEY = null;
+const COST_TIP_ROWS = new Map();
+function costRowKey(r, i){
+  return [r.at, r.model, r.account, r.prompt_tokens, r.completion_tokens,
+          r.cached_tokens, r.elapsed_ms, i].join('|');
+}
+function costTipEl(){
+  if(!COST_TIP_EL){
+    COST_TIP_EL = document.createElement('div');
+    COST_TIP_EL.id = 'costTip';
+    document.body.appendChild(COST_TIP_EL);
+  }
+  return COST_TIP_EL;
+}
+function hideCostTip(){
+  COST_TIP_KEY = null;
+  if(COST_TIP_EL) COST_TIP_EL.style.display = 'none';
+}
+function showCostTip(cell, r){
+  const el = costTipEl();
+  el.innerHTML = costTipHtml(r);
+  el.style.display = 'block';
+  const box = cell.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  // 贴着列尾右对齐，越界就往回收；放不下就翻到单元格下面。
+  let left = Math.max(8, Math.min(box.right - w, window.innerWidth - w - 8));
+  let top = box.top - h - 8;
+  if(top < 8) top = Math.min(box.bottom + 8, window.innerHeight - h - 8);
+  el.style.left = left + 'px';
+  el.style.top = Math.max(8, top) + 'px';
+}
+// 表格每 5 秒整体重画一次，重画后把气泡复位到同一行，别让它悬在旧位置。
+function reanchorCostTip(){
+  if(!COST_TIP_KEY) return;
+  const cells = document.querySelectorAll('[data-cost-key]');
+  for(let i = 0; i < cells.length; i++){
+    if(cells[i].getAttribute('data-cost-key') === COST_TIP_KEY){
+      const r = COST_TIP_ROWS.get(COST_TIP_KEY);
+      if(r){ showCostTip(cells[i], r); return; }
+    }
+  }
+  hideCostTip();
+}
+document.addEventListener('mouseover', e => {
+  const cell = e.target && e.target.closest ? e.target.closest('[data-cost-key]') : null;
+  if(!cell) return;
+  const key = cell.getAttribute('data-cost-key');
+  if(!key || key === COST_TIP_KEY) return;
+  const r = COST_TIP_ROWS.get(key);
+  if(!r) return;
+  COST_TIP_KEY = key;
+  showCostTip(cell, r);
+});
+document.addEventListener('mouseout', e => {
+  const cell = e.target && e.target.closest ? e.target.closest('[data-cost-key]') : null;
+  if(!cell) return;
+  if(e.relatedTarget && cell.contains(e.relatedTarget)) return;
+  hideCostTip();
+});
+function renderCostToggle(){
+  document.querySelectorAll('.cost-toggle').forEach(el => {
+    el.querySelectorAll('button').forEach(b => {
+      b.classList.toggle('active', b.dataset.cur === costCurrency);
+    });
+  });
+}
+// CNY/USD 二选一的切换按钮组；用于费用卡片与表格标题区。
+function costToggleHtml(){
+  return '<span class="cost-toggle" style="display:inline-flex;gap:4px">'
+    + '<button type="button" class="range-btn' + (costCurrency === 'CNY' ? ' active' : '') + '" data-cur="CNY" data-action="setCostCurrency" data-on="click" data-arg="CNY">￥ 人民币</button>'
+    + '<button type="button" class="range-btn' + (costCurrency === 'USD' ? ' active' : '') + '" data-cur="USD" data-action="setCostCurrency" data-on="click" data-arg="USD">$ 美元</button>'
+    + '</span>';
+}
 // 输入 / 输出 / 思考 三个数字，各自一色，斜杠分隔。思考为 0 也写出来，
 // 列的形状因此固定，不会因某个模型不推理就缩短。
 const tripleTokens = (inp, out, think) =>
@@ -2030,6 +2672,19 @@ function coolPills(a){
   return pills.length ? '<div class="cool-list">' + pills.join('') + '</div>' : '';
 }
 
+// 按模型达日限额的模型清单（与冷却并列展示）：只影响列出的模型，其他模型照常。
+function modelLimitPills(a){
+  const limit = Number(a.modelDailyTokenLimit || 0);
+  if(limit <= 0 || !a.modelDailyTokens) return '';
+  const hit = Object.entries(a.modelDailyTokens)
+    .filter(([mid, v]) => Number(v) >= limit);
+  if(!hit.length) return '';
+  return '<div class="cool-list">' + hit.map(([mid, v]) =>
+    '<span class="cool-pill" title="该模型今日已达限额，仅此模型受限（本地 0 点恢复）">'
+      + esc(mid) + ' · ' + fmt(v) + ' tok 达限</span>'
+  ).join('') + '</div>';
+}
+
 function accountRow(a){
   const realmBadge = a.realm === 'cn'
     ? '<span class="realm-badge-cn">国内版</span>'
@@ -2049,6 +2704,7 @@ function accountRow(a){
               : a.degradeFor > 0 ? '<span class="badge warn">降权 ' + a.degradeFor + 's</span>'
               : a.reserveBlocked ? '<span class="badge warn">保留积分</span>'
               : a.dailyLimitBlocked ? '<span class="badge warn" title="今日已用 ' + fmt(a.dailyTokensToday || 0) + ' / ' + fmt(a.dailyTokenLimit || 0) + ' token，暂停接单（本地 0 点恢复）">日限额</span>'
+              : a.creditLimitReached ? '<span class="badge warn" title="今日已消费 ' + Number(a.dailyCreditsToday || 0).toFixed(2) + ' / ' + (a.dailyCreditLimit || 0) + ' 积分，仅免费模型可用（本地 0 点恢复）">积分限额</span>'
               : a.inCooldown ? '<span class="badge warn">冷却 ' + (a.cooldownFor||0) + 's</span>'
               : a.expiresIn === 'expired' ? '<span class="badge bad">已过期</span>'
               : '<span class="badge ok">可用</span>';
@@ -2056,17 +2712,37 @@ function accountRow(a){
               ? '<div style="margin-top:3px"><span class="badge ' + (a.maxInFlight && a.inFlight >= a.maxInFlight ? 'warn' : 's') + ' mini">在途 ' + (a.inFlight || 0) + '/' + (a.maxInFlight || 0) + '</span></div>'
               : '';
   const pills = coolPills(a);
+  const limitPills = modelLimitPills(a);
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
     ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
   const cred = a.credits;
-  const credText = cred ? ('<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b> / ' + fmt(cred.size)) : '<span style="color:var(--dim)">未查询</span>';
+  let expBadge = '';
+  if(cred && cred.earliest_expiring && cred.earliest_expiring.days_left !== undefined && cred.earliest_expiring.days_left !== null){
+    const d = Number(cred.earliest_expiring.days_left);
+    if(d <= 3 && d >= 0){
+      expBadge = '<span class="badge mini bad" style="font-size:10px;padding:1px 4px" title="最近套餐包将于 ' + esc(cred.earliest_expiring.cycle_end_time.slice(5,10)) + ' 到期 (剩' + d.toFixed(1) + '天)">临期</span>';
+    } else if(d <= 7 && d >= 0){
+      expBadge = '<span class="badge mini warn" style="font-size:10px;padding:1px 4px" title="最近套餐包将于 ' + esc(cred.earliest_expiring.cycle_end_time.slice(5,10)) + ' 到期 (剩' + Math.ceil(d) + '天)">7天内到期</span>';
+    }
+  }
+  const credText = cred
+    ? ('<div style="display:inline-flex;align-items:center;gap:6px">'
+       + '<b style="color:var(--accent2)">' + fmt(cred.remain) + '</b>'
+       + '<span style="color:var(--dim)">/ ' + fmt(cred.size) + '</span>'
+       + expBadge
+       + '<span class="badge mini" style="font-size:10px;padding:1px 5px;cursor:pointer" data-action="openCreditsDetail" data-on="click" data-uid="' + uidAttr + '" title="点击查看积分与套餐明细">明细</span>'
+       + '</div>')
+    : ('<div style="display:inline-flex;align-items:center;gap:6px">'
+       + '<span style="color:var(--dim)">未查询</span>'
+       + '<span class="badge mini" style="font-size:10px;padding:1px 5px;cursor:pointer" data-action="openCreditsDetail" data-on="click" data-uid="' + uidAttr + '" title="点击查询积分明细">查询</span>'
+       + '</div>');
   return '<tr>'
     + '<td style="text-align:center;white-space:nowrap" data-label="版本">' + realmBadge + '</td>'
     + '<td style="text-align:left" data-label="账号">'
     +   '<div style="font-weight:600;font-size:13px;color:var(--fg)">' + esc(a.nickname) + '</div>'
     + '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(a.uid.slice(0,8)) + ' · ' + esc(a.source) + ' · 到期 ' + esc(a.expiresIn || '?') + '</div>'
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
-    + err + pills + '</td>'
+    + err + pills + limitPills + '</td>'
     + '<td style="text-align:center" data-label="状态">' + state + flight + '</td>'
     + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
     + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
@@ -2133,7 +2809,7 @@ function renderAccounts(){
     + '<th style="text-align:right;width:80px">缓存</th>'
     + '<th style="text-align:center;width:232px">操作</th>'
     + '</tr></thead><tbody>' + list.map(accountRow).join('') + '</tbody></table></div>'
-    + '<div class="legend"><span>出站身分：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
+    + '<div class="legend"><span>出站身份：WB = WorkBuddy 独立桌面客户端（默认），VSC = 官方 VSCode 插件，CLI = 官方 CodeBuddy CLI；三者对应不同的出站指纹与配额通道。</span></div>'
     + '<div class="legend"><span>多个账号按会话粘性 + 轮询使用；某个账号被上游拒绝时自动切到下一个</span></div>';
 }
 
@@ -2193,7 +2869,7 @@ async function setAccountProduct(uid, prod, btn){
     'cli': '官方 CodeBuddy CLI (CLI)'
   };
   const label = names[prod] || prod;
-  if(!confirm('将该账号的出站身分切换为 ' + label + '？\n\n不同身分对应不同的出站指纹、端点和配额通道。')) return;
+  if(!confirm('将该账号的出站身份切换为 ' + label + '？\n\n不同身分对应不同的出站指纹、端点和配额通道。')) return;
   if(btn){ btn.disabled = true; }
   try {
     const r = await postJSON('/accounts/product', {uid: uid, product: prod});
@@ -2491,13 +3167,434 @@ async function scanDesktop(btn){
     const acct = await getJSON('/accounts?realm=all').catch(() => ({accounts: []}));
     window.SCAN_POOL = new Set((acct.accounts || []).map(a => a.uid));
     const r = await postJSON('/accounts/import/desktop', {});
-    renderDesktopScan(r.detected || []);
+    renderDesktopScan(r.detected || [], r.atrest || null);
   }catch(e){
     const body = document.getElementById('desktopScanBody');
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '扫描桌面客户端账号'; }
   }
+}
+
+/* --------------------------- credits detail modal --------------------------- */
+let CURRENT_CREDIT_DETAIL_UID = null;
+let CURRENT_CREDITS_DATA = null;
+let CURRENT_PKG_FILTER = 'all';
+let CURRENT_PKG_SEARCH = '';
+let CURRENT_PKG_SORT = 'expiry_asc';
+
+async function openCreditsDetail(uid, forceRefresh = false){
+  CURRENT_CREDIT_DETAIL_UID = uid;
+  CURRENT_PKG_FILTER = 'all';
+  CURRENT_PKG_SEARCH = '';
+  CURRENT_PKG_SORT = 'expiry_asc';
+
+  const m = document.getElementById("creditsDetailModal");
+  if(m) m.classList.add("show");
+
+  const searchInput = document.getElementById("cmPkgSearch");
+  if(searchInput) searchInput.value = "";
+  const sortSelect = document.getElementById("cmPkgSort");
+  if(sortSelect) sortSelect.value = "expiry_asc";
+
+  // 重置过滤器按钮高亮
+  const filterBtns = document.querySelectorAll(".realm-filter button[data-filter]");
+  filterBtns.forEach(b => {
+    if(b.getAttribute("data-filter") === "all") b.classList.add("active");
+    else b.classList.remove("active");
+  });
+
+  const acct = (window.ACCOUNTS || []).find(a => a.uid === uid);
+  const titleEl = document.getElementById("creditsModalTitle");
+  const realmEl = document.getElementById("creditsModalRealm");
+  const tierEl = document.getElementById("creditsModalTier");
+  if(titleEl) titleEl.textContent = (acct ? (acct.nickname || acct.uid.slice(0,8)) : uid.slice(0,8)) + " · 积分明细";
+  if(realmEl && acct){
+    realmEl.className = acct.realm === 'cn' ? 'realm-badge-cn' : 'realm-badge-intl';
+    realmEl.textContent = acct.realm === 'cn' ? '国内版' : '国际版';
+  }
+  if(tierEl){
+    if(acct && acct.credits && acct.credits.is_paid_user !== undefined){
+      tierEl.style.display = "inline-block";
+      tierEl.className = acct.credits.is_paid_user ? "badge mini ok" : "badge mini";
+      tierEl.textContent = acct.credits.is_paid_user ? "付费用户" : "普通用户";
+    } else {
+      tierEl.style.display = "none";
+    }
+  }
+
+  // 检查已缓存的数据是否包含有效期字段，若包含且无需强制刷新，先秒开渲染本地已缓存数据
+  const cachedPkgs = (acct && acct.credits && Array.isArray(acct.credits.packages)) ? acct.credits.packages : [];
+  const hasExpiryData = cachedPkgs.length > 0 && cachedPkgs.some(p => p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime);
+  if(!forceRefresh && hasExpiryData){
+    CURRENT_CREDITS_DATA = acct.credits;
+    renderCreditsDetail(acct.credits, acct);
+    return;
+  }
+
+  await reloadCreditsDetail();
+}
+
+async function reloadCreditsDetail(btn){
+  if(!CURRENT_CREDIT_DETAIL_UID) return;
+  const btnEl = btn || document.getElementById("btnRefreshCreditsDetail");
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = "刷新中..."; }
+  const loadingEl = document.getElementById("creditsModalLoading");
+  const contentEl = document.getElementById("creditsModalContent");
+  if(loadingEl && (!contentEl || contentEl.style.display === 'none')) loadingEl.style.display = "block";
+
+  try {
+    const res = await postJSON("/accounts/credits/detail", { uid: CURRENT_CREDIT_DETAIL_UID, refresh: true });
+    if(res && res.ok && res.credits){
+      CURRENT_CREDITS_DATA = res.credits;
+      // 同步更新全局 window.ACCOUNTS 中的 credits
+      const acct = (window.ACCOUNTS || []).find(a => a.uid === CURRENT_CREDIT_DETAIL_UID);
+      if(acct){
+        acct.credits = res.credits;
+        renderAccounts();
+      }
+      renderCreditsDetail(res.credits, acct);
+    } else {
+      toast("拉取积分明细失败: " + ((res && res.error) || "请确认后端代理服务已重启以加载新代码"));
+    }
+  } catch(e) {
+    toast("网络异常: " + e.message);
+  } finally {
+    if(loadingEl) loadingEl.style.display = "none";
+    if(contentEl) contentEl.style.display = "block";
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = "刷新明细"; }
+  }
+}
+
+function filterCreditsPackages(filterType, btn){
+  CURRENT_PKG_FILTER = filterType;
+  const parent = btn && btn.parentNode;
+  if(parent){
+    parent.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+  }
+  renderCreditsPackagesTable();
+}
+
+function onCreditsSearchInput(val){
+  CURRENT_PKG_SEARCH = (val || "").trim().toLowerCase();
+  renderCreditsPackagesTable();
+}
+
+function onCreditsSortChange(val){
+  CURRENT_PKG_SORT = val || "expiry_asc";
+  renderCreditsPackagesTable();
+}
+
+function renderCreditsDetail(credits, acct){
+  if(!credits) return;
+  CURRENT_CREDITS_DATA = credits;
+  const remain = Number(credits.remain) || 0;
+  const used = Number(credits.used) || 0;
+  const size = Number(credits.size) || (remain + used);
+  const usedPct = credits.used_percent || (size > 0 ? (used / size * 100).toFixed(1) + '%' : '0.0%');
+
+  const elRemain = document.getElementById("cmMetricRemain");
+  const elUsed = document.getElementById("cmMetricUsed");
+  const elTotal = document.getElementById("cmMetricTotal");
+  const elUsedPct = document.getElementById("cmUsedPercent");
+  const elBar = document.getElementById("cmProgressBar");
+  const elUpdated = document.getElementById("cmUpdatedText");
+
+  if(elRemain) elRemain.textContent = fmt(remain);
+  if(elUsed) elUsed.textContent = fmt(used);
+  if(elTotal) elTotal.textContent = fmt(size);
+  if(elUsedPct) elUsedPct.textContent = usedPct;
+  if(elBar){
+    const frac = size > 0 ? Math.min(100, Math.max(0, (used / size) * 100)) : 0;
+    elBar.style.width = frac.toFixed(1) + "%";
+    elBar.style.background = frac >= 90 ? "var(--bad)" : frac >= 70 ? "var(--warn)" : "var(--accent)";
+  }
+  if(elUpdated) elUpdated.textContent = "更新时间: " + (credits.updated_iso || "刚刚");
+
+  // 会员等级徽章
+  const tierEl = document.getElementById("creditsModalTier");
+  if(tierEl){
+    if(credits.is_paid_user !== undefined){
+      tierEl.style.display = "inline-block";
+      tierEl.className = credits.is_paid_user ? "badge mini ok" : "badge mini";
+      tierEl.textContent = credits.is_paid_user ? "付费用户" : "普通用户";
+    } else {
+      tierEl.style.display = "none";
+    }
+  }
+
+  // 最近到期卡片（优先取后端计算的 earliest_expiring，缺失时前端自动推导）
+  const elExpVal = document.getElementById("cmExpiryValue");
+  const elExpSub = document.getElementById("cmExpirySub");
+  if(elExpVal && elExpSub){
+    let ep = credits.earliest_expiring;
+    if(!ep && Array.isArray(credits.packages)){
+      const candidates = [];
+      credits.packages.forEach(p => {
+        const rem = Number(p.remain ?? p.CycleCapacityRemain) || 0;
+        const eStr = p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime || '';
+        if(rem > 0 && eStr && eStr !== '-'){
+          try {
+            const clean = eStr.replace(/-/g, '/').replace('T', ' ');
+            const ts = new Date(clean).getTime();
+            if(!isNaN(ts)){
+              const d = Math.round((ts - Date.now()) / 86400000 * 10) / 10;
+              candidates.push({ name: p.name || '套餐包', remain: rem, cycle_end_time: eStr, days_left: d });
+            }
+          } catch(e){}
+        }
+      });
+      if(candidates.length){
+        candidates.sort((a, b) => a.days_left - b.days_left);
+        ep = candidates[0];
+      }
+    }
+
+    if(ep && ep.days_left !== undefined && ep.days_left !== null){
+      const days = Number(ep.days_left);
+      const endStr = String(ep.cycle_end_time || '');
+      if(days < 0){
+        elExpVal.textContent = "已有包过期";
+        elExpVal.style.color = "var(--bad)";
+        elExpSub.textContent = esc(ep.name) + " · 周期已过";
+      } else if(days <= 3){
+        elExpVal.textContent = "剩 " + days.toFixed(1) + " 天";
+        elExpVal.style.color = "var(--bad)";
+        elExpSub.textContent = esc(endStr.slice(5, 16)) + " · " + fmt(ep.remain) + " 积分即将到期";
+      } else if(days <= 7){
+        elExpVal.textContent = "剩 " + Math.ceil(days) + " 天";
+        elExpVal.style.color = "var(--warn)";
+        elExpSub.textContent = esc(endStr.slice(5, 10)) + " 到期 · " + fmt(ep.remain) + " 积分";
+      } else {
+        elExpVal.textContent = "剩 " + Math.floor(days) + " 天";
+        elExpVal.style.color = "var(--fg)";
+        elExpSub.textContent = esc(endStr.slice(5, 10)) + " 到期 · " + fmt(ep.remain) + " 积分";
+      }
+      elExpSub.title = (ep.name || "") + " (" + endStr + ")";
+    } else {
+      elExpVal.textContent = "长期有效";
+      elExpVal.style.color = "var(--accent2)";
+      elExpSub.textContent = "暂无临期生效套餐包";
+    }
+  }
+
+  // 扩展状态（签到与会员信息）
+  const checkinCard = document.getElementById("cmCheckinCard");
+  const checkinText = document.getElementById("cmCheckinText");
+  if(checkinCard && checkinText){
+    let items = [];
+    if(credits.checkin){
+      const c = credits.checkin;
+      const st = c.today_checked_in
+        ? '<span style="color:var(--accent2);font-weight:600">今日已签到</span>'
+        : '<span style="color:var(--warn);font-weight:600">今日未签到</span>';
+      items.push('每日签到: ' + st + ' (连续 ' + (c.streak_days || 0) + ' 天)');
+      if(c.daily_credit) items.push('签到奖励: ' + c.daily_credit + ' 积分');
+      if(c.today_credit) items.push('今日领取: ' + c.today_credit + ' 积分');
+    }
+    if(credits.is_paid_user !== undefined){
+      items.push('会员类型: ' + (credits.is_paid_user ? '<span class="badge ok mini">付费用户</span>' : '<span class="badge mini">普通/体验用户</span>'));
+    }
+    if(items.length){
+      checkinText.innerHTML = items.join(' · ');
+      checkinCard.style.display = "block";
+    } else {
+      checkinCard.style.display = "none";
+    }
+  }
+
+  // 渲染套餐权益包明细表格
+  renderCreditsPackagesTable();
+}
+
+function renderCreditsPackagesTable(){
+  const credits = CURRENT_CREDITS_DATA;
+  if(!credits) return;
+  const tbody = document.getElementById("cmPackagesBody");
+  if(!tbody) return;
+
+  const rawPkgs = Array.isArray(credits.packages) ? credits.packages : [];
+  const countBadge = document.getElementById("cmPkgCountBadge");
+  if(countBadge) countBadge.textContent = "共 " + rawPkgs.length + " 个";
+
+  // 统一预处理各套餐包的有效期与数值
+  const preparedPkgs = rawPkgs.map(p => {
+    const pSize = Number(p.size ?? p.total ?? p.CycleCapacitySize) || 0;
+    const pUsed = Number(p.used ?? p.CycleCapacityUsed) || 0;
+    const pRemain = Number(p.remain ?? p.CycleCapacityRemain) || 0;
+    const endTime = p.cycle_end_time || p.cycleEndTime || p.CycleEndTime || p.expired_time || p.ExpiredTime || '';
+    const startTime = p.cycle_start_time || p.cycleStartTime || p.CycleStartTime || '';
+
+    let days = (p.days_left !== undefined && p.days_left !== null) ? Number(p.days_left) : null;
+    if(days === null && endTime && endTime !== '-'){
+      try {
+        const cleanStr = endTime.replace(/-/g, '/').replace('T', ' ');
+        const endTs = new Date(cleanStr).getTime();
+        if(!isNaN(endTs)){
+          days = Math.round((endTs - Date.now()) / 86400000 * 10) / 10;
+        }
+      } catch(e){}
+    }
+    const isExpired = p.is_expired !== undefined ? !!p.is_expired : (days !== null && days < 0);
+    return {
+      raw: p,
+      name: p.name || '套餐包',
+      package_code: p.package_code || p.packageCode || p.PackageCode || '',
+      resource_id: p.resource_id || p.resourceId || p.ResourceId || '',
+      grant_reason: p.grant_reason || p.grantReason || '',
+      sub_product_name: p.sub_product_name || p.subProductName || p.SubProductName || '',
+      in_usage: p.in_usage ?? p.inUsage ?? p.InUsage,
+      auto_renew: p.auto_renew ?? p.autoRenew ?? p.AutoRenewFlag,
+      size: pSize,
+      used: pUsed,
+      remain: pRemain,
+      cycle_start_time: startTime,
+      cycle_end_time: endTime,
+      days_left: days,
+      is_expired: isExpired
+    };
+  });
+
+  // 过滤
+  let pkgs = preparedPkgs.filter(p => {
+    const remain = p.remain;
+    const isExpired = p.is_expired;
+    const daysLeft = p.days_left;
+
+    if(CURRENT_PKG_FILTER === 'active'){
+      if(remain <= 0 || isExpired) return false;
+    } else if(CURRENT_PKG_FILTER === 'expiring'){
+      if(isExpired || remain <= 0) return false;
+      if(daysLeft === null || daysLeft > 7) return false;
+    } else if(CURRENT_PKG_FILTER === 'exhausted'){
+      if(remain > 0 && !isExpired) return false;
+    }
+
+    if(CURRENT_PKG_SEARCH){
+      const q = CURRENT_PKG_SEARCH;
+      const match = (p.name && p.name.toLowerCase().includes(q))
+        || (p.package_code && p.package_code.toLowerCase().includes(q))
+        || (p.grant_reason && p.grant_reason.toLowerCase().includes(q))
+        || (p.sub_product_name && p.sub_product_name.toLowerCase().includes(q))
+        || (p.resource_id && p.resource_id.toLowerCase().includes(q));
+      if(!match) return false;
+    }
+    return true;
+  });
+
+  // 排序
+  pkgs.sort((a, b) => {
+    if(CURRENT_PKG_SORT === 'expiry_asc'){
+      const inUseA = a.in_usage ? 0 : 1;
+      const inUseB = b.in_usage ? 0 : 1;
+      if(inUseA !== inUseB) return inUseA - inUseB;
+      const expA = a.is_expired ? 1 : 0;
+      const expB = b.is_expired ? 1 : 0;
+      if(expA !== expB) return expA - expB;
+      const daysA = a.days_left !== null ? a.days_left : 99999;
+      const daysB = b.days_left !== null ? b.days_left : 99999;
+      if(daysA !== daysB) return daysA - daysB;
+      return (b.remain || 0) - (a.remain || 0);
+    } else if(CURRENT_PKG_SORT === 'remain_desc'){
+      return (b.remain || 0) - (a.remain || 0);
+    } else if(CURRENT_PKG_SORT === 'used_desc'){
+      return (b.used || 0) - (a.used || 0);
+    } else if(CURRENT_PKG_SORT === 'size_desc'){
+      return (b.size || 0) - (a.size || 0);
+    }
+    return 0;
+  });
+
+  if(!pkgs.length){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty" style="text-align:center;padding:24px;color:var(--dim)">无符合条件的套餐权益包</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = pkgs.map(p => {
+    const pSize = p.size;
+    const pUsed = p.used;
+    const pRemain = p.remain;
+    const pct = pSize > 0 ? Math.min(100, (pUsed / pSize) * 100) : 0;
+    const days = p.days_left;
+
+    // 到期倒计时与周期格式化
+    let expiryBadge = '';
+    if(p.is_expired || (days !== null && days < 0)){
+      expiryBadge = '<span class="badge mini off">已过期</span>';
+    } else if(days !== null){
+      if(days <= 3){
+        expiryBadge = '<span class="badge mini bad">剩 ' + days.toFixed(1) + ' 天 (即将到期)</span>';
+      } else if(days <= 7){
+        expiryBadge = '<span class="badge mini warn">剩 ' + Math.ceil(days) + ' 天</span>';
+      } else if(days < 365){
+        expiryBadge = '<span class="badge mini ok">剩 ' + Math.floor(days) + ' 天</span>';
+      } else {
+        expiryBadge = '<span class="badge mini">长期有效</span>';
+      }
+    } else if(p.cycle_end_time){
+      expiryBadge = '<span class="badge mini">正常</span>';
+    }
+
+    const cycleEndTimeStr = p.cycle_end_time ? p.cycle_end_time.slice(0, 19) : '-';
+    const cycleStartTimeStr = p.cycle_start_time ? p.cycle_start_time.slice(0, 19) : '';
+
+    // 来源/原因/产品描述
+    const reasonParts = [];
+    if(p.grant_reason) reasonParts.push(esc(p.grant_reason));
+    if(p.sub_product_name && p.sub_product_name !== p.name) reasonParts.push(esc(p.sub_product_name));
+    const reasonLine = reasonParts.length ? ('<div style="font-size:11px;color:var(--dim);margin-top:2px">' + reasonParts.join(' · ') + '</div>') : '';
+
+    // 标识行
+    const idParts = [];
+    if(p.package_code) idParts.push(esc(p.package_code));
+    if(p.resource_id) idParts.push(esc(p.resource_id));
+    const idLine = idParts.length ? ('<div class="mono" style="font-size:10px;color:var(--dim);margin-top:2px">' + idParts.join(' · ') + '</div>') : '';
+
+    // 状态标签
+    let statusTags = '';
+    if(p.in_usage){
+      statusTags += '<span class="badge mini s" style="margin-left:4px;font-size:10px">生效中</span>';
+    }
+    if(p.auto_renew){
+      statusTags += '<span class="badge mini ok" style="margin-left:4px;font-size:10px">自动续费</span>';
+    }
+
+    const barColor = pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--accent)";
+
+    return '<tr>'
+      + '<td style="text-align:left;padding:8px 10px">'
+      +   '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">'
+      +     '<span style="font-weight:600;color:var(--fg)">' + esc(p.name) + '</span>'
+      +     statusTags
+      +   '</div>'
+      +   reasonLine
+      +   idLine
+      + '</td>'
+      + '<td style="text-align:center;padding:8px 10px">'
+      +   (expiryBadge ? ('<div style="margin-bottom:3px">' + expiryBadge + '</div>') : '')
+      +   '<div class="mono" style="font-size:11px;color:var(--fg)" title="到期时间">' + esc(cycleEndTimeStr) + '</div>'
+      +   (cycleStartTimeStr ? ('<div class="mono" style="font-size:10px;color:var(--dim)" title="生效时间">自 ' + esc(cycleStartTimeStr.slice(0, 10)) + '</div>') : '')
+      + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;font-weight:600">' + fmt(pSize) + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;color:var(--dim)">' + fmt(pUsed) + '</td>'
+      + '<td style="text-align:right;padding:8px 10px;color:var(--accent2);font-weight:700;font-size:13px">' + fmt(pRemain) + '</td>'
+      + '<td style="text-align:center;padding:8px 10px">'
+      +   '<div style="display:flex;align-items:center;justify-content:center;gap:6px">'
+      +     '<span style="font-size:11px;min-width:34px;text-align:right">' + pct.toFixed(1) + '%</span>'
+      +     '<div style="width:46px;height:5px;background:var(--line);border-radius:3px;overflow:hidden">'
+      +       '<div style="width:' + pct.toFixed(1) + '%;height:100%;background:' + barColor + '"></div>'
+      +     '</div>'
+      +   '</div>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function closeCreditsDetail(){
+  const m = document.getElementById("creditsDetailModal");
+  if(m) m.classList.remove("show");
+  CURRENT_CREDIT_DETAIL_UID = null;
 }
 
 function openDesktopScan(){
@@ -2518,7 +3615,7 @@ async function refreshDesktopScan(btn){
   if(body) body.innerHTML = '<p class="hint">正在检测本机桌面客户端账号…</p>';
   try{
     const r = await postJSON('/accounts/import/desktop', {});
-    renderDesktopScan(r.detected || []);
+    renderDesktopScan(r.detected || [], r.atrest || null);
   }catch(e){
     if(body) body.innerHTML = '<p class="hint" style="color:var(--warn)">扫描失败: ' + esc(e.message) + '</p>';
   }finally{
@@ -2526,22 +3623,63 @@ async function refreshDesktopScan(btn){
   }
 }
 
-function renderDesktopScan(list){
+/* at-rest 密钥：桌面端把 token 加密存了，得先从客户端进程内存里把静态密钥
+   找回来才能解密导入。密钥只留在网关进程内存里，不落盘、不写日志。 */
+async function recoverAtrestKey(btn){
+  const idle = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在扫描 WorkBuddy.exe 内存…';
+  try{
+    const r = await postJSON('/accounts/import/desktop', {recoverKey: true});
+    if(!r.ok){ throw new Error(r.msg || '回收失败'); }
+    toast('密钥已回收，正在重新扫描');
+    await refreshDesktopScan();
+  }catch(e){
+    toast('回收失败: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = idle;
+    const tip = document.getElementById('atrestTip');
+    if(tip){
+      tip.innerHTML = '回收失败：' + esc(e.message)
+        + '<br><span style="color:var(--dim)">请确认 WorkBuddy 桌面客户端正在运行并已登录；'
+        + '权限不足时可以管理员身份运行网关再试一次。</span>';
+    }
+  }
+}
+
+function renderAtrestBar(atrest, list){
+  if(!atrest) return '';
+  if(atrest.keyCached){
+    return '<div class="hint" style="margin:0 0 12px;color:var(--accent2)">解码密钥已就绪（keyId '
+      + esc(atrest.keyId || '-') + '），加密凭据可直接导入。</div>';
+  }
+  if(!list.some(d => d.needsKey)) return '';
+  let html = '<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;'
+    + 'padding:12px 14px;margin-bottom:14px;font-size:13px">'
+    + '<b>检测到加密凭据</b><div class="hint" style="margin:6px 0 8px" id="atrestTip">'
+    + '桌面客户端把 token 加密存储了，需要从正在运行的 WorkBuddy.exe 进程内存里回收静态密钥'
+    + '（只读，密钥只留在网关内存里）。通常几秒钟，内存大时要十几秒。</div>';
+  if(atrest.huntSupported){
+    html += '<button class="primary mini" data-action="recoverAtrestKey" data-on="click">回收密钥</button>';
+  }else{
+    html += '<div class="hint" style="color:var(--warn)">当前系统（' + esc(atrest.platform)
+      + '）不支持进程内存回收，请改用「+ 添加账号 (OAuth)」。</div>';
+  }
+  return html + '</div>';
+}
+
+function renderDesktopScan(list, atrest){
   const body = document.getElementById('desktopScanBody');
   if(!body) return;
   const valid = list.filter(d => d.valid);
   const bad = list.filter(d => !d.valid);
+  const needKey = bad.filter(d => d.needsKey);
+  const broken = bad.filter(d => !d.needsKey);
   // Use every account across both realms: the visible list is filtered by the
   // current view, so an earlier import could otherwise look "not imported".
   const already = window.SCAN_POOL && window.SCAN_POOL.size
     ? window.SCAN_POOL
     : new Set((window.ACCOUNTS || []).map(a => a.uid));
-
-  if(!list.length){
-    body.innerHTML = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
-      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
-    return;
-  }
 
   const section = (title, items, cls) => {
     let html = '<div style="margin:14px 0 6px;font-size:12px;font-weight:600" class="' + cls + '">'
@@ -2573,19 +3711,41 @@ function renderDesktopScan(list){
     return html;
   };
 
-  let html = section('国际版 (Global) · www.workbuddy.ai',
-                     valid.filter(d => d.realm !== 'cn'), '');
-  html += section('国内版 (China) · copilot.tencent.com',
-                  valid.filter(d => d.realm === 'cn'), '');
+  let html = renderAtrestBar(atrest, list);
+  if(!list.length && !html){
+    body.innerHTML = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
+      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
+    return;
+  }
+  if(list.length){
+    html += section('国际版 (Global) · www.workbuddy.ai',
+                    valid.filter(d => d.realm !== 'cn'), '');
+    html += section('国内版 (China) · copilot.tencent.com',
+                    valid.filter(d => d.realm === 'cn'), '');
+  }
 
-  if(bad.length){
+  if(needKey.length){
+    html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">'
+      + '待解码的凭证（加密存储）</div>';
+    html += '<table><tbody>';
+    needKey.forEach(d => {
+      html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
+        + '<td style="color:var(--dim);font-size:12px;text-align:right">需要先回收密钥</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  if(broken.length){
     html += '<div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--warn)">无法读取的凭证</div>';
     html += '<table><tbody>';
-    bad.forEach(d => {
+    broken.forEach(d => {
       html += '<tr><td class="mono" style="font-size:11px">' + esc(d.file) + '</td>'
         + '<td style="color:var(--warn);font-size:12px;text-align:right">' + esc(d.error || '未知原因') + '</td></tr>';
     });
     html += '</tbody></table>';
+  }
+  if(!html){
+    html = '<p class="hint">未在本机检测到桌面客户端登录凭证。<br>'
+      + '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。</p>';
   }
   body.innerHTML = html;
   // Wire the import buttons through event delegation (see renderDesktopScan).
@@ -2609,7 +3769,7 @@ async function doImportDesktop(btn, path, realm){
     try {
       const s = await postJSON('/accounts/import/desktop', {});
       if(s.pool_uids) window.SCAN_POOL = new Set(s.pool_uids);
-      renderDesktopScan(s.detected || []);
+      renderDesktopScan(s.detected || [], s.atrest || null);
     } catch(e2) { /* keep the refreshed toasts; list will refresh on next scan */ }
     // The scan list is filtered by the current view; tell the user where the
     // account actually landed so this never looks like a no-op.
@@ -2625,15 +3785,33 @@ async function doImportDesktop(btn, path, realm){
 }
 
 /* ------------------------------- dashboard ------------------------------ */
-let REFRESH_BUSY = false;
+let REFRESH_RUNNING = false;
+let REFRESH_QUEUED = false;
+let REFRESH_GEN = 0;
 async function refresh(){
-  // 5 秒轮询：上一轮尚未返回就跳过本轮，避免请求堆积把服务端拖慢
-  if(REFRESH_BUSY) return;
-  REFRESH_BUSY = true;
-  try { await refreshInner(); }
-  finally { REFRESH_BUSY = false; }
+  // 5 秒轮询。撞上正在飞的那一轮时**排队补跑**，而不是直接丢掉：早先的实现是
+  // `if(REFRESH_BUSY) return;`，切区域/切账号那一下如果正好撞上轮询在飞，这次
+  // 刷新就没了下文，只能干等下一个 5 秒周期——"点了要过几秒才变"就是这么来的。
+  REFRESH_GEN++;
+  if(REFRESH_RUNNING){ REFRESH_QUEUED = true; return; }
+  REFRESH_RUNNING = true;
+  const gen = REFRESH_GEN;
+  try { await refreshInner(gen); }
+  finally {
+    REFRESH_RUNNING = false;
+    if(REFRESH_QUEUED){ REFRESH_QUEUED = false; refresh(); }
+  }
 }
-async function refreshInner(){
+// 展示货币切换后，把带费用的视图就地重画：各接口有服务端 TTL 缓存，
+// 重新拉取的代价很小，不必为每处维护一份数据副本。
+function refreshAllCostViews(){
+  refresh();
+  if(currentMainTab === 'analytics'){
+    loadAnalytics();
+    loadAnalyticsMatrix();
+  }
+}
+async function refreshInner(gen){
   let usage, recent, perf;
   try{
     [usage, recent, perf] = await Promise.all([
@@ -2641,11 +3819,16 @@ async function refreshInner(){
       getJSON('/usage/recent?limit=' + RECENT_LIMIT + '&page=' + RECENT_PAGE + '&realm=' + encodeURIComponent(window.VIEW_REALM)),
       getJSON('/usage/perf?realm=' + encodeURIComponent(window.VIEW_REALM)),
     ]);
+    // 取数期间又发起了更新的一轮（例如刚切了区域），这批结果已经过期，
+    // 直接扔掉，交给排队的那一轮渲染，免得把旧区域的数字画上去。
+    if(gen !== REFRESH_GEN) return;
     document.getElementById('statusDot').className = 'dot';
   }catch(e){
-    document.getElementById('statusDot').className = 'dot err';
-    if(String(e.message) !== 'unauthorized'){
-      document.getElementById('meta').innerHTML = '<b>无法连接反代</b>';
+    if(gen === REFRESH_GEN){
+      document.getElementById('statusDot').className = 'dot err';
+      if(String(e.message) !== 'unauthorized'){
+        document.getElementById('meta').innerHTML = '<b>无法连接反代</b>';
+      }
     }
     return;
   }
@@ -2667,27 +3850,34 @@ async function refreshInner(){
   });
 
   // An account parked by the low-credit guard is enabled but not serving, so
-  // the pool card must not count it as "正常".
+  // the pool card must not count it as "正常". The same goes for an account
+  // capped by the daily credit guard: it still serves free models, but a
+  // paid request will rotate away from it.
   const accts = window.ACCOUNTS || [];
-  const activeAccts = accts.filter(a => a.enabled && !a.reserveBlocked && !a.dailyLimitBlocked).length;
+  const activeAccts = accts.filter(a => a.enabled && !a.reserveBlocked && !a.dailyLimitBlocked && !a.creditLimitReached).length;
   const totalAccts = accts.length;
   const parkedAccts = accts.filter(a => a.enabled && a.reserveBlocked).length;
   const disabledAccts = accts.filter(a => !a.enabled).length;
   const dailyAccts = accts.filter(a => a.enabled && a.dailyLimitBlocked).length;
+  const creditAccts = accts.filter(a => a.enabled && a.creditLimitReached && !a.dailyLimitBlocked).length;
   const poolNotes = [];
   if(parkedAccts) poolNotes.push(parkedAccts + ' 个保留积分');
   if(dailyAccts) poolNotes.push(dailyAccts + ' 个达日限额');
+  if(creditAccts) poolNotes.push(creditAccts + ' 个达积分限额');
   if(disabledAccts) poolNotes.push(disabledAccts + ' 个停用');
   const poolSub = poolNotes.length ? poolNotes.join(' · ') : '全部启用 · 状态健康';
   const pctRemain = totSize > 0 ? ((totRemain / totSize) * 100).toFixed(1) + '%' : '';
   const subCredit = totSize > 0 ? ('总积分 ' + fmt(totSize) + ' · 剩余 ' + pctRemain) : '当前账号正常';
   const succStr = perf.success_rate_pct != null ? pct(perf.success_rate_pct) : '100.0%';
   const errSub = perf.errors ? (perf.errors + ' 次异常拦截') : '服务运行平稳';
+  // 等价花费的汇率随 /usage 载荷更新（后端定价快照里的值）。
+  if(t.usd_cny) costUsdRate = Number(t.usd_cny) || costUsdRate;
 
   document.getElementById('cards').innerHTML =
     card('可用账号池', activeAccts + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">/ ' + totalAccts + ' 正常</span>', poolSub, 'accent') +
     card('积分余额', hasCreds ? (fmt(totRemain) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">积分</span>') : '正常可用', subCredit, 'accent2') +
     card('网关调用量', fmt(t.requests) + ' <span style="font-size:13px;font-weight:400;color:var(--dim)">次</span>', '本出口累计消耗 ' + fmt(t.total_tokens) + ' Token · ' + Number(t.credit || 0).toFixed(2) + ' 积分', '') +
+    card('OpenRouter 价估算', fmtCost(t.cost_cny), '按 OpenRouter 模型价折算的等价 token 花费' + costToggleHtml(), 'warn') +
     card('请求成功率', succStr, errSub, perf.errors ? 'warn' : 'accent2');
 
   const total = recent.total || 0;
@@ -2727,6 +3917,12 @@ async function refreshInner(){
   };
   const countEl = document.getElementById('recentCount');
   if(countEl) countEl.textContent = '(第 ' + RECENT_PAGE + ' 页 / 共 ' + fmt(total) + ' 条)';
+  // 推理强度：这次请求实际跑在哪个档位（网关写入 usage 行时的 reasoning_effort）。
+  // 只有该字段存在才显示——老行与没有档位的模型都没有它。挂在"模型"格里复用
+  // 模型库的 .badge-effort 样式，不新增第 15 列（表格已经 14 列了）。
+  const effortChip = r => r.reasoning_effort
+    ? ' <span class="badge-effort" title="本次请求实际使用的推理强度">' + esc(r.reasoning_effort) + '</span>'
+    : '';
   // 账号列显示昵称：uid -> 昵称取自 /usage 的 accounts_map（当前账号池）。
   // 已删除/不存在的账号回退到 uid 前 8 位，避免留空。
   const acctName = (uid) => {
@@ -2734,11 +3930,15 @@ async function refreshInner(){
     const m = (t.accounts_map && t.accounts_map[uid]);
     return (m && m.nickname) ? m.nickname : String(uid).slice(0,8);
   };
+  COST_TIP_ROWS.clear();
   document.getElementById('recent').innerHTML = rows.length ?
-    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th></tr></thead><tbody>'
-    + rows.map(r => '<tr>'
+    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th style="color:var(--warn)">OpenRouter 价估算</th></tr></thead><tbody>'
+    + rows.map((r, i) => {
+        const costKey = costRowKey(r, i);
+        COST_TIP_ROWS.set(costKey, r);
+        return '<tr>'
         + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
-        + '<td class="mono" data-label="模型">' + esc(r.model) + '</td>'
+        + '<td class="mono" data-label="模型">' + esc(r.model) + effortChip(r) + '</td>'
         + '<td class="mono" style="font-size:11px;color:var(--dim)" data-label="账号" title="' + esc(r.account||'') + '">' + esc(acctName(r.account)) + '</td>'
         + '<td data-label="模式"><span class="badge ' + (r.stream?'s':'') + '">' + (r.stream?'流式':'非流式') + '</span></td>'
         + '<td data-label="结果">' + outcomeBadge(r) + '</td>'
@@ -2751,8 +3951,14 @@ async function refreshInner(){
         + '<td data-label="缓存">' + (r.cache_hit_pct!=null ? r.cache_hit_pct+'%' : '—') + '</td>'
         + '<td data-label="总 token"><b>' + fmt(r.total_tokens) + '</b></td>'
         + '<td data-label="积分" style="color:var(--accent2)">' + (r.credit != null ? Number(r.credit).toFixed(2) : '—') + '</td>'
-      + '</tr>').join('') + '</tbody></table>'
+        + '<td data-label="OpenRouter 价估算" class="cost-cell" style="color:var(--warn)" data-cost-key="' + esc(costKey) + '">'
+        +   fmtCost(r.cost_cny)
+        +   (r.cost_backfilled ? '<span style="color:var(--dim)">*</span>' : '')
+        + '</td>'
+      + '</tr>';
+      }).join('') + '</tbody></table>'
     : '<div class="empty">还没有请求记录</div>';
+  reanchorCostTip();
 }
 
 (async function initDashboard(){
@@ -2932,13 +4138,12 @@ let PANEL_TIMERS = [];
 async function startDashboard(){
   if(PANEL_READY) return;
   PANEL_READY = true;
+  // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
+  // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
   await loadSettings();
   await initRealm();
-  await loadAccounts();
-  await loadModels();
-  await loadGrowthTasks();
-  await loadSchedulerStatus();
-  await refresh();
+  await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                     loadSchedulerStatus(), refresh()]);
   updateRecentLimitButtons();
   // The head script already resolved this before first paint; re-apply it
   // here so the data loaders for the active page actually run.
@@ -3174,6 +4379,34 @@ async function loadSettings(showToast){
         dailyTokState.textContent = dailyTokValue > 0 ? ('(每账号每天 ' + fmt(dailyTokValue) + ' token)') : '(不限)';
         dailyTokState.style.color = dailyTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
       }
+      const dailyCredValue = Number(data.daily_credit_limit || 0);
+      const dailyCredInput = document.getElementById('setDailyCreditLimit');
+      if(dailyCredInput) dailyCredInput.value = String(dailyCredValue);
+      const dailyCredState = document.getElementById('setDailyCreditState');
+      if(dailyCredState){
+        dailyCredState.textContent = dailyCredValue > 0 ? ('(每账号每天 ' + fmt(dailyCredValue) + ' 积分，超出后仅免费模型)') : '(已关闭)';
+        dailyCredState.style.color = dailyCredValue > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
+      const modelTokValue = Number(data.model_daily_token_limit || 0);
+      const modelTokInput = document.getElementById('setModelDailyTokenLimit');
+      if(modelTokInput) modelTokInput.value = String(modelTokValue);
+      const modelTokState = document.getElementById('setModelDailyTokenState');
+      if(modelTokState){
+        modelTokState.textContent = modelTokValue > 0 ? ('(每账号每模型每天 ' + fmt(modelTokValue) + ' token)') : '(不限)';
+        modelTokState.style.color = modelTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
+      const pricingMinutes = Number(data.pricing_refresh_minutes || 0);
+      const pricingInput = document.getElementById('setPricingMinutes');
+      if(pricingInput) pricingInput.value = String(pricingMinutes);
+      const pricingState = document.getElementById('setPricingState');
+      if(pricingState){
+        pricingState.textContent = pricingMinutes > 0 ? ('(每 ' + pricingMinutes + ' 分钟)') : '(未启用)';
+        pricingState.style.color = pricingMinutes > 0 ? 'var(--accent2)' : 'var(--dim)';
+      }
+      const variantOn = data.pricing_variant_inherit !== false;
+      const variantInput = document.getElementById('setPricingVariant');
+      if(variantInput) variantInput.checked = variantOn;
+      loadPricingStatus();
       const autoSwitch = data.auto_switch_product === true;
       const autoSwitchInput = document.getElementById('setAutoSwitch');
       if(autoSwitchInput) autoSwitchInput.checked = autoSwitch;
@@ -3215,6 +4448,13 @@ async function loadSettings(showToast){
       _editing: false,
     }));
     window.API_KEY_ROWS = API_KEY_ROWS;
+    DELETED_KEY_ROWS = (data.deleted_api_keys || []).map(k => ({
+      id: k.id || '',
+      name: k.name || '',
+      realm: k.realm || '',
+      created_at: k.created_at || '',
+      deleted_at: k.deleted_at || '',
+    }));
     renderKeyRows();
     renderAdvancedSettings(data);
     updateUI();
@@ -3286,13 +4526,210 @@ async function saveDailyTokenLimit(btn){
   }
 }
 
+async function saveDailyCreditLimit(btn){
+  const el = document.getElementById('setDailyCreditLimit');
+  const value = Math.floor(Number((el || {}).value || 0));
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（积分）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {daily_credit_limit: value});
+    toast(value > 0 ? ('已启用：账号当日超过 ' + value + ' 积分后仅免费模型可用') : '已关闭每日积分限额', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function savePricingMinutes(btn){
+  const el = document.getElementById('setPricingMinutes');
+  const value = Number((el || {}).value || 0);
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正数（分钟）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {pricing_refresh_minutes: value});
+    toast(value > 0 ? ('已启用：每 ' + value + ' 分钟取一次价') : '已关闭自动取价（仍可手动取一次）', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveModelDailyTokenLimit(btn){
+  const el = document.getElementById('setModelDailyTokenLimit');
+  const value = Math.floor(Number((el || {}).value || 0));
+  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（token）', 'warn'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {model_daily_token_limit: value});
+    toast(value > 0 ? ('已启用：账号单模型当日超过 ' + fmt(value) + ' token 后该模型切走') : '已设为不限（0 = 不限额）', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function loadPricingStatus(){
+  const meta = document.getElementById('setPricingMeta');
+  const box = document.getElementById('setPricingCurrent');
+  if(!meta) return;
+  try {
+    const st = await getJSON('/pricing');
+    const bits = [];
+    if(st.current_at_label) bits.push('当前生效 ' + st.current_at_label + ' 那一份（' + (st.models || 0) + ' 个模型）');
+    else bits.push('还没取过价，暂用出厂快照');
+    if(st.last_run_label) bits.push('上次取价 ' + st.last_run_label);
+    if(st.enabled && st.next_run_label) bits.push('下次 ' + st.next_run_label);
+    bits.push('策略表 ' + (st.policies || 0) + ' 条');
+    if(st.last_error) bits.push('上次失败：' + st.last_error);
+    meta.textContent = '　' + bits.join('；');
+    meta.style.color = st.last_error ? 'var(--warn)' : 'var(--dim)';
+    if(box){
+      const cur = st.current || {};
+      const models = Object.keys(cur);
+      box.innerHTML = models.length
+        ? '<details><summary style="cursor:pointer">展开查看每个模型当前生效的策略</summary>'
+          + '<div style="margin-top:6px;max-height:260px;overflow:auto;font-family:monospace;line-height:1.7">'
+          + models.map(m => esc(m) + ' → ' + esc(cur[m].id || '')
+              + (cur[m].via === 'variant' ? '（继承自 ' + esc(cur[m].inherited_from || '?') + '）' : '')
+              + (cur[m].label ? '　' + esc(cur[m].label) + ' 首次取到' : '')).join('<br>')
+          + '</div></details>'
+        : '';
+    }
+    renderPricingGaps(st);
+  } catch(e) {
+    meta.textContent = '';
+    if(box) box.innerHTML = '';
+  }
+}
+
+/* ---- unpriced models: what shows a dash, why, and a way to map it ---- */
+const PRICING_GAP_LABELS = {
+  or_missing: {text: 'OpenRouter 无对应', color: 'var(--warn)'},
+  variant_unmatched: {text: '变体名未命中基准', color: 'var(--warn)'},
+  alias: {text: '虚拟别名（非实体模型）', color: 'var(--dim)'},
+};
+
+function safeModelId(value){
+  // Model ids and OpenRouter ids are [A-Za-z0-9._/:-]; anything else is
+  // dropped before it reaches an attribute or an inline handler argument.
+  return String(value == null ? '' : value).replace(/[^A-Za-z0-9._/:\-]/g, '');
+}
+
+function renderPricingGaps(st){
+  const box = document.getElementById('setPricingGaps');
+  if(!box) return;
+  const gaps = Array.isArray(st.gaps) ? st.gaps : [];
+  const sum = st.gap_summary || {};
+  const head = '<div style="font-size:12px;color:var(--dim);margin-top:10px">'
+    + '<b>未定价模型</b>：' + fmt(sum.total || 0) + ' 个需要人工关注'
+    + (sum.or_missing ? '（无对应 ' + fmt(sum.or_missing) + '）' : '')
+    + (sum.variant_unmatched ? '（变体未命中 ' + fmt(sum.variant_unmatched) + '）' : '')
+    + (sum.aliases ? '；另有 ' + fmt(sum.aliases) + ' 个虚拟别名不参与统计' : '')
+    + (sum.variants_enabled === false ? '；变体继承当前已关闭' : '')
+    + '</div>';
+  if(!gaps.length){
+    box.innerHTML = head + '<div style="font-size:12px;color:var(--accent2);margin-top:4px">全部模型都有价。</div>';
+    return;
+  }
+  const rows = gaps.map(g => {
+    const model = safeModelId(g.model);
+    const label = PRICING_GAP_LABELS[g.reason] || {text: g.reason || '未定价', color: 'var(--dim)'};
+    const cands = (g.candidates || []).map(c =>
+      '<a href="javascript:void(0)" data-or-id="' + safeModelId(c)
+      + '" data-action="fillPricingMapping" data-on="click" style="color:var(--accent2)">' + esc(c) + '</a>'
+    ).join('、');
+    const editable = g.reason !== 'alias';
+    const control = editable
+      ? '<input placeholder="vendor/model" style="width:190px;background:var(--panel2);'
+        + 'border:1px solid var(--line);border-radius:6px;padding:4px 8px;color:var(--fg);font:inherit;font-size:12px">'
+        + '<button data-action="savePricingMapping" data-on="click" style="font-size:12px;padding:4px 10px">登记</button>'
+      : '<span style="color:var(--dim);font-size:12px">无需登记</span>';
+    return '<div data-model="' + model + '" style="display:flex;align-items:center;gap:8px;'
+      + 'flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--line)">'
+      + '<span class="mono" style="font-size:12px;min-width:180px">' + esc(g.model) + '</span>'
+      + '<span style="font-size:12px;color:' + label.color + '">' + esc(label.text) + '</span>'
+      + '<span style="font-size:12px;color:var(--dim)">' + (cands ? '候选：' + cands : '') + '</span>'
+      + control + '</div>';
+  }).join('');
+  box.innerHTML = head
+    + '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px">展开逐条查看 / 手填 OpenRouter id</summary>'
+    + '<div style="margin-top:4px;max-height:320px;overflow:auto">' + rows + '</div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:6px">手填的映射存在数据目录的 pricing-overrides.json（不改源码），登记后立即触发一次取价；留空提交即删除该映射。候选只是字面相似度建议，不自动采用。</div>'
+    + '</details>';
+}
+
+function fillPricingMapping(link){
+  const row = link.closest('[data-model]');
+  const input = row && row.querySelector('input');
+  if(input) input.value = link.getAttribute('data-or-id') || '';
+}
+
+async function savePricingMapping(btn){
+  const row = btn.closest('[data-model]');
+  if(!row) return;
+  const model = row.getAttribute('data-model');
+  const input = row.querySelector('input');
+  const orId = (input && input.value || '').trim();
+  btn.disabled = true;
+  try {
+    const res = await postJSON('/pricing/mapping', {model: model, or_id: orId});
+    toast(res.msg || '已记录', res.known || !orId ? 'ok' : 'warn');
+    setTimeout(loadPricingStatus, 3000);
+    setTimeout(loadPricingStatus, 12000);
+  } catch(e) {
+    toast('登记失败: ' + e.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function savePricingVariant(btn){
+  const el = document.getElementById('setPricingVariant');
+  const value = !!(el && el.checked);
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/save', {pricing_variant_inherit: value});
+    toast(value
+      ? '已开启：带渠道后缀的模型按基准模型继承定价（仅在唯一命中时）'
+      : '已关闭变体继承：带后缀的名字不再自动取价', 'ok');
+    if(res.pricing_refresh_started) setTimeout(loadPricingStatus, 4000);
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function refreshPricingNow(btn){
+  if(btn) btn.disabled = true;
+  try {
+    const st = await postJSON('/pricing/refresh', {});
+    toast(st.msg || '已开始抓取', 'ok');
+    // The fetch runs on the server's own thread, so come back for the result
+    // instead of holding the button.
+    setTimeout(loadPricingStatus, 4000);
+    setTimeout(loadPricingStatus, 15000);
+  } catch(e) {
+    toast('触发失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 async function saveAutoSwitchProduct(btn){
   const el = document.getElementById('setAutoSwitch');
   const value = !!(el && el.checked);
   if(btn) btn.disabled = true;
   try {
     await postJSON('/settings/save', {auto_switch_product: value});
-    toast(value ? '已启用：429 时自动切换出站身分' : '已关闭自动切换出站身分', 'ok');
+    toast(value ? '已启用：429 时自动切换出站身份' : '已关闭自动切换出站身份', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
@@ -3333,6 +4770,7 @@ async function saveLocalWebTools(btn){
 
 /* ---- API key list: several keys, each bound to an upstream exit ---- */
 let API_KEY_ROWS = [];
+let DELETED_KEY_ROWS = [];
 
 function randomKeyValue(){
   const bytes = new Uint8Array(18);
@@ -3364,7 +4802,33 @@ function modelPatternsText(patterns){
   return Array.isArray(patterns) ? patterns.join(', ') : '';
 }
 
+/* 已删除的 Key 是只读历史：密钥已被抹掉，所以这里不提供复制，也不提供恢复。 */
+function renderDeletedKeyRows(){
+  const box = document.getElementById('deletedKeySection');
+  if(!box) return;
+  if(!DELETED_KEY_ROWS.length){ box.innerHTML = ''; return; }
+  const rows = DELETED_KEY_ROWS.map(k => {
+    const realmLbl = (k.realm === 'intl') ? '固定国际版出口'
+      : ((k.realm === 'cn') ? '固定国内版出口' : '跟随面板切换');
+    return '<div style="font-size:12px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--line)">'
+      + '<span style="color:var(--fg);font-weight:600">' + esc(k.name || '未命名') + '</span>'
+      + '<span>' + esc(realmLbl) + '</span>'
+      + (k.created_at ? '<span>创建 ' + esc(k.created_at) + '</span>' : '')
+      + (k.deleted_at ? '<span>删除 ' + esc(k.deleted_at) + '</span>' : '')
+      + '<span class="mono">' + esc(k.id) + '</span>'
+      + '</div>';
+  }).join('');
+  box.innerHTML = '<details style="margin-top:14px">'
+    + '<summary style="cursor:pointer;font-size:12px;color:var(--dim);font-weight:600">已删除的 API Key（'
+    + DELETED_KEY_ROWS.length + '）· 只读</summary>'
+    + '<div style="margin-top:4px">' + rows + '</div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:8px">'
+    + '删除时密钥已被抹掉，无法恢复、也无法再用于请求。保留这条记录是为了让「按 API Key 的消耗归属」里这些 Key 的历史用量仍然显示名字。'
+    + '</div></details>';
+}
+
 function renderKeyRows(){
+  renderDeletedKeyRows();
   const box = document.getElementById('keyList');
   if(!box) return;
   if(!API_KEY_ROWS.length){
@@ -3376,7 +4840,7 @@ function renderKeyRows(){
       const options = REALM_CHOICES.map(([val, lbl]) =>
         '<option value="' + val + '"' + ((row.realm || '') === val ? ' selected' : '') + '>' + lbl + '</option>'
       ).join('');
-      return '<div class="key-card" style="border-color:var(--accent);background:#ffffff;box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
+      return '<div class="key-card" style="border-color:var(--accent);background:var(--panel);box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
         +   '<div style="font-size:14px;font-weight:700;color:var(--fg)">' + (row.id ? '编辑 API Key' : '新建 API Key') + '</div>'
         +   '<span class="badge s mini">设置出口</span>'
@@ -3526,7 +4990,7 @@ async function toggleKeyRow(index){
 async function removeKeyRow(index){
   const row = API_KEY_ROWS[index];
   if(!row) return;
-  if(!confirm('确定删除 API Key [' + (row.name || '未命名') + '] 吗？此操作不可撤销。')) return;
+  if(!confirm('确定删除 API Key [' + (row.name || '未命名') + '] 吗？密钥会被抹掉且无法恢复；看板里它已经产生的历史用量仍会保留这个名字。')) return;
   API_KEY_ROWS.splice(index, 1);
   try {
     await saveApiKeys();
@@ -3654,7 +5118,7 @@ function slotSelectHtml(a){
   }
   opts.push.apply(opts, PROXY_SLOTS.map(s =>
     '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
-    + esc(s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
+    + esc(s.label || s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
   const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
   return '<select class="slot-select"  data-action="setAccountSlot" data-on="change" data-uid="' + uidAttr + '">'
     + opts.join('') + '</select>';
@@ -3705,6 +5169,46 @@ function markSlotsDirty(){
   renderSlotState();
 }
 
+/* 出口信息的展示口径，与服务端 wb_ipintel 保持一致：hosting 地址算机房，
+   其余算住宅；国家名由查询服务直接给中文。 */
+const IP_TYPE_LABELS = {residential: '住宅', datacenter: '机房'};
+
+function ipTypeLabel(t){ return IP_TYPE_LABELS[t] || ''; }
+
+/* 默认名称：国家 + 类型（如「美国 住宅」）。没有国家就不自动命名——只有
+   「住宅」两个字区分不了不同槽位，此时回退显示槽位 id。 */
+function autoSlotName(c){
+  const where = String((c && c.country) || '').trim();
+  if(!where) return '';
+  const kind = ipTypeLabel(c && c.ip_type);
+  return kind ? (where + ' ' + kind) : where;
+}
+
+/* 保存时要把探测到的出口字段一起送回，否则一次保存就把它们抹掉了。 */
+function slotPayload(){
+  return PROXY_SLOTS.map(s => ({
+    id: s.id || '', name: s.name || '', url: (s.url || '').trim(),
+    enabled: s.enabled !== false,
+    ip: s.ip || '', country: s.country || '', country_code: s.country_code || '',
+    ip_type: s.ip_type || '', isp: s.isp || '', asn: s.asn || '',
+    probed_at: s.probed_at || 0,
+  }));
+}
+
+function slotExitHtml(s){
+  if(!s.ip) return '<span style="color:var(--dim-light)">未探测</span>';
+  const kind = ipTypeLabel(s.ip_type);
+  const badge = kind
+    ? '<span class="badge ' + (kind === '住宅' ? 's' : '') + '" style="font-size:11px">' + kind + '</span>'
+    : '';
+  const where = [s.country ? esc(s.country) : '', badge].filter(Boolean).join(' ');
+  const tip = [s.isp, s.asn].filter(Boolean).join(' · ');
+  return '<div class="mono" style="font-size:12px">' + esc(s.ip) + '</div>'
+    + '<div style="font-size:12px;color:var(--dim);margin-top:2px"'
+    + (tip ? ' title="' + esc(tip) + '"' : '') + '>'
+    + (where || '<span style="color:var(--dim-light)">国家未知</span>') + '</div>';
+}
+
 function renderProxySlots(){
   const box = document.getElementById('slotList');
   if(!box) return;
@@ -3716,6 +5220,7 @@ function renderProxySlots(){
   box.innerHTML = '<div class="table-wrap"><table class="data-cards"><thead><tr>'
     + '<th style="width:150px">名称</th>'
     + '<th>代理地址</th>'
+    + '<th style="width:150px">出口</th>'
     + '<th style="width:90px;text-align:center">启用</th>'
     + '<th style="width:90px;text-align:center">绑定账号</th>'
     + '<th style="width:190px;text-align:center">操作</th>'
@@ -3724,6 +5229,7 @@ function renderProxySlots(){
         '<tr>'
         + '<td data-label="名称"><input value="' + esc(s.name || '') + '"  data-action="onProxySlotNameInput" data-on="input" data-arg="' + i + '" class="slot-input"></td>'
         + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '"  data-action="onProxySlotUrlInput" data-on="input" data-arg="' + i + '" class="slot-input mono"></td>'
+        + '<td data-label="出口">' + slotExitHtml(s) + '</td>'
         + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
         +   '  data-action="onProxySlotEnabledChange" data-on="change" data-arg="' + i + '"></td>'
         + '<td style="text-align:center" data-label="绑定账号">' + (s.bound || 0) + '</td>'
@@ -3733,12 +5239,13 @@ function renderProxySlots(){
         + '</td></tr>'
       ).join('')
     + '</tbody></table></div>'
-    + '<div class="legend"><span>「绑定账号」只统计已启用账号；停用账号会自动释放槽位，重新启用后需重新绑定。在网关页账号表的「出口」下拉中调整绑定。</span></div>';
+    + '<div class="legend"><span>「绑定账号」只统计已启用账号；停用账号会自动释放槽位，重新启用后需重新绑定。在网关页账号表的「出口」下拉中调整绑定。名称留空时按出口自动显示「国家 类型」，点「测试」会补全出口信息并据此命名。</span></div>';
 }
 
 function addProxySlotRow(){
   SLOTS_DIRTY = true;
-  PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: '', enabled: true, bound: 0});
+  // 名称留空：探测到出口后按「国家 类型」自动命名，填过就按填的显示。
+  PROXY_SLOTS.push({id: '', name: '', url: '', enabled: true, bound: 0});
   renderProxySlots();
 }
 
@@ -3754,8 +5261,7 @@ function removeProxySlot(index){
 async function saveProxySlots(btn){
   if(btn) btn.disabled = true;
   try{
-    const payload = PROXY_SLOTS.map(s => ({id: s.id || '', name: s.name || '', url: (s.url || '').trim(), enabled: s.enabled !== false}));
-      const r = await postJSON('/proxy/slots/save', {slots: payload});
+      const r = await postJSON('/proxy/slots/save', {slots: slotPayload()});
       PROXY_SLOTS = r.slots || [];
       SLOTS_DIRTY = false;
       renderProxySlots();
@@ -3775,16 +5281,30 @@ async function testProxySlot(index, btn){
   try{
     let id = s.id;
     if(!id){
-      const payload = PROXY_SLOTS.map(x => ({id: x.id || '', name: x.name || '', url: (x.url || '').trim(), enabled: x.enabled !== false}));
-      const r = await postJSON('/proxy/slots/save', {slots: payload});
+      const r = await postJSON('/proxy/slots/save', {slots: slotPayload()});
       PROXY_SLOTS = r.slots || [];
       SLOTS_DIRTY = false;
       renderProxySlots();
       id = (PROXY_SLOTS[index] || {}).id;
     }
     const r = await postJSON('/proxy/slots/test', {id: id});
-    if(r.ok) toast('出口 IP: ' + r.exit_ip + '（' + r.latency_ms + 'ms）', 'ok');
-    else toast('测试失败: ' + (r.error || 'unknown'), 'bad');
+    if(r.ok){
+      // 服务端已把出口信息写进槽位，这里只把这一行同步过来，不整表重载——
+      // 其他行里还没保存的输入都还在 PROXY_SLOTS 里，重绘不会丢。
+      const row = PROXY_SLOTS[index];
+      if(row && r.slot){
+        ['ip', 'country', 'country_code', 'ip_type', 'isp', 'asn', 'probed_at'].forEach(k => {
+          if(r.slot[k] !== undefined) row[k] = r.slot[k];
+        });
+        if(r.slot.name) row.name = r.slot.name;
+        row.label = row.name || autoSlotName(row) || row.id;
+        renderProxySlots();
+      }
+      const where = [r.country, ipTypeLabel(r.ip_type)].filter(Boolean).join(' ');
+      toast('出口 ' + r.exit_ip + (where ? ' · ' + where : '') + '（' + r.latency_ms + 'ms）', 'ok');
+    }else{
+      toast('测试失败: ' + (r.error || 'unknown'), 'bad');
+    }
   }catch(e){
     toast('测试失败: ' + e.message, 'bad');
   }finally{
@@ -3818,7 +5338,11 @@ function renderDiscover(){
         + '<input type="checkbox" ' + (c.reachable ? 'checked' : 'disabled') + ' data-idx="' + i + '">'
         + '<span class="mono">' + esc(c.url) + '</span>'
         + '<span style="color:' + (c.reachable ? 'var(--accent2)' : 'var(--bad)') + '">'
-        + (c.reachable ? ('出口 ' + esc(c.exit_ip) + ' · ' + c.latency_ms + 'ms') : '不可达') + '</span>'
+        + (c.reachable
+            ? ('出口 ' + esc(c.exit_ip)
+               + (autoSlotName(c) ? ' · ' + esc(autoSlotName(c)) : '')
+               + ' · ' + c.latency_ms + 'ms')
+            : '不可达') + '</span>'
         + '</label>').join('')
     + '<button class="sec"  data-action="importDiscovered" data-on="click" style="margin-top:8px">导入勾选的出口</button></div>';
 }
@@ -3830,7 +5354,15 @@ function importDiscovered(){
   if(!picked.length){ toast('没有勾选任何出口', 'warn'); return; }
   picked.forEach(c => {
     if(PROXY_SLOTS.some(s => s.url === c.url)) return;
-    PROXY_SLOTS.push({id: '', name: '槽 ' + (PROXY_SLOTS.length + 1), url: c.url, enabled: true, bound: 0});
+    // 导入时就把探测到的出口信息一起带上。名称留空：空名称 = 「按出口自动命名」，
+    // 标签由 country/ip_type 每次现算，所以出口换了名字跟着换；写进 name 就成了
+    // 用户名称，会被 slot_label() 永久优先，出口变了也还显示旧的国家。
+    PROXY_SLOTS.push({
+      id: '', name: '', url: c.url, enabled: true, bound: 0,
+      ip: c.exit_ip || '', country: c.country || '', country_code: c.country_code || '',
+      ip_type: c.ip_type || '', isp: c.isp || '', asn: c.asn || '',
+      probed_at: Math.floor(Date.now() / 1000),
+    });
   });
   renderProxySlots();
   toast('已加入 ' + picked.length + ' 个槽位，记得点「保存槽位」', 'ok');
@@ -4407,16 +5939,18 @@ function renderPerfMatrix(usage, perf){
      * barely-used row cannot outvote a heavily-used one.
      */
     const filtering = !!(matrixAcctFilter || matrixModelFilter);
-    let sumReq, sumErr, sumTok, sumP, sumC, sumR, totTtft, totTps, totWall, totCache;
+    let sumReq, sumErr, sumTok, sumP, sumC, sumR, totTtft, totTps, totWall, totCache, sumCost;
     if(!filtering){
       sumReq = usage.requests; sumErr = perf.errors; sumTok = usage.total_tokens;
       sumP = usage.prompt_tokens; sumC = usage.completion_tokens; sumR = usage.reasoning_tokens;
+      // OpenRouter 价估算的合计：未筛选时取出口级汇总（与上面的数字同源）。
+      sumCost = usage.cost_cny || 0;
       totTtft = perf.ttft_ms ? (ms(perf.ttft_ms.avg) + " (P50 " + ms(perf.ttft_ms.p50) + ")") : "-";
       totTps = perf.tokens_per_sec ? (perf.tokens_per_sec.avg.toFixed(1) + " tok/s") : "-";
       totWall = perf.wall_ms ? ms(perf.wall_ms.avg) : "-";
       totCache = perf.cache_hit_pct ? (perf.cache_hit_pct.avg.toFixed(1) + "%") : "-";
     } else {
-      sumReq = 0; sumErr = 0; sumTok = 0; sumP = 0; sumC = 0; sumR = 0;
+      sumReq = 0; sumErr = 0; sumTok = 0; sumP = 0; sumC = 0; sumR = 0; sumCost = 0;
       let ttftW = 0, ttftN = 0, tpsW = 0, tpsN = 0, wallW = 0, wallN = 0, cacheW = 0, cacheN = 0;
       rowsData.forEach(m => {
         sumReq += m.requests || 0;
@@ -4424,6 +5958,7 @@ function renderPerfMatrix(usage, perf){
         sumP += m.prompt_tokens || 0;
         sumC += m.completion_tokens || 0;
         sumR += m.reasoning_tokens || 0;
+        sumCost += m.cost_cny || 0;
         const mp = ((perf && perf.by_model_realm) || {})[m.id] || {};
         const mpAcctAll = ((perf && perf.by_model_acct) || {})[m.id] || {};
         const mpRealm = m.realm ? (mp[m.realm] || null) : null;
@@ -4456,6 +5991,7 @@ function renderPerfMatrix(usage, perf){
       + '<td data-label="端到端耗时">' + totWall + '</td>'
       + '<td data-label="缓存命中">' + totCache + '</td>'
       + '<td data-label="用量占比">100%</td>'
+      + '<td data-label="OpenRouter 价估算" style="color:var(--warn)">' + fmtCost(sumCost) + '</td>'
       + '</tr>';
 
     const rows = rowsData.map(m => {
@@ -4537,6 +6073,9 @@ function renderPerfMatrix(usage, perf){
         + '<td data-label="端到端耗时">' + m_wall + '</td>'
         + '<td data-label="缓存命中">' + m_cache + '</td>'
         + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
+        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
+        +   ((m.cost_cny || 0) > 0 ? fmtCost(m.cost_cny) : '<span style="color:var(--dim)">—</span>')
+        + '</td>'
         + '</tr>';
     }).join('');
 
@@ -4555,6 +6094,7 @@ function renderPerfMatrix(usage, perf){
       + '<th style="text-align:left">账号</th>'
       + '<th>请求数</th><th>失败</th><th>总 Token</th><th style="min-width:190px">输入 / 输出 / 思考</th>'
       + '<th>首字延迟 (TTFT)</th><th>生成速度</th><th>端到端耗时</th><th>缓存命中率</th><th>用量占比</th>'
+      + '<th style="color:var(--warn)">OpenRouter 价估算</th>'
       + '</tr></thead><tbody>' + summaryRow + rows + '</tbody></table>';
   }
 
@@ -4719,6 +6259,15 @@ function renderAnalytics(data){
   if(elReqCount) elReqCount.textContent = fmt(currentSum.requests || 0) + ' 次';
   if(elReqSuccess) elReqSuccess.textContent = '成功率 ' + successPct + '% · 失败 ' + (currentSum.errors || 0);
 
+  // KPI 6: API 等价花费（跟随范围切换；货币切换按钮挂在这里）
+  if(data.usd_cny) costUsdRate = Number(data.usd_cny) || costUsdRate;
+  const elCostRange = document.getElementById('kpiCostRange');
+  const elCostValue = document.getElementById('kpiCostValue');
+  const elCostDetail = document.getElementById('kpiCostDetail');
+  if(elCostRange) elCostRange.textContent = '(' + rangeLabel() + ')';
+  if(elCostValue) elCostValue.innerHTML = fmtCost(currentSum.cost_cny != null ? currentSum.cost_cny : 0);
+  if(elCostDetail) elCostDetail.innerHTML = '按 OpenRouter 模型价折算的等价 token 花费 ' + costToggleHtml();
+
   // Table 1: 账号透视表
   const acctTbody = document.getElementById('analyticsAccountTbody');
   const acctCountEm = document.getElementById('analyticsAcctCount');
@@ -4730,7 +6279,7 @@ function renderAnalytics(data){
 
   if(acctTbody){
     if(!accts.length){
-      acctTbody.innerHTML = '<tr><td colspan="7" class="empty">暂无账号用量数据</td></tr>';
+      acctTbody.innerHTML = '<tr><td colspan="8" class="empty">暂无账号用量数据</td></tr>';
     } else {
       acctTbody.innerHTML = accts.map(a => {
         // window 桶就是当前选中的范围，也就是这张表要展示的口径。
@@ -4772,10 +6321,107 @@ function renderAnalytics(data){
           + '<td><b style="color:var(--accent)">' + fmt(st.total_tokens || 0) + '</b></td>'
           + '<td><b style="color:var(--accent2)">' + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>'
           + '<td style="text-align:left;max-width:440px">' + pills + '</td>'
+          + '<td style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
+          +   (st.cost_cny != null && st.cost_cny > 0 ? fmtCost(st.cost_cny) : '<span style="color:var(--dim)">—</span>')
+          + '</td>'
           + '</tr>';
       }).join('');
     }
   }
+
+  renderKeyTable(data);
+}
+
+/* 按 API Key 的归属表。口径与账号表完全一致（window 桶 = 当前选中范围），
+   所以两张表的请求数应当相等；对不上是数据问题，不是渲染能修的，故这里
+   不隐藏任何一行——(未知 key) 那行正是用来兜住差额的。 */
+function keyRealmCell(k){
+  if(k.source === 'bucket') return '<span style="color:var(--dim)">—</span>';
+  if(k.realm === 'cn') return '<span class="badge warn" style="font-size:10px">国内版</span>';
+  if(k.realm === 'intl') return '<span class="badge s" style="font-size:10px">国际版</span>';
+  // realm 为空的 Key 不绑出口，而是跟着模型走：它可能两个出口都用过，
+  // 那时代理返回的积分是两个价格体系相加的结果，必须说出来。
+  if(k.cross_realm) return '<span class="badge warn" style="font-size:10px">跟随 · 混合</span>';
+  return '<span class="badge off" style="font-size:10px">跟随</span>';
+}
+
+function keyModelPills(k){
+  const pills = (k.models || []).map(m =>
+    '<span class="model-pill">'
+    + '<b style="color:var(--fg)">' + esc(m.model) + '</b>: '
+    + m.requests + '次 · <b style="color:var(--accent)">' + fmt(m.tokens) + '</b> tok'
+    + '</span>');
+  const rest = k.models_other;
+  if(rest){
+    pills.push('<span class="model-pill">'
+      + '<b style="color:var(--dim)">' + esc(rest.model || '(其他)') + '</b> '
+      + '<span style="color:var(--dim)">' + (rest.models || 0) + ' 个模型 · </span>'
+      + rest.requests + '次 · ' + fmt(rest.tokens) + ' tok</span>');
+  }
+  return pills.length ? pills.join('') : '<span style="color:var(--dim)">无调用</span>';
+}
+
+function renderKeyTable(data){
+  const tbody = document.getElementById('analyticsKeyTbody');
+  if(!tbody) return;
+  const countEm = document.getElementById('analyticsKeyCount');
+  const note = document.getElementById('analyticsKeyNote');
+  const keys = data.keys || [];
+  if(countEm) countEm.textContent = keys.length ? '(' + keys.length + ' 把)' : '';
+
+  if(note){
+    const named = keys.filter(k => k.source !== 'bucket');
+    const cross = named.filter(k => k.cross_realm).length;
+    const parts = [];
+    if(!named.length) parts.push('设置里还没有任何 API Key，全部流量都落在下面的未归属行里。');
+    if(cross) parts.push('有 ' + cross + ' 把 Key 没有绑定出口，它的积分由国际版与国内版两套价格相加而来，只能当量级看。');
+    parts.push('Key 维度只从本次升级之后开始记录：更早的请求没有这个字段，会一直留在「(切换前)」里且不会再增长。');
+    note.innerHTML = parts.join(' ');
+  }
+
+  if(!keys.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无 API Key 用量数据</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = keys.map(k => {
+    const st = k.window || {};
+    const sub = {panel:'面板 Key', launcher:'启动参数', bucket:'未归属', builtin:'内置'}[k.source] || '';
+    let nameCell = '<td style="text-align:left" data-label="API Key">'
+      + '<b>' + esc(k.name || k.key) + '</b>';
+    if(sub || !k.enabled){
+      nameCell += '<div style="font-size:11px">'
+        + (sub ? '<span style="color:var(--dim)">' + esc(sub) + '</span>' : '')
+        + (!k.enabled && k.source === 'panel' ? '<span class="badge off mini">已禁用</span>' : '')
+        + '</div>';
+    }
+    nameCell += '</td>';
+
+    const reqCell = '<td data-label="请求次数">' + fmt(st.requests || 0) + ' 次'
+      + (st.errors ? '<span style="color:var(--bad);font-size:11px"> · 失败 ' + fmt(st.errors) + '</span>' : '')
+      + '</td>';
+    const tokCell = '<td data-label="消耗总 Token"><b style="color:var(--accent)">'
+      + fmt(st.total_tokens || 0) + '</b></td>';
+    const splitCell = '<td data-label="输入 · 输出 · 思考" style="font-size:12px">'
+      + '<span style="color:var(--accent)">' + fmt(st.prompt_tokens || 0) + '</span>'
+      + ' <span style="color:var(--dim-light)">/</span> '
+      + '<span style="color:var(--accent2)">' + fmt(st.completion_tokens || 0) + '</span>'
+      + ' <span style="color:var(--dim-light)">/</span> '
+      + '<span style="color:var(--think)">' + fmt(st.reasoning_tokens || 0) + '</span>'
+      + '</td>';
+    const cacheCell = '<td data-label="缓存命中">'
+      + (st.cache_hit_pct != null ? st.cache_hit_pct.toFixed(1) : '0.0') + '%</td>';
+    const creditCell = '<td data-label="消耗积分"><b style="color:var(--accent2)">'
+      + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>';
+    const modelCell = '<td style="text-align:left;max-width:440px" data-label="调用的模型分布">'
+      + keyModelPills(k) + '</td>';
+
+    return '<tr>'
+      + nameCell
+      + '<td data-label="出口">' + keyRealmCell(k) + '</td>'
+      + reqCell + tokCell + splitCell + cacheCell + creditCell + modelCell
+      + '</tr>';
+  }).join('');
 }
 /* M4 D3 stage 2: every former inline handler goes through this delegated
  * dispatcher, so the page runs under a nonce-based CSP with no
@@ -4867,6 +6513,24 @@ const ACTION_HANDLERS = {
   testProxySlot: (el, ev, arg) => testProxySlot(Number(arg), el),
   removeProxySlot: (el, ev, arg) => removeProxySlot(Number(arg)),
   importDiscovered: () => importDiscovered(),
+  toggleThemeMenu: (el, ev) => window.toggleThemeMenu(ev),
+  selectTheme: (el, ev, arg) => window.selectTheme(arg, ev),
+  saveDailyCreditLimit: (el) => saveDailyCreditLimit(el),
+  saveModelDailyTokenLimit: (el) => saveModelDailyTokenLimit(el),
+  savePricingMinutes: (el) => savePricingMinutes(el),
+  refreshPricingNow: (el) => refreshPricingNow(el),
+  savePricingVariant: (el) => savePricingVariant(el),
+  closeCreditsDetailBackdrop: (el, ev) => { if(ev.target === el) closeCreditsDetail(); },
+  closeCreditsDetail: () => closeCreditsDetail(),
+  filterCreditsPackages: (el, ev, arg) => filterCreditsPackages(arg, el),
+  onCreditsSearchInput: (el) => onCreditsSearchInput(el.value),
+  onCreditsSortChange: (el) => onCreditsSortChange(el.value),
+  reloadCreditsDetail: (el) => reloadCreditsDetail(el),
+  openCreditsDetail: (el) => openCreditsDetail(el.dataset.uid),
+  recoverAtrestKey: (el) => recoverAtrestKey(el),
+  fillPricingMapping: (el) => fillPricingMapping(el),
+  savePricingMapping: (el) => savePricingMapping(el),
+  setCostCurrency: (el, ev, arg) => setCostCurrency(arg),
 };
 
 function runDashboardAction(el, ev, type){

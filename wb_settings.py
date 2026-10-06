@@ -23,6 +23,19 @@ import wb_pool
 DEFAULT_PANEL_PASSWORD = "admin"
 PBKDF2_ROUNDS = 120_000
 SESSION_TTL = 7 * 24 * 3600
+# How often the gateway pulls fresh prices, in minutes; keep in step with
+# wb_pricing.DEFAULT_REFRESH_MINUTES.
+DEFAULT_PRICING_REFRESH_MINUTES = 5.0
+# The setting used to be counted in hours and stored under this key. It is read
+# once on upgrade (x60) and rewritten under the new key, so 6 hours can never
+# come back as 6 minutes.
+LEGACY_PRICING_REFRESH_HOURS_KEY = "pricing_refresh_hours"
+PRICING_REFRESH_MINUTES_KEY = "pricing_refresh_minutes"
+# A month, the old cap converted: 720 hours = 43200 minutes.
+MAX_PRICING_REFRESH_MINUTES = 24 * 30 * 60
+# Whether a model name may inherit its price from a suffix-stripped base
+# (deepseek-r1-0528-lkeap → deepseek-r1-0528). Missing key reads as on.
+PRICING_VARIANT_INHERIT_KEY = "pricing_variant_inherit"
 
 _lock = threading.RLock()
 SETTINGS_CACHE_TTL = 5.0
@@ -284,23 +297,34 @@ def key_allows_model(entry, model):
     """True when `entry` places no model restriction, or `model` matches it.
 
     A key with an empty list stays unrestricted, so nothing changes for
-    installs that never touch this field.
+    installs that never touch this field. A restricted key that names no model
+    is refused instead of waved through: nothing in the request says it is
+    asking for something the key may use, and forwarding it only reaches the
+    upstream carrying an empty model, spending an attempt on a call that cannot
+    succeed.
     """
     patterns = _clean_model_patterns((entry or {}).get("models"))
     if not patterns:
         return True
     name = str(model or "").strip().lower()
     if not name:
-        return True
+        return False
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
 
 
 def _clean_key_entry(entry):
-    """Normalize one stored key entry; returns None when unusable."""
+    """Normalize one stored key entry; returns None when unusable.
+
+    A deleted entry keeps its row even though its secret is gone: the id is
+    what the usage log records, so dropping the row would make every past
+    request of that key unattributable. Deletion is one-way - the secret is
+    never stored again and the entry can only ever be read, not re-enabled.
+    """
     if not isinstance(entry, dict):
         return None
     key = str(entry.get("key") or "").strip()
-    if not key:
+    deleted_at = str(entry.get("deleted_at") or "").strip()
+    if not key and not deleted_at:
         return None
     realm = str(entry.get("realm") or "").strip().lower()
     if realm not in REALMS:
@@ -311,8 +335,9 @@ def _clean_key_entry(entry):
         "key": key,
         "realm": realm,
         "models": _clean_model_patterns(entry.get("models")),
-        "enabled": entry.get("enabled", True) is not False,
+        "enabled": False if deleted_at else entry.get("enabled", True) is not False,
         "created_at": entry.get("created_at") or time.strftime("%Y/%m/%d %H:%M"),
+        "deleted_at": deleted_at,
     }
 
 
@@ -342,7 +367,7 @@ def _unique_key_id(candidate, used):
             return alt
 
 
-def api_keys(accounts_dir):
+def api_keys(accounts_dir, include_deleted=False):
     """Every configured key, newest shape first.
 
     A settings file written by an older build only has the single
@@ -350,6 +375,11 @@ def api_keys(accounts_dir):
     upgrades keep working without a migration step. Ids are made unique here
     as well as on write, so a file that already holds a duplicate (and no
     longer has to be saved before it behaves) reads back as distinct rows.
+
+    Deleted entries are hidden by default: they are gone as credentials, and
+    match_api_key must never see them. Their rows stay on disk (and come back
+    with include_deleted) because the usage log names a key by id, and an id
+    with no name is not a table anyone can read.
     """
     data = load(accounts_dir)
     stored = data.get("api_keys")
@@ -359,11 +389,19 @@ def api_keys(accounts_dir):
         seen_ids = set()
         for raw in stored:
             entry = _clean_key_entry(raw)
-            if entry and entry["key"] not in seen:
+            if entry is None:
+                continue
+            # Deduplicate on the secret, and only when there is one: every
+            # deleted entry has an empty key, and those are distinct rows.
+            if entry["key"]:
+                if entry["key"] in seen:
+                    continue
                 seen.add(entry["key"])
-                entry["id"] = _unique_key_id(entry["id"], seen_ids)
-                seen_ids.add(entry["id"])
-                out.append(entry)
+            entry["id"] = _unique_key_id(entry["id"], seen_ids)
+            seen_ids.add(entry["id"])
+            out.append(entry)
+        if not include_deleted:
+            out = [e for e in out if not e.get("deleted_at")]
         return out
 
     if data.get("api_key_set"):
@@ -376,23 +414,52 @@ def api_keys(accounts_dir):
                 "realm": "",
                 "models": [],
                 "enabled": True,
+                "created_at": "",
+                "deleted_at": "",
             }]
     return []
 
 
 def set_api_keys(accounts_dir, keys):
-    """Replace the whole key list. Returns the stored list."""
+    """Replace the whole key list. Returns the saved (live) list.
+
+    Removal is a soft delete. The caller is the panel, which can only submit
+    the rows it can see and cannot see deleted ones, so an id that vanishes
+    from the submission is marked deleted instead of dropped: the usage log
+    attributes spend by id, and losing the id would dump a key's whole history
+    into "(未知 key)". The secret is wiped at that same moment, so a deleted
+    key can never authenticate again.
+    """
     with _lock:
+        previous = api_keys(accounts_dir, include_deleted=True)
         cleaned = []
         seen = set()
         seen_ids = set()
         for raw in keys or []:
             entry = _clean_key_entry(raw)
-            if entry and entry["key"] not in seen:
+            if entry is None:
+                continue
+            if entry["key"]:
+                if entry["key"] in seen:
+                    continue
                 seen.add(entry["key"])
-                entry["id"] = _unique_key_id(entry["id"], seen_ids)
-                seen_ids.add(entry["id"])
-                cleaned.append(entry)
+            entry["id"] = _unique_key_id(entry["id"], seen_ids)
+            seen_ids.add(entry["id"])
+            cleaned.append(entry)
+        for old in previous:
+            if old["id"] in seen_ids:
+                continue
+            seen_ids.add(old["id"])
+            cleaned.append({
+                "id": old["id"],
+                "name": old["name"],
+                "key": "",
+                "realm": old.get("realm") or "",
+                "models": old.get("models") or [],
+                "enabled": False,
+                "created_at": old.get("created_at") or "",
+                "deleted_at": old.get("deleted_at") or time.strftime("%Y/%m/%d %H:%M"),
+            })
         data = load(accounts_dir)
         data["api_keys"] = cleaned
         # The single-key fields are now derived; drop them so there is one
@@ -400,7 +467,7 @@ def set_api_keys(accounts_dir, keys):
         data.pop("api_key", None)
         data.pop("api_key_set", None)
         save(accounts_dir, data)
-        return cleaned
+        return [e for e in cleaned if not e.get("deleted_at")]
 
 
 def match_api_key(accounts_dir, supplied, extra_keys=()):
@@ -413,7 +480,10 @@ def match_api_key(accounts_dir, supplied, extra_keys=()):
     if not supplied:
         return None
     for entry in api_keys(accounts_dir):
-        if entry["enabled"] and hmac.compare_digest(supplied, entry["key"]):
+        # A deleted entry is already stored with enabled=False; the explicit
+        # check keeps a hand-edited settings file from reviving one.
+        if entry["enabled"] and not entry.get("deleted_at") \
+                and hmac.compare_digest(supplied, entry["key"]):
             out = dict(entry)
             out["source"] = "panel"
             return out
@@ -802,6 +872,164 @@ def set_prompt_config(accounts_dir, cfg):
     return clean
 
 
+def daily_credit_limit(accounts_dir):
+    """Daily credit guard: an account that already spent this many credits
+    today serves free models only until local midnight, so a client that
+    would keep burning credits on paid models rotates to another account
+    instead of spending the whole balance.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    try:
+        value = int(load(accounts_dir).get("daily_credit_limit") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def set_daily_credit_limit(accounts_dir, value):
+    """Persist the daily credit threshold. Returns the stored value."""
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(0, value)
+    with _lock:
+        data = load(accounts_dir)
+        data["daily_credit_limit"] = value
+        save(accounts_dir, data)
+    return value
+
+
+def _clamp_refresh_minutes(value):
+    """A month is well past "often enough"; the cap keeps a typo from parking
+    the next refresh beyond any horizon the panel can show."""
+    return max(0.0, min(MAX_PRICING_REFRESH_MINUTES, value))
+
+
+def _migrate_pricing_refresh(data, accounts_dir):
+    """(found, minutes) - convert a pre-minutes settings.json in place.
+
+    `pricing_refresh_hours` used to hold hours. Reading it as minutes would
+    turn 6 hours into 6 minutes, so the value is multiplied by 60 here, written
+    under the new key and the old key dropped - one time, on the first read
+    after the upgrade. A value that is not a number just loses the stale key
+    and falls back to the default; a legacy 0 still means "off".
+    """
+    legacy = data.pop(LEGACY_PRICING_REFRESH_HOURS_KEY, None)
+    if legacy is None:
+        return False, None
+    try:
+        minutes = _clamp_refresh_minutes(float(legacy) * 60.0)
+    except (TypeError, ValueError):
+        minutes = None
+    else:
+        data[PRICING_REFRESH_MINUTES_KEY] = minutes
+    try:
+        save(accounts_dir, data)
+    except Exception:
+        # A read-only accounts dir must not take the panel down; the converted
+        # value is still returned, and the next read simply migrates again.
+        pass
+    return True, minutes
+
+
+def pricing_refresh_minutes(accounts_dir):
+    """How often the gateway refreshes the OpenRouter price history, in minutes.
+
+    Zero disables the refresh, which keeps installs that predate the setting
+    on the bundled snapshot. A settings.json written before the unit changed
+    carries `pricing_refresh_hours`, migrated here on first read (see
+    `_migrate_pricing_refresh`). Anything not a number falls back to the
+    default, so a hand-edited settings.json cannot wedge the refresh loop.
+    """
+    with _lock:
+        data = load(accounts_dir)
+        raw = data.get(PRICING_REFRESH_MINUTES_KEY)
+        if raw is None:
+            found, minutes = _migrate_pricing_refresh(data, accounts_dir)
+            if not found:
+                return DEFAULT_PRICING_REFRESH_MINUTES
+            if minutes is None:
+                return DEFAULT_PRICING_REFRESH_MINUTES
+            return minutes
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_PRICING_REFRESH_MINUTES
+    return value if value > 0 else 0.0
+
+
+def set_pricing_refresh_minutes(accounts_dir, value):
+    """Persist the refresh interval in minutes. Returns the stored value."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return pricing_refresh_minutes(accounts_dir)
+    value = _clamp_refresh_minutes(value)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_REFRESH_MINUTES_KEY] = value
+        # The minutes key is the one in force; a leftover legacy key would only
+        # confuse a later rollback into reading a stale interval.
+        data.pop(LEGACY_PRICING_REFRESH_HOURS_KEY, None)
+        save(accounts_dir, data)
+    return value
+
+
+def model_daily_token_limit(accounts_dir):
+    """Per-model daily guard: an account that already burned this many
+    tokens today on ONE model stops being handed out for that model until
+    local midnight, while every other model keeps working.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    try:
+        value = int(load(accounts_dir).get("model_daily_token_limit") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def set_model_daily_token_limit(accounts_dir, value):
+    """Persist the per-model daily token threshold. Returns the stored value."""
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(0, value)
+    with _lock:
+        data = load(accounts_dir)
+        data["model_daily_token_limit"] = value
+        save(accounts_dir, data)
+    return value
+def pricing_variant_inherit(accounts_dir):
+    """Whether a model name may inherit its price from a suffix-stripped base.
+
+    On unless the operator turns it off: a hub model carrying a channel suffix
+    (`deepseek-r1-0528-lkeap`) is the same entity as its base model upstream,
+    and without this the gateway would show "未定价" for a model it can price
+    exactly. Off restores the previous behaviour - only the override table and
+    an exact name match can price a model - so an install that wants the
+    strictest possible rule keeps it. A settings.json that predates the key
+    reads back as on, which is the default this ships with.
+    """
+    value = load(accounts_dir).get(PRICING_VARIANT_INHERIT_KEY)
+    return True if value is None else value is True
+
+
+def set_pricing_variant_inherit(accounts_dir, enabled):
+    """Persist the variant-inheritance switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_VARIANT_INHERIT_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
 def auto_switch_product(accounts_dir):
     """Whether an upstream 429 may rotate an account's outbound identity.
 
@@ -873,7 +1101,13 @@ _SLOT_ID_RE = re.compile(r"^slot-(\d+)$")
 
 
 def _clean_slot_entry(entry, fallback_id=None):
-    """Normalize one stored slot; returns None when unusable."""
+    """Normalize one stored slot; returns None when unusable.
+
+    The exit fields are written by a probe and stay empty until one runs. An
+    empty name means "label this slot by its exit", which is what the panel
+    shows; it is never silently replaced by the id here, or the operator could
+    not tell an auto-named slot from a renamed one.
+    """
     if not isinstance(entry, dict):
         return None
     url = str(entry.get("url") or "").strip()
@@ -882,11 +1116,22 @@ def _clean_slot_entry(entry, fallback_id=None):
     slot_id = str(entry.get("id") or "").strip()
     if not slot_id:
         slot_id = fallback_id or ""
+    try:
+        probed_at = int(entry.get("probed_at") or 0)
+    except (TypeError, ValueError):
+        probed_at = 0
     return {
         "id": slot_id,
-        "name": str(entry.get("name") or "").strip() or slot_id,
+        "name": str(entry.get("name") or "").strip(),
         "url": url,
         "enabled": entry.get("enabled", True) is not False,
+        "ip": str(entry.get("ip") or "").strip(),
+        "country": str(entry.get("country") or "").strip(),
+        "country_code": str(entry.get("country_code") or "").strip().upper(),
+        "ip_type": str(entry.get("ip_type") or "").strip().lower(),
+        "isp": str(entry.get("isp") or "").strip(),
+        "asn": str(entry.get("asn") or "").strip(),
+        "probed_at": probed_at,
     }
 
 
@@ -964,6 +1209,40 @@ def set_proxy_slots(accounts_dir, slots):
         data["proxy_slot_seq"] = seq
         save(accounts_dir, data)
         return cleaned
+
+
+def update_proxy_slot(accounts_dir, slot_id, fields, defaults=None):
+    """Merge `fields` into one stored slot; returns the merged copy, or None.
+
+    Both the read and the write happen under the store lock. A plain
+    read-modify-write from the caller would race with a panel save and write
+    back a list that no longer matches what is on disk, silently reverting
+    whatever the other writer changed.
+
+    `defaults` are applied only to fields that are still empty at write time,
+    so a value the operator typed while the caller was working is never
+    overwritten by a derived one.
+    """
+    slot_id = str(slot_id or "").strip()
+    if not slot_id:
+        return None
+    with _lock:
+        out, found = [], None
+        for entry in proxy_slots(accounts_dir):
+            if entry["id"] == slot_id and found is None:
+                entry = dict(entry)
+                entry.update(fields)
+                for key, value in (defaults or {}).items():
+                    if not entry.get(key):
+                        entry[key] = value
+                found = entry
+            out.append(entry)
+        if found is None:
+            return None
+        data = load(accounts_dir)
+        data["proxy_slots"] = out
+        save(accounts_dir, data)
+        return found
 
 
 def drop_missing_bindings(pool, slots):

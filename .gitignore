@@ -6,6 +6,10 @@ accounts/*.json
 usage/*.jsonl
 usage/*.json
 !usage/README.txt
+usage/*.bak*
+
+# 运行时日志文件
+logs/
 
 # 便携版内置运行时（仓库只保存纯源码，绿色包通过 Release 发布）
 python/
@@ -22,8 +26,7 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
-
-usage/*.bak*
+.codebuddy/
 
 # Local Docker Compose override
 docker-compose.override.yml

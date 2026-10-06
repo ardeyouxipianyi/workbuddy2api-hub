@@ -53,6 +53,11 @@ def main(argv):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         [ROOT] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    # A suite may print non-ASCII (Chinese labels are common here). The child
+    # writes straight into a utf-8 log file, so its own stdout encoding has to
+    # be utf-8 too - on the CI Windows runner the locale is cp1252 and a
+    # Chinese label would otherwise abort the suite with UnicodeEncodeError.
+    env["PYTHONIOENCODING"] = "utf-8"
     have_node = shutil.which("node") is not None
 
     selected = suites(pattern)

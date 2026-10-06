@@ -85,7 +85,9 @@ const api = new Function(script + `
                  {id: 'b', name: 'b', url: 'http://127.0.0.1:2', enabled: true}];
   await api.loadProxySlots();
   assert.equal(api.rows().length, 2, 'the poll must not replace the working copy');
-  assert.equal(api.rows()[1].name, '槽 2',
+  // The new row is the one with no id yet - the server rows above all have
+  // one - so a poll that replaced the working copy would fail this.
+  assert.equal(api.rows()[1].id, '',
                'the row being filled in is still there: ' + JSON.stringify(api.rows()[1]));
 
   // 4. An explicit refresh still can - the polling path is the only one held.
