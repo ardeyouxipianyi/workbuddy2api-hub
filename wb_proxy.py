@@ -5793,6 +5793,658 @@ def responses_to_chat(payload):
         chat["parallel_tool_calls"] = payload["parallel_tool_calls"]
     return chat
 
+
+# ---------------------------------------------------------------------------
+# Anthropic Messages API (/v1/messages) <-> Chat Completions
+# ---------------------------------------------------------------------------
+def anthropic_error_type(status):
+    """Map an HTTP status to the Anthropic error.type vocabulary."""
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = 500
+    if status in (400, 422):
+        return "invalid_request_error"
+    if status == 401:
+        return "authentication_error"
+    if status == 403:
+        return "permission_error"
+    if status == 404:
+        return "not_found_error"
+    if status == 429:
+        return "rate_limit_error"
+    if status in (503, 529):
+        return "overloaded_error"
+    return "api_error"
+
+
+def anthropic_error_obj(status, message, error_type=None):
+    return {
+        "type": "error",
+        "error": {
+            "type": error_type or anthropic_error_type(status),
+            "message": str(message or "upstream error"),
+        },
+    }
+
+
+def anthropic_sse_frame(event, payload):
+    body = dict(payload or {})
+    body["type"] = event
+    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    return ("event: %s\ndata: %s\n\n" % (event, raw)).encode("utf-8")
+
+
+def _anthropic_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return ""
+
+
+def _anthropic_json_text(value):
+    if value is None:
+        return "{}"
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return "{}"
+
+
+def _anthropic_parse_tool_input(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {"raw": value}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    return {"value": value}
+
+
+def _anthropic_content_to_text(value, is_error=None):
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, list):
+        parts = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            typ = str(item.get("type") or "")
+            if typ == "image":
+                part = _anthropic_image_part(item)
+                parts.append(_anthropic_text((part.get("image_url") or {}).get("url")))
+            elif typ == "document":
+                parts.append(_anthropic_document_text(item))
+            else:
+                parts.append(_anthropic_block_text(item))
+        text = "".join(parts)
+    elif isinstance(value, dict):
+        text = _anthropic_block_text(value)
+    else:
+        text = _anthropic_text(value)
+    if is_error is True:
+        return "error: " + text
+    return text
+
+
+def _anthropic_block_text(block):
+    if not isinstance(block, dict):
+        return ""
+    if "text" in block:
+        return _anthropic_text(block.get("text"))
+    if "content" in block:
+        return _anthropic_content_to_text(block.get("content"))
+    return ""
+
+
+def _anthropic_image_part(block):
+    source = block.get("source") if isinstance(block, dict) else None
+    url = ""
+    if isinstance(source, dict):
+        stype = str(source.get("type") or "")
+        if stype == "base64":
+            media = _anthropic_text(source.get("media_type") or "image/png")
+            data = _anthropic_text(source.get("data"))
+            url = "data:%s;base64,%s" % (media, data)
+        elif stype == "url":
+            url = _anthropic_text(source.get("url"))
+        elif stype == "file":
+            url = _anthropic_text(source.get("file_id") or source.get("url"))
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _anthropic_document_text(block):
+    if not isinstance(block, dict):
+        return ""
+    title = _anthropic_text(block.get("title"))
+    source = block.get("source") if isinstance(block.get("source"), dict) else {}
+    stype = str(source.get("type") or "")
+    body = ""
+    if stype == "text":
+        body = _anthropic_text(source.get("data"))
+    elif stype == "content":
+        body = _anthropic_content_to_text(source.get("content"))
+    elif stype == "base64":
+        media = _anthropic_text(source.get("media_type") or "application/octet-stream")
+        body = "[document %s omitted]" % media
+    elif stype == "url":
+        body = _anthropic_text(source.get("url"))
+    elif stype == "file":
+        body = _anthropic_text(source.get("file_id") or source.get("url"))
+    if title:
+        return title + "\n" + body
+    return body
+
+
+def _anthropic_system_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            text = _anthropic_text(item.get("text"))
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def _anthropic_tool_choice(value):
+    if isinstance(value, str):
+        val = value.strip().lower()
+        return {"auto": "auto", "any": "required", "none": "none",
+                "required": "required"}.get(val, val)
+    if isinstance(value, dict):
+        typ = str(value.get("type") or "").strip().lower()
+        if typ == "auto":
+            return "auto"
+        if typ == "any":
+            return "required"
+        if typ == "none":
+            return "none"
+        if typ == "tool":
+            return {"type": "function",
+                    "function": {"name": _anthropic_text(value.get("name"))}}
+    return None
+
+
+def anthropic_tools_to_chat(tools):
+    out = []
+    skipped = []
+    if not isinstance(tools, list):
+        return out, skipped
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("function"), dict):
+            out.append(item)
+            continue
+        name = _anthropic_text(item.get("name") or item.get("type"))
+        schema = item.get("input_schema")
+        if schema is None:
+            schema = item.get("parameters")
+        if schema is None:
+            if name:
+                skipped.append(name)
+            continue
+        fn = {"name": name}
+        if item.get("description") is not None:
+            fn["description"] = item.get("description")
+        fn["parameters"] = schema
+        out.append({"type": "function", "function": fn})
+    return out, skipped
+
+
+def anthropic_effort_from_messages(payload):
+    if not isinstance(payload, dict):
+        return None
+    output_config = payload.get("output_config")
+    if isinstance(output_config, dict):
+        effort = _anthropic_text(output_config.get("effort")).strip()
+        if effort:
+            return effort
+    thinking = payload.get("thinking")
+    if not isinstance(thinking, dict):
+        return None
+    typ = _anthropic_text(thinking.get("type")).strip().lower()
+    if typ == "disabled":
+        return "none"
+    if typ != "enabled":
+        return None
+    try:
+        budget = int(thinking.get("budget_tokens") or 0)
+    except (TypeError, ValueError):
+        return None
+    if budget <= 0:
+        return None
+    if budget >= 32000:
+        return "xhigh"
+    if budget >= 16000:
+        return "high"
+    if budget >= 8000:
+        return "medium"
+    return "low"
+
+
+def _anthropic_blocks_to_messages(role, blocks):
+    tool_calls = []
+    tool_messages = []
+    content_parts = []
+    texts = []
+    has_non_text = False
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        typ = str(block.get("type") or "")
+        if typ in ("thinking", "redacted_thinking"):
+            continue
+        if typ in ("tool_use", "server_tool_use"):
+            tool_calls.append({
+                "id": _anthropic_text(block.get("id")),
+                "type": "function",
+                "function": {
+                    "name": _anthropic_text(block.get("name")),
+                    "arguments": _anthropic_json_text(block.get("input")),
+                },
+            })
+            continue
+        if typ == "tool_result":
+            tool_messages.append({
+                "role": "tool",
+                "tool_call_id": _anthropic_text(block.get("tool_use_id")),
+                "content": _anthropic_content_to_text(block.get("content"),
+                                                      block.get("is_error")),
+            })
+            continue
+        if typ == "image":
+            part = _anthropic_image_part(block)
+            if not (part.get("image_url") or {}).get("url"):
+                continue
+            has_non_text = True
+            content_parts.append(part)
+            continue
+        if typ == "document":
+            has_non_text = True
+            content_parts.append({"type": "text", "text": _anthropic_document_text(block)})
+            continue
+        text = _anthropic_block_text(block)
+        texts.append(text)
+        content_parts.append({"type": "text", "text": text})
+    out = list(tool_messages)
+    if not tool_calls and not texts and not has_non_text:
+        return out
+    msg = {"role": role or "user"}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+    if has_non_text:
+        msg["content"] = content_parts
+    elif texts:
+        msg["content"] = "".join(texts)
+    else:
+        msg["content"] = ""
+    out.append(msg)
+    return out
+
+
+def messages_to_chat(payload):
+    """Translate an Anthropic Messages request into Chat Completions."""
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    model = _anthropic_text(payload.get("model")).strip()
+    if not model:
+        raise ValueError("model is required")
+    messages_in = payload.get("messages")
+    if not isinstance(messages_in, list):
+        raise ValueError("messages must be a list")
+    if not messages_in:
+        raise ValueError("messages must not be empty")
+    chat = {"model": model, "messages": []}
+    for key in ("temperature", "top_p"):
+        if payload.get(key) is not None:
+            chat[key] = payload[key]
+    if payload.get("max_tokens") is not None:
+        chat["max_tokens"] = payload["max_tokens"]
+    else:
+        default_max = model_default_max_output_tokens(model)
+        if default_max:
+            chat["max_tokens"] = default_max
+    if payload.get("stream") is not None:
+        chat["stream"] = bool(payload.get("stream"))
+    stops = payload.get("stop_sequences")
+    if isinstance(stops, list) and stops:
+        chat["stop"] = stops
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("user_id") is not None:
+        chat["user"] = metadata.get("user_id")
+    tools, skipped = anthropic_tools_to_chat(payload.get("tools"))
+    if tools:
+        chat["tools"] = tools
+    choice = _anthropic_tool_choice(payload.get("tool_choice"))
+    if choice is not None:
+        chat["tool_choice"] = choice
+    raw_choice = payload.get("tool_choice")
+    if isinstance(raw_choice, dict) and raw_choice.get("disable_parallel_tool_use") is True:
+        chat["parallel_tool_calls"] = False
+    effort = anthropic_effort_from_messages(payload)
+    if effort:
+        chat["reasoning_effort"] = effort
+    messages = []
+    system = _anthropic_system_text(payload.get("system"))
+    if skipped:
+        note = ("These Anthropic server tools are not available here: "
+                + ", ".join(skipped) + ". Do not call them.")
+        system = (system + "\n" + note) if system else note
+    if system:
+        messages.append({"role": "system", "content": system})
+    for item in messages_in:
+        if not isinstance(item, dict):
+            continue
+        role = _anthropic_text(item.get("role")).strip() or "user"
+        if role not in ("user", "assistant"):
+            raise ValueError(
+                "messages[].role must be user or assistant; "
+                "pass a system prompt in the top-level system field")
+        content = item.get("content")
+        if isinstance(content, str):
+            messages.append({"role": role, "content": content})
+        elif isinstance(content, list):
+            messages.extend(_anthropic_blocks_to_messages(role, content))
+        elif content is not None:
+            text = _anthropic_text(content)
+            if text:
+                messages.append({"role": role, "content": text})
+    chat["messages"] = messages
+    return chat
+
+
+def _anthropic_usage(usage):
+    out = {
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+    }
+    if not isinstance(usage, dict):
+        return out
+    try:
+        out["input_tokens"] = int(usage.get("prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        out["output_tokens"] = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        pass
+    cached = usage.get("prompt_cache_hit_tokens")
+    if cached is None:
+        cached = _best_cached_tokens(usage)
+    try:
+        out["cache_read_input_tokens"] = int(cached or 0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        out["cache_creation_input_tokens"] = int(usage.get("prompt_cache_write_tokens") or 0)
+    except (TypeError, ValueError):
+        pass
+    service_tier = usage.get("service_tier")
+    if service_tier:
+        out["service_tier"] = service_tier
+    return out
+
+
+def _anthropic_message_id(value):
+    value = _anthropic_text(value)
+    if not value:
+        return _new_id("msg_")
+    return value if value.startswith("msg_") else "msg_" + value
+
+
+def _anthropic_stop_reason(finish_reason):
+    value = str(finish_reason or "").strip().lower()
+    if value == "length":
+        return "max_tokens"
+    if value in ("tool_calls", "function_call"):
+        return "tool_use"
+    if value in ("content_filter", "refusal"):
+        return "refusal"
+    return "end_turn"
+
+
+def chat_to_messages(obj):
+    """Fold one Chat Completions object into an Anthropic Messages object."""
+    if not isinstance(obj, dict):
+        obj = {}
+    choices = obj.get("choices") if isinstance(obj.get("choices"), list) else []
+    message = {}
+    finish = ""
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message") if isinstance(choices[0].get("message"), dict) else {}
+        finish = choices[0].get("finish_reason") or ""
+    content = []
+    text = message.get("content")
+    if isinstance(text, list):
+        text = "".join(_anthropic_block_text(part) for part in text if isinstance(part, dict))
+    text = _anthropic_text(text)
+    if text:
+        content.append({"type": "text", "text": text})
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            content.append({
+                "type": "tool_use",
+                "id": _anthropic_text(call.get("id")) or _new_id("toolu_"),
+                "name": _anthropic_text(fn.get("name")),
+                "input": _anthropic_parse_tool_input(fn.get("arguments")),
+            })
+    return {
+        "id": _anthropic_message_id(obj.get("id")),
+        "type": "message",
+        "role": "assistant",
+        "model": _anthropic_text(obj.get("model")),
+        "content": content,
+        "stop_reason": _anthropic_stop_reason(finish),
+        "stop_sequence": None,
+        "usage": _anthropic_usage(obj.get("usage")),
+    }
+
+
+def _anthropic_estimate_chat_tokens(chat):
+    values = []
+    if isinstance(chat, dict):
+        for msg in chat.get("messages") or []:
+            if isinstance(msg, dict):
+                values.append(_anthropic_json_text(msg.get("content")))
+                for call in msg.get("tool_calls") or []:
+                    if isinstance(call, dict):
+                        values.append(_anthropic_json_text(call))
+        for tool in chat.get("tools") or []:
+            values.append(_anthropic_json_text(tool))
+    return sum(estimate_tokens(value) for value in values if value)
+
+
+def stream_messages_events(raw_iter, model, holder=None):
+    """Yield Anthropic Messages SSE frames from a chat-completions SSE stream."""
+    holder = holder if isinstance(holder, dict) else {}
+    state = {
+        "started": False,
+        "done": False,
+        "failed": False,
+        "id": "",
+        "model": model,
+        "stop": "end_turn",
+        "text_open": False,
+        "text_idx": None,
+        "next": 0,
+        "tools": {},
+        "tool_order": [],
+        "usage": None,
+    }
+
+    def usage_payload():
+        return _anthropic_usage(state.get("usage"))
+
+    def ensure_start(chunk=None):
+        if state["started"]:
+            return None
+        state["started"] = True
+        if isinstance(chunk, dict):
+            state["id"] = _anthropic_text(chunk.get("id"))
+            state["model"] = _anthropic_text(chunk.get("model")) or state["model"]
+        return anthropic_sse_frame("message_start", {
+            "message": {
+                "id": _anthropic_message_id(state["id"]),
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": state["model"],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+        })
+
+    def ensure_text():
+        if state["text_open"]:
+            return None
+        state["text_idx"] = state["next"]
+        state["next"] += 1
+        state["text_open"] = True
+        return anthropic_sse_frame("content_block_start", {
+            "index": state["text_idx"],
+            "content_block": {"type": "text", "text": ""},
+        })
+
+    for line in raw_iter:
+        if state["done"] or state["failed"]:
+            break
+        data = strip_data_prefix(line.decode("utf-8", "replace"))
+        if not data:
+            continue
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+        except Exception:
+            continue
+        if isinstance(chunk.get("error"), dict):
+            state["failed"] = True
+            err = chunk["error"]
+            yield anthropic_sse_frame("error", {
+                "error": {
+                    "type": anthropic_error_type(502),
+                    "message": _anthropic_text(err.get("message") or "upstream error"),
+                }
+            })
+            return
+        start = ensure_start(chunk)
+        if start:
+            yield start
+        # Capture usage before the choices guard: the final upstream frame
+        # carries both the usage block and the finish_reason (and no delta),
+        # so skipping it here would zero out every streaming usage row.
+        if isinstance(chunk.get("usage"), dict):
+            state["usage"] = chunk["usage"]
+        choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
+        if not choices:
+            continue
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+        text = delta.get("content")
+        if isinstance(text, str) and text:
+            frame = ensure_text()
+            if frame:
+                yield frame
+            yield anthropic_sse_frame("content_block_delta", {
+                "index": state["text_idx"],
+                "delta": {"type": "text_delta", "text": text},
+            })
+        for call in delta.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            try:
+                idx = int(call.get("index") or 0)
+            except (TypeError, ValueError):
+                idx = 0
+            entry = state["tools"].get(idx)
+            if entry is None:
+                entry = {"idx": idx, "block": None, "id": "", "name": "", "opened": False}
+                state["tools"][idx] = entry
+                state["tool_order"].append(idx)
+            if call.get("id"):
+                entry["id"] = _anthropic_text(call.get("id"))
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            if fn.get("name"):
+                entry["name"] = _anthropic_text(fn.get("name"))
+            args = fn.get("arguments") if fn.get("arguments") is not None else ""
+            if not entry["opened"] and (entry["id"] or entry["name"] or args):
+                if state["text_open"]:
+                    state["text_open"] = False
+                    yield anthropic_sse_frame("content_block_stop", {"index": state["text_idx"]})
+                entry["opened"] = True
+                entry["block"] = state["next"]
+                state["next"] += 1
+                if not entry["id"]:
+                    entry["id"] = "toolu_" + str(idx)
+                yield anthropic_sse_frame("content_block_start", {
+                    "index": entry["block"],
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": entry["id"],
+                        "name": entry["name"],
+                        "input": {},
+                    },
+                })
+            if entry["opened"] and args:
+                yield anthropic_sse_frame("content_block_delta", {
+                    "index": entry["block"],
+                    "delta": {"type": "input_json_delta", "partial_json": _anthropic_text(args)},
+                })
+        finish = choice.get("finish_reason")
+        if finish:
+            state["stop"] = _anthropic_stop_reason(finish)
+    if state["failed"]:
+        return
+    if not state["started"]:
+        start = ensure_start(None)
+        if start:
+            yield start
+    if state["text_open"]:
+        state["text_open"] = False
+        yield anthropic_sse_frame("content_block_stop", {"index": state["text_idx"]})
+    for idx in state["tool_order"]:
+        entry = state["tools"][idx]
+        if not entry["opened"]:
+            continue
+        yield anthropic_sse_frame("content_block_stop", {"index": entry["block"]})
+    state["done"] = True
+    # Hand the raw upstream usage block back to the caller: the stream
+    # response records it on the usage row, and without this every streamed
+    # Messages request was logged as usage_missing.
+    holder["usage"] = state.get("usage")
+    yield anthropic_sse_frame("message_delta", {
+        "delta": {"stop_reason": state["stop"], "stop_sequence": None},
+        "usage": usage_payload(),
+    })
+    yield anthropic_sse_frame("message_stop", {})
+
+
 def _responses_usage(u):
     if not u:
         return None
@@ -6635,6 +7287,11 @@ class Handler(BaseHTTPRequestHandler):
         if hint:
             error["gateway_hint"] = hint
         self._json(code, {"error": error})
+    def _anthropic_error(self, code, message, err_type=None):
+        """Reply with the Anthropic JSON error envelope, not OpenAI's."""
+        self._handle_expect_continue()
+        self._discard_body()
+        return self._json(code, anthropic_error_obj(code, message, err_type))
     def _rate_limited(self, exc):
         """429 with Retry-After, so clients back off instead of hammering.
 
@@ -6675,6 +7332,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+    def _anthropic_rate_limited(self, exc):
+        """429 with Retry-After in the Anthropic error envelope."""
+        wait = max(1, int(getattr(exc, "wait", 60) or 60))
+        text = (getattr(exc, "message", "") or
+                "upstream rate limit reached for this model; retry in %ds" % wait)
+        if getattr(exc, "detail", "") and not getattr(exc, "message", ""):
+            text += " - " + str(exc.detail)[:200]
+        self._handle_expect_continue()
+        self._discard_body()
+        body = json.dumps(anthropic_error_obj(429, text, "rate_limit_error"),
+                          ensure_ascii=False).encode("utf-8")
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Retry-After", str(wait))
+        if cors_origin_allowed(self.path):
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _download(self, filename, obj):
         """Send a JSON document as a browser download.
         Content-Disposition is quoted because the filename is generated from
@@ -7380,12 +8057,30 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._read_payload(allow_list=allow_list)
         except BodyTooLarge as exc:
-            self._error(413, "payload too large (%d bytes > %d limit)"
-                        % (exc.length, MAX_PAYLOAD_BYTES), "invalid_request_error")
+            message = ("payload too large (%d bytes > %d limit)"
+                       % (exc.length, MAX_PAYLOAD_BYTES))
+            if self._anthropic_route():
+                self._anthropic_error(413, message, "invalid_request_error")
+            else:
+                self._error(413, message, "invalid_request_error")
             return None
         except BadJSON:
-            self._error(400, "invalid JSON body", "invalid_request_error")
+            if self._anthropic_route():
+                self._anthropic_error(400, "invalid JSON body", "invalid_request_error")
+            else:
+                self._error(400, "invalid JSON body", "invalid_request_error")
             return None
+    def _anthropic_route(self):
+        """True when the request path is one of the Anthropic Messages routes.
+
+        Errors raised before the route dispatcher runs (body read, size cap)
+        have to answer in the Anthropic envelope, or a Claude Code client sees
+        an OpenAI-shaped error it cannot parse.
+        """
+        return self.path.split("?")[0] in (
+            "/v1/messages", "/messages",
+            "/v1/messages/count_tokens", "/messages/count_tokens",
+        )
     def _validate_settings_save(self, payload):
         """Validate the whole panel save before anything is written.
 
@@ -8830,6 +9525,183 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _handle_messages_count_tokens(self, payload):
+        """Best-effort Anthropic count_tokens endpoint.
+
+        The WorkBuddy upstream has no Anthropic tokenizer. This estimate uses
+        the same CJK-aware estimator as the gateway's own accounting and keeps
+        the native response shape; it is intentionally not presented as an
+        official model-token count.
+        """
+        try:
+            chat = messages_to_chat(payload)
+        except ValueError as exc:
+            return self._anthropic_error(400, str(exc), "invalid_request_error")
+        return self._json(200, {"input_tokens": _anthropic_estimate_chat_tokens(chat)})
+
+    def _handle_messages(self, payload):
+        """Serve an Anthropic Messages request through the chat pipeline."""
+        try:
+            chat_req = messages_to_chat(payload)
+        except ValueError as exc:
+            return self._anthropic_error(400, str(exc), "invalid_request_error")
+        model = chat_req.get("model") or "unknown"
+        want_stream = bool(chat_req.get("stream"))
+        session_key = extract_session_key(self.headers, chat_req)
+        t_start = time.time()
+        fp = prompt_fingerprint(chat_req.get("messages"))
+        try:
+            client_ip = self.client_address[0] if self.client_address else ""
+        except Exception:
+            client_ip = ""
+        set_request_context(
+            request_id=(self.headers.get("X-Request-Id")
+                        or self.headers.get("X-Request-ID") or uuid.uuid4().hex),
+            client_ip=client_ip,
+            user_agent=self.headers.get("User-Agent") or "",
+            path=self.path.split("?")[0],
+        )
+        log("messages: model=%s stream=%s msgs=%d effort=%r tools=%d"
+            % (model, want_stream, len(chat_req.get("messages") or []),
+               chat_req.get("reasoning_effort"), len(chat_req.get("tools") or [])))
+        try:
+            req_realm = self._request_realm() or CURRENT_REALM
+            blocked = self._cross_realm_error(chat_req.get("model"), req_realm)
+            if blocked:
+                return self._anthropic_error(400, blocked, "invalid_request_error")
+            banned = self._banned_model_error(chat_req.get("model"))
+            if banned:
+                return self._anthropic_error(400, banned, "invalid_request_error")
+            key_blocked = self._key_model_error(chat_req.get("model"))
+            if key_blocked:
+                return self._anthropic_error(400, key_blocked, "invalid_request_error")
+            session_meta = session_meta_for(
+                chat_req, session_key=session_key,
+                inbound_request_id=(self.headers.get("X-Conversation-Request-ID")
+                                    or self.headers.get("X-Root-Request-ID") or ""),
+                trace_id=(self.headers.get("X-Trace-ID") or ""))
+            upstream, account, effort = open_upstream(
+                chat_req, session_key=session_key, target_realm=req_realm,
+                session_meta=session_meta)
+        except ContentRejected as exc:
+            record_error(model, 403, exc.detail[:200],
+                         elapsed_ms=int((time.time() - t_start) * 1000),
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
+            return self._anthropic_error(403, "upstream 403: %s" %
+                                          (exc.detail or "content rejected"),
+                                          "permission_error")
+        except RateLimited as exc:
+            record_error(model, 429, exc.detail[:200],
+                         elapsed_ms=int((time.time() - t_start) * 1000),
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
+            return self._anthropic_rate_limited(exc)
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read(600).decode("utf-8", "replace")
+            except Exception:
+                detail = str(exc)
+            record_error(model, exc.code, detail,
+                         elapsed_ms=int((time.time() - t_start) * 1000),
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
+            return self._anthropic_error(exc.code,
+                                         "upstream %s: %s" % (exc.code, detail))
+        except Exception as exc:
+            message = str(exc)
+            status = upstream_error_status(message)
+            record_error(model, status, message,
+                         elapsed_ms=int((time.time() - t_start) * 1000),
+                         account=getattr(exc, "account_uid", None),
+                         key=self._key_id())
+            if status == 503:
+                message += " - add or enable one at the dashboard (/)"
+            return self._anthropic_error(status, message)
+        with upstream:
+            if want_stream:
+                return self._messages_stream_response(
+                    upstream, model, fp, account, t_start,
+                    base_body=chat_req, session_key=session_key,
+                    realm=req_realm, session_meta=session_meta, effort=effort)
+            return self._messages_nonstream_response(
+                upstream, model, fp, account, t_start,
+                base_body=chat_req, session_key=session_key,
+                realm=req_realm, effort=effort)
+
+    def _messages_nonstream_response(self, upstream, model, fp, account, t_start,
+                                     base_body=None, session_key=None, realm=None,
+                                     effort=None):
+        try:
+            chat_obj = aggregate_stream(upstream, model, None)
+            result = chat_to_messages(chat_obj)
+            wall = int((time.time() - t_start) * 1000)
+            record_usage(model, chat_obj.get("usage"), stream=False, elapsed_ms=wall,
+                         fp=fp, account=account.uid, key=self._key_id(), effort=effort)
+            return self._json(200, result)
+        except Exception as exc:
+            wall = int((time.time() - t_start) * 1000)
+            record_error(model, 502, "messages upstream error: %s" % exc,
+                         elapsed_ms=wall, account=account.uid, key=self._key_id())
+            return self._anthropic_error(502, "upstream stream error: %s" % exc)
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    def _messages_stream_response(self, upstream, model, fp, account, t_start,
+                                  base_body=None, session_key=None, realm=None,
+                                  session_meta=None, effort=None):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        if cors_origin_allowed(self.path):
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        holder = {"usage": None}
+        first_ms = None
+        try:
+            for frame in stream_messages_events(upstream, model, holder):
+                if first_ms is None:
+                    first_ms = int((time.time() - t_start) * 1000)
+                self.wfile.write(frame)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            wall = int((time.time() - t_start) * 1000)
+            record_usage(model, holder.get("usage"), stream=True, elapsed_ms=wall,
+                         ttft_ms=first_ms,
+                         gen_ms=(wall - first_ms) if first_ms is not None else None,
+                         fp=fp, account=account.uid,
+                         outcome="client_aborted", key=self._key_id(), effort=effort)
+            return
+        except Exception as exc:
+            wall = int((time.time() - t_start) * 1000)
+            record_error(model, 502, "messages stream aborted: %s" % exc,
+                         elapsed_ms=wall, account=account.uid,
+                         usage=holder.get("usage"), stream=True,
+                         ttft_ms=first_ms, fp=fp, outcome="upstream_aborted",
+                         key=self._key_id())
+            try:
+                self.wfile.write(anthropic_sse_frame("error", {
+                    "error": {"type": "api_error", "message": str(exc)}}))
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+        wall = int((time.time() - t_start) * 1000)
+        record_usage(model, holder.get("usage"), stream=True, elapsed_ms=wall,
+                     ttft_ms=first_ms,
+                     gen_ms=(wall - first_ms) if first_ms is not None else None,
+                     fp=fp, account=account.uid, key=self._key_id(), effort=effort)
+        return
+
     def _open_upstream_error(self, exc, model, t_start, key=None):
         """Record and answer an open_upstream failure with one status."""
         message = str(exc)
@@ -8875,6 +9747,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_panel(path)
         if self._is_panel_route(path) and not self._panel_ok():
             return self._error(401, "panel password required", "invalid_request_error")
+        is_messages_route = path in (
+            "/v1/messages", "/messages",
+            "/v1/messages/count_tokens", "/messages/count_tokens",
+        )
         is_account_route = (
             path.startswith("/accounts/")
             or path == "/realm"
@@ -8883,17 +9759,35 @@ class Handler(BaseHTTPRequestHandler):
             or path.startswith("/logs")
             or path.startswith("/requests")
         )
-        if not is_account_route and path not in ("/v1/chat/completions", "/chat/completions",
-                                                "/v1/completions", "/completions",
-                                                "/v1/responses", "/responses"):
+        if not is_account_route and not is_messages_route and path not in (
+                "/v1/chat/completions", "/chat/completions",
+                "/v1/completions", "/completions",
+                "/v1/responses", "/responses"):
             return self._error(404, "not found", "invalid_request_error")
-        if not self._authorized():
+        if is_messages_route:
+            if not self._key_ok():
+                return self._anthropic_error(
+                    401, "missing or invalid API key", "authentication_error")
+        elif not self._authorized():
             return
         payload = self._payload_or_error(allow_list=(path == "/accounts/import"))
         if payload is None:
             return
         if is_account_route:
             return self._handle_accounts(path, payload)
+        if is_messages_route:
+            if path.endswith("/count_tokens"):
+                return self._handle_messages_count_tokens(payload)
+            if not _chat_slots.acquire(timeout=CHAT_SLOT_WAIT_SECONDS):
+                message = ("gateway is at its concurrent chat limit "
+                           "(%d in flight); retry shortly" % MAX_CONCURRENT_CHAT)
+                record_error(payload.get("model") or "unknown", 503, message,
+                             stream=payload.get("stream"), key=self._key_id())
+                return self._anthropic_error(503, message, "overloaded_error")
+            try:
+                return self._handle_messages(payload)
+            finally:
+                _chat_slots.release()
         # Both OpenAI-shaped routes below can hold a thread for up to 600s.
         # Take a slot for the duration; release it in finally so every early
         # return (including client disconnects) gives the slot back.
@@ -8912,7 +9806,7 @@ class Handler(BaseHTTPRequestHandler):
                 path=path,
             )
             record_error(payload.get("model") or "unknown", 503, message,
-                         stream=payload.get("stream"))
+                         stream=payload.get("stream"), key=self._key_id())
             return self._error(503, message)
         try:
             return self._dispatch_chat_post(path, payload)
