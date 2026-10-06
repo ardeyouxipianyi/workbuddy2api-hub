@@ -285,6 +285,10 @@ class Account(object):
         self.proxy = self.proxy_legacy
         self.enabled = data.get("enabled", True)
         self.last_error = str(data.get("lastError") or "")
+        # Full upstream body behind `last_error`, for the dashboard tooltip. Kept
+        # in its own runtime-only field so the visible label keeps the truncation
+        # it has always had; never persisted, never exported.
+        self.last_error_detail = ""
         self.cooldown_until = float(data.get("cooldownUntil") or 0)
         # Per-model throttling. Upstream rate limits (code 6004 "usage exceeds
         # frequency limit") apply to ONE model for one account, not to the whole
@@ -367,12 +371,13 @@ class Account(object):
         """Return one consistent view of account and per-model cooldowns."""
         with self._throttle_lock:
             error = self.last_error
+            detail = self.last_error_detail
             deadline = self.cooldown_until
             active = [(model, until) for model, until in self.model_cooldowns.items()
                       if until > now]
         active.sort(key=lambda pair: (pair[1], pair[0]))
         models = [{"model": model, "expiresAt": int(until)} for model, until in active]
-        return error, deadline, models
+        return error, deadline, models, detail
 
     def model_cooldowns_snapshot(self):
         """Active model cooldowns, ordered by recovery time (epoch seconds)."""
@@ -381,7 +386,7 @@ class Account(object):
     def public(self):
         exp = self.expires_at or jwt_exp(self.access_token)
         now = time.time()
-        last_error, deadline, models = self._throttle_snapshot(now)
+        last_error, deadline, models, last_error_detail = self._throttle_snapshot(now)
         return {
             "uid": self.uid,
             "nickname": self.nickname or (self.uid[:8] if self.uid else "?"),
@@ -398,6 +403,7 @@ class Account(object):
             "expiresIn": _human_delta(exp - time.time()) if exp else None,
             "hasRefreshToken": bool(self.refresh_token),
             "lastError": last_error,
+            "lastErrorDetail": last_error_detail or None,
             "inCooldown": deadline > now,
             "cooldownFor": round(max(0.0, deadline - now)) or None,
             "modelCooldowns": models,
@@ -1216,10 +1222,15 @@ class Account(object):
         """Record refresh errors alongside the state shown in the panel."""
         with self._throttle_lock:
             self.last_error = str(message)[:200]
+            self.last_error_detail = ""
 
-    def note_error(self, message, cooldown=60, single_account=False, model=None, until=None):
+    def note_error(self, message, cooldown=60, single_account=False, model=None, until=None,
+                   detail=None):
         with self._throttle_lock:
             self.last_error = str(message)[:200]
+            # The visible label keeps its existing truncation; `detail` carries the
+            # untouched upstream body so the panel can show it on hover.
+            self.last_error_detail = str(detail)[:2000] if detail else ""
             if model:
                 # Model-scoped throttle: keep the account usable for every other model.
                 wait = max(1.0, float(until) - time.time()) if until else (
@@ -1246,8 +1257,9 @@ class Account(object):
                 self.model_cooldowns.pop(model, None)
             else:
                 self.model_cooldowns.clear()
-            if self.last_error or self.cooldown_until:
+            if self.last_error or self.cooldown_until or self.last_error_detail:
                 self.last_error = ""
+                self.last_error_detail = ""
                 self.cooldown_until = 0
 
 def _human_delta(seconds):

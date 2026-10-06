@@ -3981,7 +3981,7 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 # Model-scoped: only this model is throttled for this account,
                 # so sibling models stay serviceable on the same credential.
                 account.note_error("HTTP 429 (model throttled)", model=model, until=reset_at,
-                                   cooldown=wait)
+                                   cooldown=wait, detail=detail)
                 if auto_switch and _try_switch_product(account, model):
                     # 換了身分就等於換了一條配額線：要把它從「已試過」拿掉，
                     # 並清掉剛剛記下的模型冷卻，否則下一輪迴圈會找不到帳號。
@@ -7308,7 +7308,9 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as exc:
             wall_ms = int((time.time() - t0) * 1000)
             detail = exc.read(400).decode("utf-8", "replace")
-            account.note_error(f"HTTP {exc.code}: {detail[:80]}", cooldown=60)
+            # The label keeps its 80-char cut; `detail` rides along untouched so the
+            # panel can show the whole upstream body on hover.
+            account.note_error(f"HTTP {exc.code}: {detail[:80]}", cooldown=60, detail=detail)
             log(f"account test: uid={account.uid[:8]} model={test_model} wall={wall_ms}ms error={exc.code}", level="WARN", tag="accounts")
             return self._json(200, {
                 "ok": False,
