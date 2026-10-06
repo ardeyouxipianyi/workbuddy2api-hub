@@ -223,6 +223,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 把每条请求的 token 消耗按 **OpenRouter 公布的模型价**折算成等价金额，回答「这些 token 放在 OpenRouter 上值多少钱」——与账号实际扣除的积分（`credit`）是两个口径，看板里并列显示：
 
+- **总开关（默认开启）**：「设置 → OpenRouter 价估算 → 启用价估算」，也可直接写 `accounts/settings.json` 的 `pricing_enabled`。开关缺省即开启，只有显式 `false` 才算关闭，所以升级上来的老配置行为不变；关掉它图的是省掉算价与渲染开销（日志上万行时 `/usage` 的响应差别明显）。关闭后除开关本身外整块功能从界面上撤掉——价格列、「API 等价花费」卡片、取价子控件与未定价清单一并隐藏；后端也不向 OpenRouter 取价、不登记按需补价、不为任何请求折算金额，`/pricing/refresh` 与 `/pricing/mapping` 返回「价估算已关闭，请先启用」。**重新打开会补算关闭期间的请求**——关闭期间没有取价，打开时立刻抓一次（不等下一个间隔），那一份价按 `policy_ref_at` 的补算分支落到关闭期间那些行上并标 `*`；`usage.jsonl` 里的历史行与策略表**一个字都不改写**，金额始终是读时算的，所以补算不需要回写日志。关闭期间第一次被调用、内嵌快照里也没有的模型，靠打开后的这次取价进策略表，同样能补上。
 - **定价来源**：OpenRouter 模型目录（`/api/v1/models`，美元 / 每 token，按版本里的汇率折算成人民币）。取的是**模型级公布价**——OpenRouter 模型页上展示的那个数字，对应它默认路由的那家 provider；同一个模型在 OpenRouter 上往往由多家 provider 承接、价格各异（实测 `deepseek-v4.1-flash` 有 33 家、`gpt-6-astra` 有 7 家），换一家可能更便宜，所以这个数是「OpenRouter 公布的该模型价格」，不是「最省的买法」。`wb_pricing.py` 里另内嵌一份快照作为出厂价（镜像自包含，无需额外文件），供还没有历史的机器兜底；`_fetch_pricing.py` 用来重新生成它（`--embed` 回写内嵌副本、`--dry-run` 只打印）。
 - **计价口径**：输入按缓存命中/未命中两档单价拆分（`cached_tokens`），输出单独单价，乘上 token 数再按汇率折算。输出的 token 数取上游的 `completion_tokens`，它**已经包含推理 token**（上游把 `reasoning_tokens` 记在 completion 内，实测与 1.5 万条历史行都如此，`total_tokens = prompt + completion`），所以推理 token 不另计——单独再加会重复计费；这条前提有测试钉住。OpenRouter 上有不少模型是**按条件定价**的，条件写在条目的 `overrides` 里，共两类，都会被原样搬进快照的 `bands`：
   - **按输入长度**：超过阈值后改用更贵的价——`gpt-6-astra`、`gpt-5.5`、`gpt-5.4`、`gpt-5.6-*` 在 272000 token 以上翻倍，`grok-4.7` 在 200000 以上翻倍（OpenRouter 的 `overrides` 是按阈值升序排列的）；

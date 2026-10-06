@@ -1043,11 +1043,12 @@ def _fold_cost(bucket, cost, model):
 
     Unpriced models land in cost_missing (id -> count) instead of quietly
     vanishing from the totals, so the panel can name what the price
-    snapshot does not cover yet.
+    snapshot does not cover yet. A row the master switch left unpriced is not
+    "missing a price" - the whole feature is off - so it is not listed there.
     """
     if cost["known"]:
         bucket["cost_cny"] = (bucket.get("cost_cny") or 0.0) + cost["cny"]
-    else:
+    elif not cost.get("disabled"):
         missing = bucket.setdefault("cost_missing", {})
         mid = model or "unknown"
         missing[mid] = missing.get(mid, 0) + 1
@@ -2066,6 +2067,7 @@ def runtime_settings_view():
         "model_daily_token_limit": wb_settings.model_daily_token_limit(ACCOUNTS_DIR),
         "pricing_refresh_minutes": wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR),
         "pricing_variant_inherit": wb_settings.pricing_variant_inherit(ACCOUNTS_DIR),
+        "pricing_enabled": wb_settings.pricing_enabled(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
@@ -6340,6 +6342,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, PRICING.status())
         return self._json(200, {
             "interval_minutes": 0.0, "enabled": False, "running": False,
+            "master_enabled": wb_settings.pricing_enabled(ACCOUNTS_DIR),
             "policies": 0, "models": 0, "current": {}, "logs": [],
             "gaps": [], "gap_summary": {"total": 0, "or_missing": 0,
                                         "variant_unmatched": 0, "aliases": 0,
@@ -6623,6 +6626,22 @@ class Handler(BaseHTTPRequestHandler):
             wb_settings.set_model_daily_token_limit(ACCOUNTS_DIR, limit)
             apply_model_daily_token_limit(refresh=True)
             reply["model_daily_token_limit"] = limit
+        if "pricing_enabled" in payload:
+            # Master switch for the whole OpenRouter price-estimation feature.
+            # Strictly a JSON boolean, like the other switches: a string like
+            # "false" would be truthy and leave the feature on, which is the one
+            # thing an operator turning it off must not get.
+            raw = payload.get("pricing_enabled")
+            if not isinstance(raw, bool):
+                return self._error(400, "pricing_enabled must be true or false",
+                                   "invalid_request_error")
+            wb_settings.set_pricing_enabled(ACCOUNTS_DIR, raw)
+            reply["pricing_enabled"] = raw
+            if PRICING:
+                # Either direction: wake the refresh loop so it re-reads the
+                # switch now instead of sleeping out an interval. Turning it
+                # back on with nothing on record fetches right away (see run()).
+                PRICING.wake()
         if "pricing_refresh_minutes" in payload or "pricing_refresh_hours" in payload:
             # The interval is in minutes. The old field name is still accepted
             # (x60) so a panel page cached from the previous build cannot set
@@ -7080,6 +7099,8 @@ class Handler(BaseHTTPRequestHandler):
         # panel polls /pricing for the outcome.
         if not PRICING:
             return self._json(200, {"ok": False, "msg": "价格刷新未运行"})
+        if not wb_settings.pricing_enabled(ACCOUNTS_DIR):
+            return self._json(200, {"ok": False, "msg": "价估算已关闭，请先启用"})
         threading.Thread(target=PRICING.run_once, daemon=True,
                          name="price-refresh-manual").start()
         out = PRICING.status()
@@ -7102,6 +7123,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         if PRICING is None:
             return self._json(200, {"ok": False, "msg": "价格刷新未运行"})
+        if not wb_settings.pricing_enabled(ACCOUNTS_DIR):
+            return self._json(200, {"ok": False, "msg": "价估算已关闭，请先启用"})
         model = str(payload.get("model") or "").strip()
         or_id = str(payload.get("or_id") or "").strip()
         if not model:
@@ -8026,9 +8049,11 @@ def _bootstrap_runtime(args):
     # The policy table and its timeline live beside the usage log, so one
     # volume carries both and the request references resolve locally.
     wb_pricing.set_data_dir(USAGE_DIR)
-    # The variant-inheritance switch lives in the panel settings; point the
-    # pricing side at the same settings.json the panel writes.
+    # The panel's pricing switches (master switch, variant inheritance) live in
+    # settings.json; point the pricing side at the same file the panel writes.
     wb_pricing.set_settings_dir(ACCOUNTS_DIR)
+    # The refresher always exists so /pricing can report its state; with the
+    # master switch off its loop simply parks without fetching.
     PRICING = wb_pricing.PriceRefresher(
         wb_settings.pricing_refresh_minutes(ACCOUNTS_DIR))
     PRICING.start()

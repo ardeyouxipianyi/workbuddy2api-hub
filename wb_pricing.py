@@ -1185,6 +1185,10 @@ _settings_dir_override = None
 # 这里；按 (path, mtime, size) 缓存一次，省掉热路径上的 settings.json 解析。
 _variant_cache = {"key": None, "value": True}
 _variant_lock = threading.Lock()
+# 总开关走同一套缓存：请求路径上每一行都要问一次「价估算开着吗」，更不能
+# 每次去解析 settings.json。
+_enabled_cache = {"key": None, "value": True}
+_enabled_lock = threading.Lock()
 
 
 def set_settings_dir(path):
@@ -1193,27 +1197,45 @@ def set_settings_dir(path):
     _settings_dir_override = path
 
 
-def variant_inherit_enabled(accounts_dir=None):
-    """变体后缀继承是否打开。默认打开；读不到设置也不影响取价。"""
+def _cached_switch(cache, lock, reader, accounts_dir, default):
+    """读一个存在 settings.json 里的开关，按 (path, mtime, size) 缓存。
+
+    面板改设置会改 mtime，缓存自然失效；任何异常都退回 default，坏掉的
+    settings.json 不能把取价或请求路径带崩。
+    """
     try:
         import wb_settings
         path = accounts_dir or _settings_dir_override or os.environ.get("ACCOUNTS_DIR")
         if not path:
-            return True
+            return default
         try:
             settings = wb_settings.settings_path(path)
             key = (settings, os.path.getmtime(settings), os.path.getsize(settings))
         except OSError:
             key = (path, None, None)
-        with _variant_lock:
-            if _variant_cache["key"] == key:
-                return _variant_cache["value"]
-        value = wb_settings.pricing_variant_inherit(path)
-        with _variant_lock:
-            _variant_cache.update({"key": key, "value": value})
+        with lock:
+            if cache["key"] == key:
+                return cache["value"]
+        value = reader(path)
+        with lock:
+            cache.update({"key": key, "value": value})
         return value
     except Exception:
-        return True
+        return default
+
+
+def variant_inherit_enabled(accounts_dir=None):
+    """变体后缀继承是否打开。默认打开；读不到设置也不影响取价。"""
+    import wb_settings
+    return _cached_switch(_variant_cache, _variant_lock,
+                          wb_settings.pricing_variant_inherit, accounts_dir, True)
+
+
+def pricing_enabled(accounts_dir=None):
+    """价估算总开关是否打开。默认打开；读不到设置按打开处理。"""
+    import wb_settings
+    return _cached_switch(_enabled_cache, _enabled_lock,
+                          wb_settings.pricing_enabled, accounts_dir, True)
 
 
 def variant_bases(hub_id):
@@ -1569,7 +1591,12 @@ def current_policy_id(model):
     must not block on a fetch), so a model first called between two refreshes
     still carries its price. A miss stays a miss and the row is stamped
     without a reference, exactly as before.
+
+    With the master switch off nothing is priced at all, so no reference is
+    stamped and no on-demand policy is minted.
     """
+    if not pricing_enabled():
+        return None
     _at, assignment = current_assignment()
     pid = assignment.get(model)
     if pid:
@@ -1643,7 +1670,12 @@ def ensure_policy(model):
     unpriced, which is the same answer as before this path existed. Never
     touches the network, and repeated calls are idempotent because policies
     are keyed by a content hash; only a genuinely new policy logs a line.
+
+    The master switch short-circuits this too: with pricing off, no policy is
+    minted and nothing is written to the policy table.
     """
+    if not pricing_enabled():
+        return None
     mid = str(model or "").strip()
     if not mid:
         return None
@@ -2053,10 +2085,16 @@ def cost_for_row(row):
     summary agree by construction.
 
     明细只解释这一行用的是哪份价，未定价时整组 None（不编 0）。
+
+    总开关关闭时整块功能停摆：不查策略、不查快照、不折算，直接按「未定价」
+    返回并打上 disabled 标记，面板据此显示「—」；与真正没有价的模型走同一条
+    路径，但汇总侧能区分「没价」和「功能关着」，不会误报未定价清单。
     """
-    if not row:
+    if not row or not pricing_enabled():
         cost = {"cny": 0.0, "known": False, "band": None, "source": "builtin",
                 "source_at": None, "backfilled": False}
+        if row:
+            cost["disabled"] = True
         cost.update(_no_details())
         return cost
     model = row.get("model")
@@ -2137,6 +2175,10 @@ class PriceRefresher(threading.Thread):
         self.interval_minutes = max(0.0, _as_float(minutes))
         self._wake.set()
 
+    def wake(self):
+        """Nudge a parked refresh loop - used when the master switch flips."""
+        self._wake.set()
+
     def stop(self):
         self._stop_event.set()
         self._wake.set()
@@ -2180,6 +2222,11 @@ class PriceRefresher(threading.Thread):
     def run_once(self):
         """抓一次并入账。返回 (ok, message)。"""
         with self._run_lock:
+            # Re-read the master switch inside the lock: a cycle started just
+            # before the panel turned pricing off must not write a fresh
+            # policy table on its way out.
+            if not pricing_enabled():
+                return False, "价估算已关闭"
             try:
                 or_models = fetch_openrouter()
             except Exception as exc:
@@ -2249,20 +2296,39 @@ class PriceRefresher(threading.Thread):
         return items, summary
 
     def run(self):
-        # First boot: with nothing fetched yet, take one reading right away so
-        # the panel has something concrete to point at.
-        if self.interval_minutes > 0 and not load_timeline():
-            try:
-                self.run_once()
-            except Exception as exc:
-                self.log("首次抓取异常：%s" % exc)
+        # 两种情况要立刻抓一次价：首次启动还没有任何价格历史（面板才立刻有
+        # 东西可看），以及总开关刚从关闭切回打开。后者是补算的关键——关闭
+        # 期间没有取价，打开后这一份会落到关闭期间那些请求上：先有价、后被
+        # 调用过的模型按 policy_ref_at 的补算分支取到它（面板标 `*`），关闭
+        # 期间才第一次出现的模型则靠这次取价进入策略表。已经取过价的正常
+        # 重启不重复抓。
+        first = True
+        came_from_off = False
         while not self._stop_event.is_set():
+            if not pricing_enabled():
+                # 总开关关着：不取价也不计时。面板拨回打开时会唤醒本线程，
+                # 循环每轮都重读开关，所以打开后立刻恢复。
+                self.next_run = None
+                self._wake.wait()
+                self._wake.clear()
+                came_from_off = True
+                continue
             seconds = self.interval_seconds()
             if seconds <= 0:
                 self.next_run = None
                 self._wake.wait()
                 self._wake.clear()
+                came_from_off = True
                 continue
+            if first or came_from_off:
+                should_fetch = came_from_off or not load_timeline()
+                first = False
+                came_from_off = False
+                if should_fetch:
+                    try:
+                        self.run_once()
+                    except Exception as exc:
+                        self.log("首次抓取异常：%s" % exc)
             self.next_run = time.time() + seconds
             if self._wake.wait(seconds):
                 self._wake.clear()
@@ -2279,9 +2345,13 @@ class PriceRefresher(threading.Thread):
         policies = load_policies()
         at, assignment = current_assignment()
         gaps, gap_summary = self.gap_report()
+        master = pricing_enabled()
         return {
             "interval_minutes": self.interval_minutes,
-            "enabled": self.interval_minutes > 0,
+            # 总开关关着时，无论间隔填多少都不取价，所以 enabled 是两者相与；
+            # master_enabled 单独回报开关本身，面板据此渲染设置页。
+            "enabled": master and self.interval_minutes > 0,
+            "master_enabled": master,
             "running": self.is_alive(),
             "last_run": self.last_run,
             "last_run_label": (time.strftime("%Y-%m-%d %H:%M",

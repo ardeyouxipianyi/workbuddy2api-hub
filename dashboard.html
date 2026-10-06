@@ -110,6 +110,10 @@ tbody tr:hover{background:var(--panel2)}
 /* 价格悬停气泡：自绘，才能对齐单价并截图验收；pointer-events:none 让它不会
    抢走鼠标、把 hover 打断。 */
 .cost-cell{cursor:help}
+/* 价估算总开关关闭时，除开关本身外整块功能从界面上撤掉：价格列、KPI 卡片、
+   设置页的取价子控件与未定价清单一并隐藏，只留下开关，方便随时再打开。 */
+body.pricing-off .pricing-col{display:none}
+body.pricing-off #kpiCostCard{display:none}
 #costTip{position:fixed;z-index:80;display:none;max-width:min(480px,94vw);padding:10px 12px;
   border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);
   font-size:12px;line-height:1.7;box-shadow:0 14px 34px rgba(15,23,42,.28);pointer-events:none}
@@ -865,7 +869,7 @@ a:hover{text-decoration:underline}
         <div class="v" id="kpiReqCount">0 次</div>
         <div class="s" id="kpiReqSuccess">成功率 100% · 失败 0</div>
       </div>
-      <div class="card warn">
+      <div class="card warn" id="kpiCostCard">
         <div class="k">API 等价花费 <span id="kpiCostRange" style="font-size:11px;font-weight:400;color:var(--dim)"></span></div>
         <div class="v" id="kpiCostValue">—</div>
         <div class="s" id="kpiCostDetail">按 OpenRouter 模型价折算的等价 token 花费 <span id="kpiCostToggle"></span></div>
@@ -889,7 +893,7 @@ a:hover{text-decoration:underline}
               <th>消耗总 Token</th>
               <th>消耗积分 (全出口)</th>
               <th style="text-align:left">调用的模型分布明细 (请求数 · 消耗)</th>
-              <th style="color:var(--warn)">OpenRouter 价估算</th>
+              <th class="pricing-col" style="color:var(--warn)">OpenRouter 价估算</th>
             </tr>
           </thead>
           <tbody id="analyticsAccountTbody"></tbody>
@@ -1093,17 +1097,32 @@ a:hover{text-decoration:underline}
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
-            <h2 style="margin:0">定价刷新 <em id="setPricingState"></em></h2>
+            <h2 style="margin:0">OpenRouter 价估算 <em id="setPricingEnabledState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              网关每隔这段时间去 OpenRouter 取一次价：每个模型每份不同的价格存成一条<b>定价策略</b>（内容相同就复用同一条，不重复写），并声明「现在生效的是哪一条」。每条请求按它发生时生效的那一条计价，所以之后调价不会改写之前的数字；请求只记它引用的是哪条策略，不内嵌整份价格。取价时还没有价的模型，用之后第一次取到的价补算并标 <code>*</code>。没人引用、又已经不作数的策略会被清掉（每个模型至少留一条，刚取到的那批不动）。取价间隔以<b>分钟</b>计，默认 5 分钟；填 0 表示不自动刷新（仍可用「立即取价」手动取一次）。<span id="setPricingMeta"></span>
+              按 OpenRouter 上同名模型的价格，把每条请求的 token 折算成人民币，供面板的「OpenRouter 价估算」列与「API 等价花费」卡片使用。<b>默认开启</b>；关闭后不再向 OpenRouter 取价，也不再折算任何金额，相关列、卡片与取价控件一并隐藏（只留这个开关）。<b>重新打开会补算关闭期间的请求</b>：那段请求按之后第一次取到的价折算并标 <code>*</code>，所以关掉再打开不会丢数。
             </div>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              取价输入 = 内置目录 <b>∪</b> 网关实时目录里新增的模型，上游新上架的名字无需改代码就会进入下一轮取价；两次取价之间就被调用的新模型，第一笔请求即按内存里的目录<b>按需补价</b>。名字带渠道后缀（如 <code>-lkeap</code>）的模型默认按<b>变体后缀继承</b>向基准模型取价（要求唯一命中，命不中照旧显示未定价）；关掉开关即恢复「只有覆盖表与同名匹配才定价」。
+            <div id="pricingOffNote" style="display:none;font-size:12px;color:var(--dim);margin-top:4px">
+              价估算已关闭：不再取价、不再折算金额，价格列与「API 等价花费」卡片一并隐藏；重新打开后会补算关闭期间的请求。
             </div>
-            <div id="setPricingCurrent"></div>
-            <div id="setPricingGaps"></div>
+            <div id="pricingDetails">
+              <h3 style="margin:14px 0 0;font-size:14px">定价刷新 <em id="setPricingState"></em></h3>
+              <div style="font-size:12px;color:var(--dim);margin-top:4px">
+                网关每隔这段时间去 OpenRouter 取一次价：每个模型每份不同的价格存成一条<b>定价策略</b>（内容相同就复用同一条，不重复写），并声明「现在生效的是哪一条」。每条请求按它发生时生效的那一条计价，所以之后调价不会改写之前的数字；请求只记它引用的是哪条策略，不内嵌整份价格。取价时还没有价的模型，用之后第一次取到的价补算并标 <code>*</code>。没人引用、又已经不作数的策略会被清掉（每个模型至少留一条，刚取到的那批不动）。取价间隔以<b>分钟</b>计，默认 5 分钟；填 0 表示不自动刷新（仍可用「立即取价」手动取一次）。<span id="setPricingMeta"></span>
+              </div>
+              <div style="font-size:12px;color:var(--dim);margin-top:4px">
+                取价输入 = 内置目录 <b>∪</b> 网关实时目录里新增的模型，上游新上架的名字无需改代码就会进入下一轮取价；两次取价之间就被调用的新模型，第一笔请求即按内存里的目录<b>按需补价</b>。名字带渠道后缀（如 <code>-lkeap</code>）的模型默认按<b>变体后缀继承</b>向基准模型取价（要求唯一命中，命不中照旧显示未定价）；关掉开关即恢复「只有覆盖表与同名匹配才定价」。
+              </div>
+              <div id="setPricingCurrent"></div>
+              <div id="setPricingGaps"></div>
+            </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setPricingEnabled" type="checkbox" style="width:16px;height:16px">
+              启用价估算
+            </label>
+            <button onclick="savePricingEnabled(this)">保存</button>
+            <div id="pricingControls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div>
               <div style="font-size:12px;color:var(--dim);margin-bottom:4px">刷新间隔（分钟）</div>
               <input id="setPricingMinutes" type="number" min="0" step="1" value="5"
@@ -1116,6 +1135,7 @@ a:hover{text-decoration:underline}
               变体后缀继承
             </label>
             <button onclick="savePricingVariant(this)">保存</button>
+            </div>
           </div>
         </div>
       </section>
@@ -2031,6 +2051,9 @@ let costCurrency = 'CNY';
 try { if(localStorage.getItem('wb-cost-currency') === 'USD') costCurrency = 'USD'; } catch(e) {}
 // 汇率由 /usage、/usage/recent、/usage/analytics 的 usd_cny 字段更新。
 let costUsdRate = 7.1;
+// 价估算总开关（后端设置 pricing_enabled，默认开）。关掉只是为了省掉算价与
+// 渲染开销：价格列与卡片都留在原地，内容显示「—」，观感不变。
+let PRICING_ON = true;
 function costSymbol(){ return costCurrency === 'USD' ? '$' : '￥'; }
 // 小额保留更多小数位，避免 0.00x 被显示成 0.00；与费用估算的展示口径一致。
 function fmtCost(cny){
@@ -3583,10 +3606,12 @@ async function refreshInner(gen){
   };
   COST_TIP_ROWS.clear();
   document.getElementById('recent').innerHTML = rows.length ?
-    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th style="color:var(--warn)">OpenRouter 价估算</th></tr></thead><tbody>'
+    '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>账号</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th class="pricing-col" style="color:var(--warn)">OpenRouter 价估算</th></tr></thead><tbody>'
     + rows.map((r, i) => {
-        const costKey = costRowKey(r, i);
-        COST_TIP_ROWS.set(costKey, r);
+        // 关闭时不登记悬停明细，也不挂 data-cost-key：列还在（观感不变），
+        // 但没有任何可解释的价格，省掉整张表的明细构建与 hover 开销。
+        const costKey = PRICING_ON ? costRowKey(r, i) : '';
+        if(costKey) COST_TIP_ROWS.set(costKey, r);
         return '<tr>'
         + '<td class="mono" data-label="时间">' + esc((r.iso||'').replace('T',' ').slice(5)) + '</td>'
         + '<td class="mono" data-label="模型">' + esc(r.model) + effortChip(r) + '</td>'
@@ -3602,7 +3627,8 @@ async function refreshInner(gen){
         + '<td data-label="缓存">' + (r.cache_hit_pct!=null ? r.cache_hit_pct+'%' : '—') + '</td>'
         + '<td data-label="总 token"><b>' + fmt(r.total_tokens) + '</b></td>'
         + '<td data-label="积分" style="color:var(--accent2)">' + (r.credit != null ? Number(r.credit).toFixed(2) : '—') + '</td>'
-        + '<td data-label="OpenRouter 价估算" class="cost-cell" style="color:var(--warn)" data-cost-key="' + esc(costKey) + '">'
+        + '<td data-label="OpenRouter 价估算" class="cost-cell pricing-col" style="color:var(--warn)"'
+        +   (costKey ? ' data-cost-key="' + esc(costKey) + '"' : '') + '>'
         +   fmtCost(r.cost_cny)
         +   (r.cost_backfilled ? '<span style="color:var(--dim)">*</span>' : '')
         + '</td>'
@@ -3859,6 +3885,10 @@ async function loadSettings(showToast){
         modelTokState.textContent = modelTokValue > 0 ? ('(每账号每模型每天 ' + fmt(modelTokValue) + ' token)') : '(不限)';
         modelTokState.style.color = modelTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
       }
+      const pricingOn = data.pricing_enabled !== false;
+      const pricingEnabledInput = document.getElementById('setPricingEnabled');
+      if(pricingEnabledInput) pricingEnabledInput.checked = pricingOn;
+      applyPricingEnabled(pricingOn);
       const pricingMinutes = Number(data.pricing_refresh_minutes || 0);
       const pricingInput = document.getElementById('setPricingMinutes');
       if(pricingInput) pricingInput.value = String(pricingMinutes);
@@ -3870,7 +3900,17 @@ async function loadSettings(showToast){
       const variantOn = data.pricing_variant_inherit !== false;
       const variantInput = document.getElementById('setPricingVariant');
       if(variantInput) variantInput.checked = variantOn;
-      loadPricingStatus();
+      // 关闭时不去拉 /pricing：取价与未定价清单都没有意义，省掉这一趟。
+      if(pricingOn){
+        loadPricingStatus();
+      } else {
+        const meta = document.getElementById('setPricingMeta');
+        if(meta) meta.textContent = '　价估算已关闭，未取价也不计费。';
+        const cur = document.getElementById('setPricingCurrent');
+        if(cur) cur.innerHTML = '';
+        const gaps = document.getElementById('setPricingGaps');
+        if(gaps) gaps.innerHTML = '';
+      }
       const autoSwitch = data.auto_switch_product === true;
       const autoSwitchInput = document.getElementById('setAutoSwitch');
       if(autoSwitchInput) autoSwitchInput.checked = autoSwitch;
@@ -3996,6 +4036,42 @@ async function saveDailyCreditLimit(btn){
     await postJSON('/settings/save', {daily_credit_limit: value});
     toast(value > 0 ? ('已启用：账号当日超过 ' + value + ' 积分后仅免费模型可用') : '已关闭每日积分限额', 'ok');
     loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* 价估算总开关。关闭时整块功能从界面上撤掉（价格列、KPI 卡片、取价子控件、
+   未定价清单），只留开关本身；后端同时停止取价与算价。历史数据不动。 */
+function applyPricingEnabled(on){
+  const enabled = on !== false;
+  PRICING_ON = enabled;
+  document.body.classList.toggle('pricing-off', !enabled);
+  const state = document.getElementById('setPricingEnabledState');
+  if(state){
+    state.textContent = enabled ? '(已启用)' : '(已关闭)';
+    state.style.color = enabled ? 'var(--accent2)' : 'var(--dim)';
+  }
+  const note = document.getElementById('pricingOffNote');
+  if(note) note.style.display = enabled ? 'none' : '';
+  // 关闭时除开关本身外，取价控件、当前生效策略与未定价清单一起隐藏。
+  const details = document.getElementById('pricingDetails');
+  if(details) details.style.display = enabled ? '' : 'none';
+  const controls = document.getElementById('pricingControls');
+  if(controls) controls.style.display = enabled ? 'flex' : 'none';
+}
+
+async function savePricingEnabled(btn){
+  const el = document.getElementById('setPricingEnabled');
+  const value = !!(el && el.checked);
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {pricing_enabled: value});
+    toast(value ? '已启用 OpenRouter 价估算' : '已关闭 OpenRouter 价估算', 'ok');
+    loadSettings();
+    if(value) loadPricingStatus();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
   } finally {
@@ -5448,7 +5524,7 @@ function renderPerfMatrix(usage, perf){
       + '<td data-label="端到端耗时">' + totWall + '</td>'
       + '<td data-label="缓存命中">' + totCache + '</td>'
       + '<td data-label="用量占比">100%</td>'
-      + '<td data-label="OpenRouter 价估算" style="color:var(--warn)">' + fmtCost(sumCost) + '</td>'
+      + '<td data-label="OpenRouter 价估算" class="pricing-col" style="color:var(--warn)">' + (PRICING_ON ? fmtCost(sumCost) : '—') + '</td>'
       + '</tr>';
 
     const rows = rowsData.map(m => {
@@ -5530,7 +5606,7 @@ function renderPerfMatrix(usage, perf){
         + '<td data-label="端到端耗时">' + m_wall + '</td>'
         + '<td data-label="缓存命中">' + m_cache + '</td>'
         + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
-        + '<td data-label="OpenRouter 价估算" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
+        + '<td data-label="OpenRouter 价估算" class="pricing-col" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
         +   ((m.cost_cny || 0) > 0 ? fmtCost(m.cost_cny) : '<span style="color:var(--dim)">—</span>')
         + '</td>'
         + '</tr>';
@@ -5551,7 +5627,7 @@ function renderPerfMatrix(usage, perf){
       + '<th style="text-align:left">账号</th>'
       + '<th>请求数</th><th>失败</th><th>总 Token</th><th style="min-width:190px">输入 / 输出 / 思考</th>'
       + '<th>首字延迟 (TTFT)</th><th>生成速度</th><th>端到端耗时</th><th>缓存命中率</th><th>用量占比</th>'
-      + '<th style="color:var(--warn)">OpenRouter 价估算</th>'
+      + '<th class="pricing-col" style="color:var(--warn)">OpenRouter 价估算</th>'
       + '</tr></thead><tbody>' + summaryRow + rows + '</tbody></table>';
   }
 
@@ -5632,7 +5708,10 @@ function renderAnalytics(data){
   const elCostValue = document.getElementById('kpiCostValue');
   const elCostDetail = document.getElementById('kpiCostDetail');
   if(elCostRange) elCostRange.textContent = '(' + rangeLabel() + ')';
-  if(elCostValue) elCostValue.innerHTML = fmtCost(currentSum.cost_cny != null ? currentSum.cost_cny : 0);
+  // 关闭时卡片留在原地（观感不变），数值显示「—」：后端根本没有折算金额，
+  // 这里不能把「没有数」渲染成 ￥0.000。
+  if(elCostValue) elCostValue.innerHTML = PRICING_ON
+    ? fmtCost(currentSum.cost_cny != null ? currentSum.cost_cny : 0) : '—';
   if(elCostDetail) elCostDetail.innerHTML = '按 OpenRouter 模型价折算的等价 token 花费 ' + costToggleHtml();
 
   // Table 1: 账号透视表
@@ -5688,7 +5767,7 @@ function renderAnalytics(data){
           + '<td><b style="color:var(--accent)">' + fmt(st.total_tokens || 0) + '</b></td>'
           + '<td><b style="color:var(--accent2)">' + (st.credit != null ? Number(st.credit).toFixed(2) : '0.00') + '</b></td>'
           + '<td style="text-align:left;max-width:440px">' + pills + '</td>'
-          + '<td style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
+          + '<td class="pricing-col" style="color:var(--warn)" title="OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
           +   (st.cost_cny != null && st.cost_cny > 0 ? fmtCost(st.cost_cny) : '<span style="color:var(--dim)">—</span>')
           + '</td>'
           + '</tr>';

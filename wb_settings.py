@@ -33,6 +33,10 @@ MAX_PRICING_REFRESH_MINUTES = 24 * 30 * 60
 # Whether a model name may inherit its price from a suffix-stripped base
 # (deepseek-r1-0528-lkeap → deepseek-r1-0528). Missing key reads as on.
 PRICING_VARIANT_INHERIT_KEY = "pricing_variant_inherit"
+# Master switch for the whole OpenRouter price-estimation feature. Missing key
+# reads as on: an install that predates the setting behaves exactly as it did,
+# and only an explicit false turns the feature off.
+PRICING_ENABLED_KEY = "pricing_enabled"
 
 _lock = threading.RLock()
 
@@ -615,6 +619,28 @@ def set_pricing_variant_inherit(accounts_dir, enabled):
     with _lock:
         data = load(accounts_dir)
         data[PRICING_VARIANT_INHERIT_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
+def pricing_enabled(accounts_dir):
+    """Master switch for the OpenRouter price estimation, on unless turned off.
+
+    Off disables the feature end to end: no price fetch, no policy table, no
+    per-row cost and no cost columns. A settings.json that predates the key
+    reads back as on, which is the behaviour every install ships with - the
+    switch only exists to let an operator turn the whole thing off.
+    """
+    value = load(accounts_dir).get(PRICING_ENABLED_KEY)
+    return True if value is None else value is True
+
+
+def set_pricing_enabled(accounts_dir, enabled):
+    """Persist the master switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[PRICING_ENABLED_KEY] = enabled
         save(accounts_dir, data)
     return enabled
 
