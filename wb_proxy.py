@@ -929,14 +929,19 @@ def seconds_until_local_midnight():
 
 
 def apply_daily_token_limit(refresh=False):
-    """Push the daily token setting and today's counts into the pool."""
+    """Push the daily token setting and today's counts into the pool.
+
+    The setting is resolved per realm, so the pool can guard the two exits
+    with different numbers while a realm that carries no override still
+    follows the global default.
+    """
     if POOL is None:
         return 0
-    limit = wb_settings.daily_token_limit(ACCOUNTS_DIR)
+    limits = wb_settings.limit_values(ACCOUNTS_DIR, "daily_token_limit")
     usage = None
-    if limit > 0:
+    if any(value > 0 for value in limits.values()):
         usage = daily_tokens_by_account(ttl=0 if refresh else None)
-    return POOL.apply_daily_token_limit(limit, usage)
+    return POOL.apply_daily_token_limit(limits, usage)
 
 
 def apply_daily_credit_limit(refresh=False):
@@ -944,26 +949,26 @@ def apply_daily_credit_limit(refresh=False):
     into the pool."""
     if POOL is None:
         return 0
-    limit = wb_settings.daily_credit_limit(ACCOUNTS_DIR)
+    limits = wb_settings.limit_values(ACCOUNTS_DIR, "daily_credit_limit")
     credits = None
     free_models = None
-    if limit > 0:
+    if any(value > 0 for value in limits.values()):
         stats = daily_usage_stats(ttl=0 if refresh else None)
         credits = stats["credits"] if stats is not None else None
         free_models = free_models_by_realm()
-    return POOL.apply_daily_credit_limit(limit, credits, free_models)
+    return POOL.apply_daily_credit_limit(limits, credits, free_models)
 
 
 def apply_model_daily_token_limit(refresh=False):
     """Push the per-model daily token setting and today's counts into the pool."""
     if POOL is None:
         return 0
-    limit = wb_settings.model_daily_token_limit(ACCOUNTS_DIR)
+    limits = wb_settings.limit_values(ACCOUNTS_DIR, "model_daily_token_limit")
     per_model = None
-    if limit > 0:
+    if any(value > 0 for value in limits.values()):
         stats = daily_usage_stats(ttl=0 if refresh else None)
         per_model = stats["models"] if stats is not None else None
-    return POOL.apply_model_daily_token_limit(limit, per_model)
+    return POOL.apply_model_daily_token_limit(limits, per_model)
 
 
 _free_models_cache = {"at": 0.0, "data": None}
@@ -2060,6 +2065,7 @@ def runtime_settings_view():
         "auth_required": auth_required(),
         "api_keys": keys,
         "deleted_api_keys": deleted_keys,
+        "limits": wb_settings.limits_snapshot(ACCOUNTS_DIR),
         "reserve_credits": wb_settings.reserve_credits(ACCOUNTS_DIR),
         "daily_token_limit": wb_settings.daily_token_limit(ACCOUNTS_DIR),
         "daily_credit_limit": wb_settings.daily_credit_limit(ACCOUNTS_DIR),
@@ -4068,20 +4074,20 @@ def open_upstream(payload, session_key=None, target_realm=None):
     if enabled and all(a.daily_limit_blocked() for a in enabled):
         reason = ("every usable account reached today's token limit (%s per "
                   "account); the pool resumes after local midnight"
-                  % wb_settings.daily_token_limit(ACCOUNTS_DIR))
+                  % wb_settings.daily_token_limit(ACCOUNTS_DIR, realm))
         raise RateLimited(None, reason,
                           wait=seconds_until_local_midnight(), message=reason)
     if enabled and model and all(a.credit_limit_blocked(model) for a in enabled):
         reason = ("every usable account reached today's credit limit (%s per "
                   "account); paid models resume after local midnight, free "
                   "models keep working"
-                  % wb_settings.daily_credit_limit(ACCOUNTS_DIR))
+                  % wb_settings.daily_credit_limit(ACCOUNTS_DIR, realm))
         raise RateLimited(None, reason,
                           wait=seconds_until_local_midnight(), message=reason)
     if enabled and model and all(a.model_token_limit_blocked(model) for a in enabled):
         reason = ("every usable account reached today's token limit for %s "
                   "(%s per account); the model resumes after local midnight"
-                  % (model, wb_settings.model_daily_token_limit(ACCOUNTS_DIR)))
+                  % (model, wb_settings.model_daily_token_limit(ACCOUNTS_DIR, realm)))
         raise RateLimited(None, reason,
                           wait=seconds_until_local_midnight(), message=reason)
     raise RuntimeError(f"no usable account for realm '{realm}': all are disabled, "
@@ -6562,67 +6568,71 @@ class Handler(BaseHTTPRequestHandler):
         if "auth_disabled" in payload:
             wb_settings.set_auth_disabled(ACCOUNTS_DIR, payload.get("auth_disabled"))
             reply["auth_disabled"] = bool(payload.get("auth_disabled"))
-        if "reserve_credits" in payload:
-            try:
-                reserve = int(payload.get("reserve_credits"))
-            except (TypeError, ValueError):
-                return self._error(400, "reserve_credits must be a whole number",
-                                   "invalid_request_error")
-            if reserve < 0:
-                return self._error(400, "reserve_credits cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_reserve_credits(ACCOUNTS_DIR, reserve)
-            if POOL:
-                POOL.apply_reserve_credits(reserve)
-            reply["reserve_credits"] = reserve
-        if "daily_token_limit" in payload:
-            raw = payload.get("daily_token_limit")
-            if isinstance(raw, bool) or raw is None:
-                return self._error(400, "daily_token_limit must be a whole number",
-                                   "invalid_request_error")
-            try:
-                limit = int(raw)
-            except (TypeError, ValueError):
-                return self._error(400, "daily_token_limit must be a whole number",
-                                   "invalid_request_error")
-            if limit < 0:
-                return self._error(400, "daily_token_limit cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_daily_token_limit(ACCOUNTS_DIR, limit)
-            apply_daily_token_limit(refresh=True)
-            reply["daily_token_limit"] = limit
-        if "daily_credit_limit" in payload:
-            raw = payload.get("daily_credit_limit")
-            if isinstance(raw, bool) or raw is None:
-                return self._error(400, "daily_credit_limit must be a whole number",
-                                   "invalid_request_error")
-            try:
-                limit = int(raw)
-            except (TypeError, ValueError):
-                return self._error(400, "daily_credit_limit must be a whole number",
-                                   "invalid_request_error")
-            if limit < 0:
-                return self._error(400, "daily_credit_limit cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_daily_credit_limit(ACCOUNTS_DIR, limit)
-            apply_daily_credit_limit(refresh=True)
-            reply["daily_credit_limit"] = limit
-        if "model_daily_token_limit" in payload:
-            raw = payload.get("model_daily_token_limit")
-            if isinstance(raw, bool) or raw is None:
-                return self._error(400, "model_daily_token_limit must be a whole number",
-                                   "invalid_request_error")
-            try:
-                limit = int(raw)
-            except (TypeError, ValueError):
-                return self._error(400, "model_daily_token_limit must be a whole number",
-                                   "invalid_request_error")
-            if limit < 0:
-                return self._error(400, "model_daily_token_limit cannot be negative",
-                                   "invalid_request_error")
-            wb_settings.set_model_daily_token_limit(ACCOUNTS_DIR, limit)
-            apply_model_daily_token_limit(refresh=True)
-            reply["model_daily_token_limit"] = limit
+        # The four guards can arrive grouped under "limits" (the panel's own
+        # shape) or as the flat top-level keys older clients still send, which
+        # are read as the global default. Both land in the same grouped store,
+        # so there is one source of truth no matter who writes it.
+        limits_payload = payload.get("limits")
+        if limits_payload is not None and not isinstance(limits_payload, dict):
+            return self._error(400, "limits must be an object",
+                               "invalid_request_error")
+        touched = set()
+        for key in wb_settings.LIMIT_KEYS:
+            grouped = (limits_payload or {}).get(key)
+            if isinstance(grouped, dict):
+                scopes = {scope: grouped[scope]
+                          for scope in wb_settings.LIMIT_SCOPES
+                          if scope in grouped}
+            elif key in payload:
+                scopes = {"global": payload.get(key)}
+            else:
+                continue
+            for scope, raw in scopes.items():
+                if scope == "global":
+                    if isinstance(raw, bool) or raw is None:
+                        return self._error(400, "%s must be a whole number" % key,
+                                           "invalid_request_error")
+                    try:
+                        number = int(raw)
+                    except (TypeError, ValueError):
+                        return self._error(400, "%s must be a whole number" % key,
+                                           "invalid_request_error")
+                    if number < 0:
+                        return self._error(400, "%s cannot be negative" % key,
+                                           "invalid_request_error")
+                else:
+                    # Blank clears the override back to "inherit the global".
+                    if raw is None or raw == "":
+                        number = None
+                    else:
+                        if isinstance(raw, bool):
+                            return self._error(
+                                400, "%s must be a whole number" % key,
+                                "invalid_request_error")
+                        try:
+                            number = int(raw)
+                        except (TypeError, ValueError):
+                            return self._error(
+                                400, "%s must be a whole number" % key,
+                                "invalid_request_error")
+                        if number < 0:
+                            return self._error(
+                                400, "%s cannot be negative" % key,
+                                "invalid_request_error")
+                wb_settings.set_limit(ACCOUNTS_DIR, key, scope, number)
+                touched.add(key)
+            reply[key] = wb_settings.limit_value(ACCOUNTS_DIR, key)
+        if limits_payload is not None:
+            reply["limits"] = wb_settings.limits_snapshot(ACCOUNTS_DIR)
+        if touched:
+            if POOL and "reserve_credits" in touched:
+                POOL.apply_reserve_credits()
+            if "daily_token_limit" in touched:
+                apply_daily_token_limit(refresh=True)
+            if "daily_credit_limit" in touched:
+                apply_daily_credit_limit(refresh=True)
+            if "model_daily_token_limit" in touched:
+                apply_model_daily_token_limit(refresh=True)
         if "pricing_refresh_minutes" in payload or "pricing_refresh_hours" in payload:
             # The interval is in minutes. The old field name is still accepted
             # (x60) so a panel page cached from the previous build cannot set

@@ -1288,6 +1288,26 @@ class SessionAffinity(object):
         with self._lock:
             self.bindings.pop(key, None)
 
+def _realm_limit(values, realm):
+    """One guard's value for an account's realm.
+
+    `values` is the map wb_settings.limit_values() hands over -
+    {"global": g, "intl": ..., "cn": ...}. A blank or unrecognised realm falls
+    back to the global default, so an account whose realm could not be detected
+    is still guarded by the global number.
+    """
+    if isinstance(values, dict):
+        value = values.get(realm)
+        if value is None:
+            value = values.get("global")
+    else:
+        value = values
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 class AccountPool(object):
     def __init__(self, directory, log=None):
         self.dir = directory
@@ -1473,47 +1493,43 @@ class AccountPool(object):
                 else:
                     account.proxy = account.proxy_legacy
 
-    def apply_reserve_credits(self, value=None):
+    def apply_reserve_credits(self, values=None):
         """Re-resolve the low-credit guard for every account.
 
         Same shape as apply_proxy_slots(): settings.json is the source of
         truth and the per-account value is derived here, so the request path
-        needs no extra settings lookup.
+        needs no extra settings lookup. `values` is the guard resolved per
+        realm ({"global": g, "intl": ..., "cn": ...}); each account picks its
+        own realm, so a per-realm override lands only on that realm's accounts
+        while the global default keeps covering both.
         """
         import wb_settings
 
-        if value is None:
-            value = wb_settings.reserve_credits(self.dir)
-        try:
-            value = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            value = 0
+        if values is None:
+            values = wb_settings.limit_values(self.dir, "reserve_credits")
         with self._lock:
             for account in self.accounts:
-                account.reserve_credits = value
-        return value
+                account.reserve_credits = _realm_limit(values, account.realm)
+        return values
 
-    def apply_daily_token_limit(self, value=None, usage=None):
+    def apply_daily_token_limit(self, values=None, usage=None):
         """Re-resolve the daily token guard for every account.
 
-        Same shape as apply_reserve_credits(): settings.json holds the limit,
-        while `usage` (uid -> tokens counted today) comes from the caller,
-        because only the proxy reads the usage log. Passing None keeps the
-        last known counts, so a settings change never turns them into
+        Same shape as apply_reserve_credits(): settings.json holds the limit
+        per realm, while `usage` (uid -> tokens counted today) comes from the
+        caller, because only the proxy reads the usage log. Passing None keeps
+        the last known counts, so a settings change never turns them into
         "unknown".
         """
         import wb_settings
 
-        if value is None:
-            value = wb_settings.daily_token_limit(self.dir)
-        try:
-            value = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            value = 0
+        if values is None:
+            values = wb_settings.limit_values(self.dir, "daily_token_limit")
         with self._lock:
             for account in self.accounts:
+                limit = _realm_limit(values, account.realm)
                 was_blocked = account.daily_limit_blocked()
-                account.daily_token_limit = value
+                account.daily_token_limit = limit
                 if usage is not None:
                     try:
                         account.daily_tokens_today = int(usage.get(account.uid, 0))
@@ -1525,17 +1541,17 @@ class AccountPool(object):
                         self.log("account %s parked: daily token limit reached "
                                  "(%s/%s tokens today)"
                                  % (str(account.uid)[:8],
-                                    account.daily_tokens_today, value))
+                                    account.daily_tokens_today, limit))
                     else:
                         self.log("account %s resumed: daily token limit cleared"
                                  % str(account.uid)[:8])
-        return value
+        return values
 
-    def apply_daily_credit_limit(self, value=None, credits=None, free_models=None):
+    def apply_daily_credit_limit(self, values=None, credits=None, free_models=None):
         """Re-resolve the daily credit guard for every account.
 
         Same shape as apply_daily_token_limit(): settings.json holds the
-        limit, while `credits` (uid -> spent today) and `free_models`
+        limit per realm, while `credits` (uid -> spent today) and `free_models`
         (realm -> free model ids) come from the caller, because only the
         proxy reads the usage log and the model catalogue. Passing None
         keeps the last known values, so a settings change never turns them
@@ -1543,16 +1559,13 @@ class AccountPool(object):
         """
         import wb_settings
 
-        if value is None:
-            value = wb_settings.daily_credit_limit(self.dir)
-        try:
-            value = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            value = 0
+        if values is None:
+            values = wb_settings.limit_values(self.dir, "daily_credit_limit")
         with self._lock:
             for account in self.accounts:
+                limit = _realm_limit(values, account.realm)
                 was_blocked = account.credit_limit_reached()
-                account.daily_credit_limit = value
+                account.daily_credit_limit = limit
                 if credits is not None:
                     try:
                         account.daily_credits_today = float(
@@ -1568,13 +1581,13 @@ class AccountPool(object):
                         self.log("account %s capped: daily credit limit reached "
                                  "(%s/%s credits today), free models only"
                                  % (str(account.uid)[:8],
-                                    account.daily_credits_today, value))
+                                    account.daily_credits_today, limit))
                     else:
                         self.log("account %s resumed: daily credit limit cleared"
                                  % str(account.uid)[:8])
-        return value
+        return values
 
-    def apply_model_daily_token_limit(self, value=None, per_model=None):
+    def apply_model_daily_token_limit(self, values=None, per_model=None):
         """Re-resolve the per-model daily token guard for every account.
 
         `per_model` is uid -> {model: tokens counted today}; None keeps the
@@ -1584,16 +1597,13 @@ class AccountPool(object):
         """
         import wb_settings
 
-        if value is None:
-            value = wb_settings.model_daily_token_limit(self.dir)
-        try:
-            value = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            value = 0
+        if values is None:
+            values = wb_settings.limit_values(self.dir, "model_daily_token_limit")
         with self._lock:
             for account in self.accounts:
+                limit = _realm_limit(values, account.realm)
                 was_blocked = account.blocked_model_names()
-                account.model_daily_token_limit = value
+                account.model_daily_token_limit = limit
                 if per_model is not None:
                     raw = per_model.get(account.uid) or {}
                     try:
@@ -1606,11 +1616,11 @@ class AccountPool(object):
                     self.log("account %s model %s parked: daily token limit "
                              "reached (%s/%s tokens today)"
                              % (str(account.uid)[:8], mid,
-                                (account.model_daily_tokens or {}).get(mid), value))
+                                (account.model_daily_tokens or {}).get(mid), limit))
                 for mid in sorted(was_blocked - now_blocked):
                     self.log("account %s model %s resumed: daily token limit "
                              "cleared" % (str(account.uid)[:8], mid))
-        return value
+        return values
 
     def set_proxy_slot(self, uid, slot_id):
         account = self.get(uid)

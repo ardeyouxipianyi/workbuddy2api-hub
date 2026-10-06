@@ -85,6 +85,10 @@ tbody tr:hover{background:var(--panel2)}
 .bar-fill.think{background:var(--think)}
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;border-radius:8px}
 .table-wrap table{min-width:720px}
+/* 限额表：一列一个作用域，输入框右对齐，同列数字才对得齐 */
+.limit-input{width:100%;max-width:200px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit;text-align:right}
+.limit-input::placeholder{color:var(--dim);opacity:.75}
 @media (max-width: 860px){
   header{padding:12px 16px}
   main{padding:16px 12px 60px}
@@ -346,6 +350,8 @@ a:hover{text-decoration:underline}
   table.data-cards td::before{content:attr(data-label);color:var(--dim);font-size:11px;
     font-weight:600;flex-shrink:0}
   table.data-cards td:not([data-label])::before{content:none}
+  /* 限额表：护栏名与说明占整块，三个作用域各一行 */
+  table.limits-cards td.limit-name{display:block;padding-bottom:6px}
   table.data-cards td[colspan]{grid-column:span 6;justify-content:center;text-align:center!important}
   table.data-cards td[colspan]::before{content:none}
   /* Account card: grouped layout */
@@ -1018,78 +1024,79 @@ a:hover{text-decoration:underline}
     <section>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="margin:0">保留积分 <em id="setReserveState"></em></h2>
+          <h2 style="margin:0">限额 <em id="setLimitsState"></em></h2>
           <div style="font-size:12px;color:var(--dim);margin-top:4px">
-            账号余额低于该值时不再接单，避免余额被用尽后触发上游的短信提醒。填 0 表示关闭。
+            四条护栏默认按<b>全局默认</b>生效，同时作用于<b>国际版</b>与<b>国内版</b>；需要时可单独给某一版本设值，留空即<b>继承全局</b>。每条护栏填 0 表示关闭该项。
           </div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-          <div>
-            <div style="font-size:12px;color:var(--dim);margin-bottom:4px">最低保留积分</div>
-            <input id="setReserveCredits" type="number" min="0" step="1" value="0"
-                   style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-          </div>
-            <button onclick="saveReserveCredits(this)">保存</button>
-          </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+            <input id="setLimitsPerRealm" type="checkbox" style="width:16px;height:16px"
+                   onchange="toggleLimitRealms(this.checked)">
+            分别设置国际版 / 国内版
+          </label>
+          <button onclick="saveLimits(this)">保存限额</button>
         </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">每日 Token 限额 <em id="setDailyTokenState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              账号当日消耗的 token 达到该值后暂停接单，请求自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示不限（不限额）；与「保留积分」各自独立，任一命中都会暂停接单。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div>
-              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每日上限（token）</div>
-              <input id="setDailyTokenLimit" type="number" min="0" step="1000000" value="0"
-                     style="width:170px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            </div>
-            <button onclick="saveDailyTokenLimit(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">每日积分限额 <em id="setDailyCreditState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div>
-              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每日上限（积分）</div>
-              <input id="setDailyCreditLimit" type="number" min="0" step="1" value="0"
-                     style="width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            </div>
-            <button onclick="saveDailyCreditLimit(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">按模型每日 Token 限额 <em id="setModelDailyTokenState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              账号在单个模型上当日消耗的 token 达到该值后，该模型自动切到其他账号（同一账号的其他模型不受影响）；本地时间 0 点后自动恢复。填 0 表示不限（默认）。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div>
-              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每账号每模型每日上限（token）</div>
-              <input id="setModelDailyTokenLimit" type="number" min="0" step="1000000" value="0"
-                     style="width:190px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            </div>
-            <button onclick="saveModelDailyTokenLimit(this)">保存</button>
-          </div>
-        </div>
-      </section>
+      </div>
+      <div class="table-wrap">
+        <table class="data-cards limits-cards">
+          <thead>
+            <tr>
+              <th style="min-width:240px;width:46%">护栏</th>
+              <th style="width:18%">全局默认</th>
+              <th class="limit-realm-col" style="width:18%;display:none">国际版</th>
+              <th class="limit-realm-col" style="width:18%;display:none">国内版</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="limit-name">
+                <div style="font-weight:600;color:var(--fg)">保留积分 <em id="setReserveState"></em></div>
+                <div style="font-size:12px;color:var(--dim);margin-top:2px">
+                  账号余额低于该值时不再接单，避免余额被用尽后触发上游的短信提醒。
+                </div>
+              </td>
+              <td data-label="全局默认"><input id="limitGlobalReserve" class="limit-input" type="number" min="0" step="1" value="0"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国际版"><input id="limitIntlReserve" class="limit-input" type="number" min="0" step="1" placeholder="继承全局"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国内版"><input id="limitCnReserve" class="limit-input" type="number" min="0" step="1" placeholder="继承全局"></td>
+            </tr>
+            <tr>
+              <td class="limit-name">
+                <div style="font-weight:600;color:var(--fg)">每日 Token 限额 <em id="setDailyTokenState"></em></div>
+                <div style="font-size:12px;color:var(--dim);margin-top:2px">
+                  账号当日消耗的 token 达到该值后暂停接单，请求自动切到其他账号；本地时间 0 点后自动恢复。与「保留积分」各自独立，任一命中都会暂停接单。
+                </div>
+              </td>
+              <td data-label="全局默认"><input id="limitGlobalDailyToken" class="limit-input" type="number" min="0" step="1000000" value="0"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国际版"><input id="limitIntlDailyToken" class="limit-input" type="number" min="0" step="1000000" placeholder="继承全局"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国内版"><input id="limitCnDailyToken" class="limit-input" type="number" min="0" step="1000000" placeholder="继承全局"></td>
+            </tr>
+            <tr>
+              <td class="limit-name">
+                <div style="font-weight:600;color:var(--fg)">每日积分限额 <em id="setDailyCreditState"></em></div>
+                <div style="font-size:12px;color:var(--dim);margin-top:2px">
+                  账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。
+                </div>
+              </td>
+              <td data-label="全局默认"><input id="limitGlobalDailyCredit" class="limit-input" type="number" min="0" step="1" value="0"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国际版"><input id="limitIntlDailyCredit" class="limit-input" type="number" min="0" step="1" placeholder="继承全局"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国内版"><input id="limitCnDailyCredit" class="limit-input" type="number" min="0" step="1" placeholder="继承全局"></td>
+            </tr>
+            <tr>
+              <td class="limit-name">
+                <div style="font-weight:600;color:var(--fg)">按模型每日 Token 限额 <em id="setModelDailyTokenState"></em></div>
+                <div style="font-size:12px;color:var(--dim);margin-top:2px">
+                  账号在单个模型上当日消耗的 token 达到该值后，该模型自动切到其他账号（同一账号的其他模型不受影响）；本地时间 0 点后自动恢复。
+                </div>
+              </td>
+              <td data-label="全局默认"><input id="limitGlobalModelDailyToken" class="limit-input" type="number" min="0" step="1000000" value="0"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国际版"><input id="limitIntlModelDailyToken" class="limit-input" type="number" min="0" step="1000000" placeholder="继承全局"></td>
+              <td class="limit-realm-col" style="display:none" data-label="国内版"><input id="limitCnModelDailyToken" class="limit-input" type="number" min="0" step="1000000" placeholder="继承全局"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -3825,38 +3832,7 @@ async function loadSettings(showToast){
       keyState.textContent = count ? ('(' + count + ' 个生效)') : '(当前不校验)';
       keyState.style.color = count ? 'var(--accent2)' : 'var(--dim)';
     }
-    const reserveValue = Number(data.reserve_credits || 0);
-    const reserveInput = document.getElementById('setReserveCredits');
-    if(reserveInput) reserveInput.value = String(reserveValue);
-      const reserveState = document.getElementById('setReserveState');
-      if(reserveState){
-        reserveState.textContent = reserveValue > 0 ? ('(低于 ' + reserveValue + ' 暂停接单)') : '(未启用)';
-        reserveState.style.color = reserveValue > 0 ? 'var(--accent2)' : 'var(--dim)';
-      }
-      const dailyTokValue = Number(data.daily_token_limit || 0);
-      const dailyTokInput = document.getElementById('setDailyTokenLimit');
-      if(dailyTokInput) dailyTokInput.value = String(dailyTokValue);
-      const dailyTokState = document.getElementById('setDailyTokenState');
-      if(dailyTokState){
-        dailyTokState.textContent = dailyTokValue > 0 ? ('(每账号每天 ' + fmt(dailyTokValue) + ' token)') : '(不限)';
-        dailyTokState.style.color = dailyTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
-      }
-      const dailyCredValue = Number(data.daily_credit_limit || 0);
-      const dailyCredInput = document.getElementById('setDailyCreditLimit');
-      if(dailyCredInput) dailyCredInput.value = String(dailyCredValue);
-      const dailyCredState = document.getElementById('setDailyCreditState');
-      if(dailyCredState){
-        dailyCredState.textContent = dailyCredValue > 0 ? ('(每账号每天 ' + fmt(dailyCredValue) + ' 积分，超出后仅免费模型)') : '(已关闭)';
-        dailyCredState.style.color = dailyCredValue > 0 ? 'var(--accent2)' : 'var(--dim)';
-      }
-      const modelTokValue = Number(data.model_daily_token_limit || 0);
-      const modelTokInput = document.getElementById('setModelDailyTokenLimit');
-      if(modelTokInput) modelTokInput.value = String(modelTokValue);
-      const modelTokState = document.getElementById('setModelDailyTokenState');
-      if(modelTokState){
-        modelTokState.textContent = modelTokValue > 0 ? ('(每账号每模型每天 ' + fmt(modelTokValue) + ' token)') : '(不限)';
-        modelTokState.style.color = modelTokValue > 0 ? 'var(--accent2)' : 'var(--dim)';
-      }
+    applyLimits(data);
       const pricingMinutes = Number(data.pricing_refresh_minutes || 0);
       const pricingInput = document.getElementById('setPricingMinutes');
       if(pricingInput) pricingInput.value = String(pricingMinutes);
@@ -3953,46 +3929,114 @@ async function savePanelPassword(btn){
   }
 }
 
-async function saveReserveCredits(btn){
-  const el = document.getElementById('setReserveCredits');
-  const value = Math.floor(Number((el || {}).value || 0));
-  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数', 'warn'); return; }
-  if(btn) btn.disabled = true;
-  try {
-    await postJSON('/settings/save', {reserve_credits: value});
-    toast(value > 0 ? ('已启用：余额低于 ' + value + ' 的账号暂停接单') : '已关闭保留积分', 'ok');
-    loadSettings();
-  } catch(e) {
-    toast('保存失败: ' + e.message, 'bad');
-  } finally {
-    if(btn) btn.disabled = false;
+// ---- 限额（全局默认 + 可选分版本） -------------------------------------
+// 四个护栏共用一张表：一列一个作用域。国际版/国内版留空即继承全局默认，
+// 所以“不分版本”只是“两列都留空”的一个特例，不必再另存一套开关。
+const LIMIT_FIELDS = [
+  {key:'reserve_credits',         id:'Reserve',         label:'保留积分'},
+  {key:'daily_token_limit',       id:'DailyToken',      label:'每日 Token 限额'},
+  {key:'daily_credit_limit',      id:'DailyCredit',     label:'每日积分限额'},
+  {key:'model_daily_token_limit', id:'ModelDailyToken', label:'按模型每日 Token 限额'},
+];
+const LIMIT_SCOPES = [
+  {scope:'global', prefix:'Global', label:'全局默认'},
+  {scope:'intl',   prefix:'Intl',   label:'国际版'},
+  {scope:'cn',     prefix:'Cn',     label:'国内版'},
+];
+
+function limitEl(prefix, id){
+  return document.getElementById('limit' + prefix + id);
+}
+
+function limitHasOverride(entry){
+  return LIMIT_SCOPES.slice(1).some(
+    ({scope}) => entry[scope] !== null && entry[scope] !== undefined);
+}
+
+// 括号里写清这条护栏当前生效的值：先全局，再任何被单独设置的版本。
+function limitBadge(entry){
+  const bits = [];
+  const globalValue = Number(entry.global || 0);
+  if(globalValue > 0) bits.push('全局 ' + fmt(globalValue));
+  for(const {scope, label} of LIMIT_SCOPES.slice(1)){
+    const value = entry[scope];
+    if(value !== null && value !== undefined) bits.push(label + ' ' + fmt(value));
+  }
+  return bits.length ? ('(' + bits.join(' · ') + ')') : '(全部关闭)';
+}
+
+function toggleLimitRealms(show){
+  document.querySelectorAll('.limit-realm-col').forEach(el => {
+    el.style.display = show ? '' : 'none';
+  });
+}
+
+function applyLimits(data){
+  const limits = data.limits || {};
+  const anyOverride = LIMIT_FIELDS.some(
+    field => limitHasOverride(limits[field.key] || {}));
+  for(const field of LIMIT_FIELDS){
+    const entry = limits[field.key] || {};
+    const globalValue = Number(entry.global || 0);
+    const globalInput = limitEl('Global', field.id);
+    if(globalInput) globalInput.value = String(globalValue);
+    for(const {scope, prefix} of LIMIT_SCOPES.slice(1)){
+      const input = limitEl(prefix, field.id);
+      const raw = entry[scope];
+      const inherited = (raw === null || raw === undefined);
+      if(input){
+        input.value = inherited ? '' : String(raw);
+        // 占位符直接写出继承到的那个数，省得再翻回全局列对照。
+        input.placeholder = '继承 ' + fmt(globalValue);
+      }
+    }
+    const state = document.getElementById('set' + field.id + 'State');
+    if(state){
+      state.textContent = limitBadge(entry);
+      state.style.color = (globalValue > 0 || anyOverride) ? 'var(--accent2)' : 'var(--dim)';
+    }
+  }
+  const toggle = document.getElementById('setLimitsPerRealm');
+  if(toggle) toggle.checked = anyOverride;
+  toggleLimitRealms(anyOverride);
+  const sectionState = document.getElementById('setLimitsState');
+  if(sectionState){
+    sectionState.textContent = anyOverride ? '(已分版本设置)' : '(全局生效)';
+    sectionState.style.color = anyOverride ? 'var(--accent2)' : 'var(--dim)';
   }
 }
 
-async function saveDailyTokenLimit(btn){
-  const el = document.getElementById('setDailyTokenLimit');
-  const value = Math.floor(Number((el || {}).value || 0));
-  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（token）', 'warn'); return; }
-  if(btn) btn.disabled = true;
-  try {
-    await postJSON('/settings/save', {daily_token_limit: value});
-    toast(value > 0 ? ('已启用：账号当日超过 ' + fmt(value) + ' token 后暂停接单') : '已设为不限（0 = 不限额）', 'ok');
-    loadSettings();
-  } catch(e) {
-    toast('保存失败: ' + e.message, 'bad');
-  } finally {
-    if(btn) btn.disabled = false;
-  }
+function limitFormValue(prefix, field){
+  const input = limitEl(prefix, field.id);
+  return input ? String(input.value).trim() : '';
 }
 
-async function saveDailyCreditLimit(btn){
-  const el = document.getElementById('setDailyCreditLimit');
-  const value = Math.floor(Number((el || {}).value || 0));
-  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（积分）', 'warn'); return; }
+async function saveLimits(btn){
+  const perRealmBox = document.getElementById('setLimitsPerRealm');
+  const showRealms = !!(perRealmBox && perRealmBox.checked);
+  const payload = {};
+  for(const field of LIMIT_FIELDS){
+    const globalValue = Math.floor(Number(limitFormValue('Global', field) || 0));
+    if(!Number.isFinite(globalValue) || globalValue < 0){
+      toast('「' + field.label + '」的全局默认请填 0 或正整数', 'warn'); return;
+    }
+    const entry = {global: globalValue};
+    for(const {scope, prefix, label} of LIMIT_SCOPES.slice(1)){
+      const raw = limitFormValue(prefix, field);
+      // 收起分版本、或该版本留空，都表示“继承全局”；服务端收到 null 会清掉旧覆盖值。
+      if(!showRealms || raw === ''){ entry[scope] = null; continue; }
+      const value = Math.floor(Number(raw));
+      if(!Number.isFinite(value) || value < 0){
+        toast('「' + field.label + '」的' + label + '请填 0 或正整数（留空 = 继承全局）', 'warn'); return;
+      }
+      entry[scope] = value;
+    }
+    payload[field.key] = entry;
+  }
   if(btn) btn.disabled = true;
   try {
-    await postJSON('/settings/save', {daily_credit_limit: value});
-    toast(value > 0 ? ('已启用：账号当日超过 ' + value + ' 积分后仅免费模型可用') : '已关闭每日积分限额', 'ok');
+    await postJSON('/settings/save', {limits: payload});
+    toast('限额已保存', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
@@ -4009,22 +4053,6 @@ async function savePricingMinutes(btn){
   try {
     await postJSON('/settings/save', {pricing_refresh_minutes: value});
     toast(value > 0 ? ('已启用：每 ' + value + ' 分钟取一次价') : '已关闭自动取价（仍可手动取一次）', 'ok');
-    loadSettings();
-  } catch(e) {
-    toast('保存失败: ' + e.message, 'bad');
-  } finally {
-    if(btn) btn.disabled = false;
-  }
-}
-
-async function saveModelDailyTokenLimit(btn){
-  const el = document.getElementById('setModelDailyTokenLimit');
-  const value = Math.floor(Number((el || {}).value || 0));
-  if(!Number.isFinite(value) || value < 0){ toast('请填写 0 或正整数（token）', 'warn'); return; }
-  if(btn) btn.disabled = true;
-  try {
-    await postJSON('/settings/save', {model_daily_token_limit: value});
-    toast(value > 0 ? ('已启用：账号单模型当日超过 ' + fmt(value) + ' token 后该模型切走') : '已设为不限（0 = 不限额）', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');

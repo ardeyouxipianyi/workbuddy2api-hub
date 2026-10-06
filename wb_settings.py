@@ -406,62 +406,196 @@ def set_auth_disabled(accounts_dir, disabled):
         save(accounts_dir, data)
 
 
-def reserve_credits(accounts_dir):
+# ------------------------------------------------------------------ limits
+# The four guards share one shape: a global default that covers both realms,
+# plus an optional per-realm override. An override left empty inherits the
+# global value, so an install that never touches it behaves exactly as before,
+# and one that does only ever has to reason about a single number per guard.
+LIMIT_KEYS = ("reserve_credits", "daily_token_limit",
+              "daily_credit_limit", "model_daily_token_limit")
+LIMIT_REALMS = ("intl", "cn")
+LIMIT_SCOPES = ("global",) + LIMIT_REALMS
+LIMITS_KEY = "limits"
+
+
+def _empty_limit_entry():
+    """One guard: a global default plus a slot per realm (None = inherit)."""
+    return {"global": 0, "intl": None, "cn": None}
+
+
+def _coerce_global(value):
+    """A global threshold. Junk and negatives collapse to 0 (off), which is
+    also what every install predating the setting reads as."""
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return max(0, number)
+
+
+def _coerce_override(value):
+    """A per-realm override. None (or a blank form field) means "inherit the
+    global default", kept distinct from an explicit 0 ("off for this realm")."""
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, number)
+
+
+def _fold_legacy_limits(data):
+    """Move the four flat top-level guards into `limits`.
+
+    Returns (changed, limits). The old keys are dropped as they are folded in,
+    so a later rollback cannot resurrect a stale limit from beside the grouped
+    copy.
+    """
+    limits = {}
+    changed = False
+    for key in LIMIT_KEYS:
+        entry = _empty_limit_entry()
+        if key in data:
+            entry["global"] = _coerce_global(data.pop(key))
+            changed = True
+        limits[key] = entry
+    return changed, limits
+
+
+def _normalize_limits(raw):
+    """A copy of the stored map with every key and scope filled in, so a
+    partial or hand-edited settings.json still reads as a complete shape."""
+    limits = {}
+    for key in LIMIT_KEYS:
+        entry = raw.get(key)
+        if not isinstance(entry, dict):
+            entry = {}
+        limits[key] = {
+            "global": _coerce_global(entry.get("global")),
+            "intl": _coerce_override(entry.get("intl")),
+            "cn": _coerce_override(entry.get("cn")),
+        }
+    return limits
+
+
+def limits_data(accounts_dir):
+    """The grouped limits map, migrating a flat pre-grouping file on first read.
+
+    Reading is what upgrades: the first look at an old settings.json folds the
+    four flat keys into `limits` and rewrites the file, so the rest of the
+    gateway only ever sees one shape.
+    """
+    with _lock:
+        data = load(accounts_dir)
+        raw = data.get(LIMITS_KEY)
+        if isinstance(raw, dict):
+            return _normalize_limits(raw)
+        changed, limits = _fold_legacy_limits(data)
+        if changed:
+            data[LIMITS_KEY] = limits
+            try:
+                save(accounts_dir, data)
+            except Exception:
+                # A read-only accounts dir must not take the panel down; the
+                # folded values are still returned and the next read retries.
+                pass
+        return limits
+
+
+def limits_snapshot(accounts_dir):
+    """The panel's view of every guard, keyed by limit then by scope."""
+    return limits_data(accounts_dir)
+
+
+def limit_value(accounts_dir, key, realm=None):
+    """One guard's effective value for a realm.
+
+    realm None (or "") returns the global default; an intl/cn override wins
+    when it is set. An unknown key reads as 0 (off), so a typo cannot wedge
+    the request path.
+    """
+    entry = limits_data(accounts_dir).get(key) or _empty_limit_entry()
+    if realm in LIMIT_REALMS:
+        override = entry.get(realm)
+        if override is not None:
+            return override
+    return entry.get("global") or 0
+
+
+def limit_values(accounts_dir, key):
+    """One guard resolved for every realm plus the global it inherits.
+
+    {"global": g, "intl": ..., "cn": ...}. The intl/cn entries already carry
+    the global value when no override is set, so the pool can hand each
+    account its own realm without a second settings lookup.
+    """
+    entry = limits_data(accounts_dir).get(key) or _empty_limit_entry()
+    global_value = entry.get("global") or 0
+    values = {"global": global_value}
+    for realm in LIMIT_REALMS:
+        override = entry.get(realm)
+        values[realm] = global_value if override is None else override
+    return values
+
+
+def set_limit(accounts_dir, key, scope, value):
+    """Persist one guard at one scope. Returns the stored entry.
+
+    scope is "global", "intl" or "cn"; a None/blank value clears an intl/cn
+    override back to "inherit", while the global slot always stores a number.
+    """
+    if key not in LIMIT_KEYS:
+        raise ValueError("unknown limit: %s" % key)
+    if scope not in LIMIT_SCOPES:
+        raise ValueError("unknown scope: %s" % scope)
+    with _lock:
+        data = load(accounts_dir)
+        raw = data.get(LIMITS_KEY)
+        if isinstance(raw, dict):
+            limits = _normalize_limits(raw)
+        else:
+            _changed, limits = _fold_legacy_limits(data)
+        entry = limits[key]
+        if scope == "global":
+            entry["global"] = _coerce_global(value)
+        else:
+            entry[scope] = _coerce_override(value)
+        data[LIMITS_KEY] = limits
+        save(accounts_dir, data)
+    return entry
+
+
+def reserve_credits(accounts_dir, realm=None):
     """Global low-credit guard: an account at or below this balance stays idle.
 
     Zero disables the guard, which keeps installs that predate the setting
     behaving exactly as before.
     """
-    try:
-        value = int(load(accounts_dir).get("reserve_credits") or 0)
-    except (TypeError, ValueError):
-        return 0
-    return value if value > 0 else 0
+    return limit_value(accounts_dir, "reserve_credits", realm)
 
 
 def set_reserve_credits(accounts_dir, value):
     """Persist the guard threshold. Returns the stored value."""
-    try:
-        value = int(value or 0)
-    except (TypeError, ValueError):
-        value = 0
-    value = max(0, value)
-    with _lock:
-        data = load(accounts_dir)
-        data["reserve_credits"] = value
-        save(accounts_dir, data)
-    return value
+    return set_limit(accounts_dir, "reserve_credits", "global", value)["global"]
 
 
-def daily_token_limit(accounts_dir):
+def daily_token_limit(accounts_dir, realm=None):
     """Global daily guard: an account that already burned this many tokens
     today stays idle until local midnight.
 
     Zero disables the guard, which keeps installs that predate the setting
     behaving exactly as before.
     """
-    try:
-        value = int(load(accounts_dir).get("daily_token_limit") or 0)
-    except (TypeError, ValueError):
-        return 0
-    return value if value > 0 else 0
+    return limit_value(accounts_dir, "daily_token_limit", realm)
 
 
 def set_daily_token_limit(accounts_dir, value):
     """Persist the daily token threshold. Returns the stored value."""
-    try:
-        value = int(value or 0)
-    except (TypeError, ValueError):
-        value = 0
-    value = max(0, value)
-    with _lock:
-        data = load(accounts_dir)
-        data["daily_token_limit"] = value
-        save(accounts_dir, data)
-    return value
+    return set_limit(accounts_dir, "daily_token_limit", "global", value)["global"]
 
 
-def daily_credit_limit(accounts_dir):
+def daily_credit_limit(accounts_dir, realm=None):
     """Daily credit guard: an account that already spent this many credits
     today serves free models only until local midnight, so a client that
     would keep burning credits on paid models rotates to another account
@@ -470,25 +604,28 @@ def daily_credit_limit(accounts_dir):
     Zero disables the guard, which keeps installs that predate the setting
     behaving exactly as before.
     """
-    try:
-        value = int(load(accounts_dir).get("daily_credit_limit") or 0)
-    except (TypeError, ValueError):
-        return 0
-    return value if value > 0 else 0
+    return limit_value(accounts_dir, "daily_credit_limit", realm)
 
 
 def set_daily_credit_limit(accounts_dir, value):
     """Persist the daily credit threshold. Returns the stored value."""
-    try:
-        value = int(value or 0)
-    except (TypeError, ValueError):
-        value = 0
-    value = max(0, value)
-    with _lock:
-        data = load(accounts_dir)
-        data["daily_credit_limit"] = value
-        save(accounts_dir, data)
-    return value
+    return set_limit(accounts_dir, "daily_credit_limit", "global", value)["global"]
+
+
+def model_daily_token_limit(accounts_dir, realm=None):
+    """Per-model daily guard: an account that already burned this many
+    tokens today on ONE model stops being handed out for that model until
+    local midnight, while every other model keeps working.
+
+    Zero disables the guard, which keeps installs that predate the setting
+    behaving exactly as before.
+    """
+    return limit_value(accounts_dir, "model_daily_token_limit", realm)
+
+
+def set_model_daily_token_limit(accounts_dir, value):
+    """Persist the per-model daily token threshold. Returns the stored value."""
+    return set_limit(accounts_dir, "model_daily_token_limit", "global", value)["global"]
 
 
 def _clamp_refresh_minutes(value):
@@ -567,33 +704,6 @@ def set_pricing_refresh_minutes(accounts_dir, value):
     return value
 
 
-def model_daily_token_limit(accounts_dir):
-    """Per-model daily guard: an account that already burned this many
-    tokens today on ONE model stops being handed out for that model until
-    local midnight, while every other model keeps working.
-
-    Zero disables the guard, which keeps installs that predate the setting
-    behaving exactly as before.
-    """
-    try:
-        value = int(load(accounts_dir).get("model_daily_token_limit") or 0)
-    except (TypeError, ValueError):
-        return 0
-    return value if value > 0 else 0
-
-
-def set_model_daily_token_limit(accounts_dir, value):
-    """Persist the per-model daily token threshold. Returns the stored value."""
-    try:
-        value = int(value or 0)
-    except (TypeError, ValueError):
-        value = 0
-    value = max(0, value)
-    with _lock:
-        data = load(accounts_dir)
-        data["model_daily_token_limit"] = value
-        save(accounts_dir, data)
-    return value
 def pricing_variant_inherit(accounts_dir):
     """Whether a model name may inherit its price from a suffix-stripped base.
 
