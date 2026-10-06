@@ -43,6 +43,14 @@ for (const [, name] of html.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)) def
 for (const [, name] of html.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/g)) {
   defined.add(name);
 }
+// `window.name = function(...)` is the other way this page defines a handler;
+// the theme block's applyTheme / selectTheme / toggleThemeMenu all use it.
+// Whether such a name is actually reachable from an inline attribute is a
+// scope question this textual sweep cannot answer - _test_dashboard_theme.js
+// executes the theme block and checks that.
+for (const [, name] of html.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\()/g)) {
+  defined.add(name);
+}
 
 const missing = [...referenced].filter(name => !defined.has(name)).sort();
 

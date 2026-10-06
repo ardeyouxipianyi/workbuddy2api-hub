@@ -467,8 +467,7 @@ a:hover{text-decoration:underline}
     updateThemeUI(pref, resolved);
   };
 
-  function selectTheme(pref, evt){
-  window.selectTheme = selectTheme;
+  window.selectTheme = function(pref, evt){
     if(evt){
       evt.preventDefault();
       evt.stopPropagation();
@@ -480,8 +479,7 @@ a:hover{text-decoration:underline}
     if(btn) btn.setAttribute('aria-expanded', 'false');
   };
 
-  function toggleThemeMenu(evt){
-  window.toggleThemeMenu = toggleThemeMenu;
+  window.toggleThemeMenu = function(evt){
     if(evt){
       evt.preventDefault();
       evt.stopPropagation();
