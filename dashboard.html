@@ -177,6 +177,7 @@ a:hover{text-decoration:underline}
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
   padding:14px 18px;box-shadow:var(--shadow);cursor:pointer;transition:all .15s ease;
   position:relative;display:flex;flex-direction:column;justify-content:space-between;min-height:104px;
+  color:var(--fg);font:inherit;text-align:left;width:100%;
 }
 .realm-card:hover{border-color:var(--line-hover);transform:translateY(-1px);box-shadow:var(--shadow-md)}
 .realm-card.active{
@@ -239,6 +240,8 @@ a:hover{text-decoration:underline}
 .log-tag.tag-accounts{background:rgba(14,165,233,.18);color:#38bdf8}
 .log-tag.tag-auth{background:rgba(244,63,94,.18);color:#fb7185}
 .log-tag.tag-system{background:rgba(100,116,139,.18);color:#94a3b8}
+.log-tag.tag-catalog{background:rgba(14,116,144,.18);color:#22d3ee}
+.log-tag.tag-settings{background:rgba(168,85,247,.18);color:#d8b4fe}
 .log-msg{color:#cbd5e1;flex:1;word-break:break-all;white-space:pre-wrap}
 .log-empty{padding:48px 24px;text-align:center;color:#64748b;font-size:13px;font-family:inherit}
 /* ===== Phone: ≤640px ===== */
@@ -406,7 +409,7 @@ a:hover{text-decoration:underline}
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px">
     
     <!-- 卡片 1: 国际版 (Global) -->
-    <div id="tabIntl" class="realm-card active"  data-action="switchViewRealm" data-on="click" data-arg="intl">
+    <button type="button" id="tabIntl" class="realm-card active" data-action="switchViewRealm" data-on="click" data-arg="intl">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="realm-badge-intl">国际版 (Global)</span>
@@ -422,10 +425,10 @@ a:hover{text-decoration:underline}
         </div>
         <span id="tabIntlKeyBadge" class="badge s mini" style="font-weight:600">0 个 Key</span>
       </div>
-    </div>
+    </button>
 
     <!-- 卡片 2: 国内版 (China) -->
-    <div id="tabCn" class="realm-card"  data-action="switchViewRealm" data-on="click" data-arg="cn">
+    <button type="button" id="tabCn" class="realm-card" data-action="switchViewRealm" data-on="click" data-arg="cn">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="realm-badge-cn">国内版 (China)</span>
@@ -441,7 +444,7 @@ a:hover{text-decoration:underline}
         </div>
         <span id="tabCnKeyBadge" class="badge warn mini" style="font-weight:600">0 个 Key</span>
       </div>
-    </div>
+    </button>
 
     <!-- 卡片 3: 网关出口控制 -->
     <div id="cardGatewayCtrl" class="realm-card gateway-ctrl" style="cursor:default">
@@ -473,6 +476,7 @@ a:hover{text-decoration:underline}
       <button class="sec mini" id="btnToggleSched"  data-action="toggleScheduler" data-on="click">暂停调度</button>
     </div>
   </div>
+  <div id="schedulerDetails" style="display:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 14px;margin:-8px 0 16px;font-size:12px;color:var(--dim);line-height:1.7"></div>
 
   <div class="cards" id="cards"></div>
 
@@ -900,6 +904,19 @@ a:hover{text-decoration:underline}
         </div>
       </section>
 
+      <section id="advancedSettingsSection">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+          <div>
+            <h2 style="margin:0">进阶设置</h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              账号池治理、排程、Upstash 镜像、上游超时、系统提示词与日志归档。所有修改都会经过後端严格校验；排程修改会立即重载调度器。
+            </div>
+          </div>
+          <button class="sec" data-action="loadSettings" data-on="click" data-arg="1">重新读取</button>
+        </div>
+        <div id="advancedSettingsCards"></div>
+      </section>
+
       <section>
         <h2>运行信息</h2>
       <table>
@@ -908,6 +925,8 @@ a:hover{text-decoration:underline}
           <tr><td>账号存储目录</td><td class="mono" id="setAccountsDir">-</td></tr>
           <tr><td>用量日志目录</td><td class="mono" id="setUsageDir">-</td></tr>
           <tr><td>设置文件</td><td class="mono" id="setFile">-</td></tr>
+          <tr><td>全局并发上限</td><td class="mono" id="setMaxConcurrent">-</td></tr>
+          <tr><td>并发等待秒数</td><td class="mono" id="setChatSlotWait">-</td></tr>
         </tbody>
       </table>
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
@@ -950,6 +969,9 @@ a:hover{text-decoration:underline}
         <button class="range-btn" id="btnLogTagSched"  data-action="setLogFilterTag" data-on="click" data-arg="scheduler">调度器</button>
         <button class="range-btn" id="btnLogTagAcct"  data-action="setLogFilterTag" data-on="click" data-arg="accounts">账号</button>
         <button class="range-btn" id="btnLogTagSys"  data-action="setLogFilterTag" data-on="click" data-arg="system">系统</button>
+        <button class="range-btn" id="btnLogTagCatalog"  data-action="setLogFilterTag" data-on="click" data-arg="catalog">模型目录</button>
+        <button class="range-btn" id="btnLogTagAuth"  data-action="setLogFilterTag" data-on="click" data-arg="auth">认证</button>
+        <button class="range-btn" id="btnLogTagSettings"  data-action="setLogFilterTag" data-on="click" data-arg="settings">设置</button>
       </div>
 
       <div style="flex:1;min-width:180px;position:relative">
@@ -993,8 +1015,22 @@ a:hover{text-decoration:underline}
             <option value="100">100 条</option>
             <option value="200" selected>200 条</option>
             <option value="500">500 条</option>
+            <option value="1000">1000 条</option>
+            <option value="5000">5000 条</option>
           </select>
           <button class="sec"  data-action="loadRequestArchive" data-on="click">刷新归档</button>
+          <details id="reqFiltersMore" style="flex-basis:100%">
+            <summary style="cursor:pointer;font-size:12px;color:var(--accent)">更多筛选</summary>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">账号 <input id="reqFilterAccount" class="slot-input" style="width:180px" placeholder="uid / 昵称"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">状态码 <input id="reqFilterStatus" class="slot-input" style="width:90px" placeholder="502"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">结果 <input id="reqFilterOutcome" class="slot-input" style="width:140px" placeholder="failed / completed"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">路径 <input id="reqFilterPath" class="slot-input" style="width:210px" placeholder="/v1/chat/completions"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">请求 ID <input id="reqFilterRequestId" class="slot-input" style="width:180px" placeholder="exact id"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">起 <input id="reqFilterSince" type="datetime-local" class="slot-input" style="width:190px"></label>
+              <label style="font-size:12px;color:var(--dim);display:flex;align-items:center;gap:5px">迄 <input id="reqFilterUntil" type="datetime-local" class="slot-input" style="width:190px"></label>
+            </div>
+          </details>
         </div>
       </div>
       <div class="cards" style="margin-bottom:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
@@ -1006,7 +1042,7 @@ a:hover{text-decoration:underline}
       </div>
       <div style="overflow-x:auto;max-height:420px">
         <table class="data-cards" id="requestTable">
-          <thead><tr><th>时间</th><th>模型</th><th>状态</th><th>结果</th><th>耗时</th><th>TTFB</th><th>账号</th><th>请求 ID</th></tr></thead>
+          <thead><tr><th>时间</th><th>模型</th><th>状态</th><th>结果</th><th>耗时</th><th>TTFB</th><th>账号</th><th>请求 ID</th><th>错误 / 提示</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1410,6 +1446,8 @@ function renderAvailableModels(){
       }else{
         maxOut = '<b>' + fmtK(clamp) + '</b> <span style="color:var(--accent2)">✓</span>';
       }
+    } else if(m.max_output_tokens){
+      maxOut += '<div style="font-size:11px;color:var(--dim);margin-top:2px" title="尚未运行 scripts/probe_max_tokens.py，只有厂商声称值">未探测</div>';
     }
 
     // 5. 思考档位
@@ -1649,12 +1687,27 @@ function fmtReqPct(value){
 async function loadRequestArchive(btn){
   if(btn) btn.disabled = true;
   try{
-    const model = (document.getElementById('reqFilterModel') || {}).value || '';
+    const value = id => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    const model = value('reqFilterModel');
+    const account = value('reqFilterAccount');
+    const outcome = value('reqFilterOutcome');
+    const path = value('reqFilterPath');
+    const requestId = value('reqFilterRequestId');
     const errorsOnly = !!(document.getElementById('reqFilterErrors') || {}).checked;
-    const limit = Number((document.getElementById('reqFilterLimit') || {}).value || 200);
+    const limit = Number(value('reqFilterLimit') || 200);
     const filters = {limit: limit};
     if(model) filters.model = model;
+    if(account) filters.account = account;
+    if(outcome) filters.outcome = outcome;
+    if(path) filters.path = path;
+    if(requestId) filters.request_id = requestId;
     if(errorsOnly) filters.error = true;
+    const status = Number(value('reqFilterStatus'));
+    if(Number.isInteger(status) && status > 0) filters.status = status;
+    const since = value('reqFilterSince');
+    const until = value('reqFilterUntil');
+    if(since){ const ms = new Date(since).getTime(); if(Number.isFinite(ms)) filters.since = ms / 1000; }
+    if(until){ const ms = new Date(until).getTime(); if(Number.isFinite(ms)) filters.until = ms / 1000; }
     const metricsRes = await postJSON('/requests/metrics', filters);
     const rowsRes = await postJSON('/requests', filters);
     const m = metricsRes.metrics || {};
@@ -1667,7 +1720,9 @@ async function loadRequestArchive(btn){
     const tbody = document.querySelector('#requestTable tbody');
     if(tbody){
       const rows = rowsRes.rows || [];
-      tbody.innerHTML = rows.map(r => '<tr>'
+      tbody.innerHTML = rows.map(r => {
+        const hint = r.gateway_hint || (r.error ? (r.message || '') : '');
+        return '<tr>'
         + '<td>' + esc(r.iso || '') + '</td>'
         + '<td>' + esc(r.model || '') + '</td>'
         + '<td>' + esc(String(r.status != null ? r.status : (r.error ? 'ERR' : '200'))) + '</td>'
@@ -1676,7 +1731,9 @@ async function loadRequestArchive(btn){
         + '<td>' + fmtReqMs(r.ttft_ms) + '</td>'
         + '<td class="mono">' + esc(String(r.account || '').slice(0,8)) + '</td>'
         + '<td class="mono">' + esc(String(r.request_id || '').slice(0,12)) + '</td>'
-        + '</tr>').join('') || '<tr><td colspan="8" style="color:var(--dim)">没有匹配的请求</td></tr>';
+        + '<td title="' + esc(hint) + '" style="max-width:260px;white-space:normal;color:' + (hint && r.error ? 'var(--warn)' : 'var(--dim)') + '">' + esc(hint || '-') + '</td>'
+        + '</tr>';
+      }).join('') || '<tr><td colspan="9" style="color:var(--dim)">没有匹配的请求</td></tr>';
     }
     if(btn) toast('请求归档已刷新', 'ok');
   }catch(e){
@@ -1712,6 +1769,7 @@ async function loadSchedulerStatus(){
     const dot = document.getElementById("schedDot");
     const txt = document.getElementById("schedStatusText");
     const times = document.getElementById("schedTimes");
+    const details = document.getElementById("schedulerDetails");
     const btn = document.getElementById("btnToggleSched");
     const btnTrig = document.getElementById("btnTriggerSched");
 
@@ -1723,6 +1781,24 @@ async function loadSchedulerStatus(){
     if(times) times.textContent = '上次: ' + (s.last_run_time || '-') + ' · 下次: ' + (s.next_run_time || '-');
     if(btn) btn.textContent = s.enabled ? '暂停调度' : '启用调度';
     if(btnTrig) btnTrig.textContent = (window.VIEW_REALM === 'intl') ? '立即保活刷新' : '立即巡检保活';
+    if(details){
+      const families = [
+        ['签到', s.checkin_hours, s.checkin_enabled],
+        ['旅行', s.travel_hours, s.travel_enabled],
+        ['保活', s.keepalive_hours, s.keepalive_enabled],
+        ['夜猫', s.cat_hours, s.cat_enabled],
+        ['活跃', s.daily_chat_hours, s.daily_chat_enabled],
+        ['成长', s.growth_hours, s.growth_enabled]
+      ].filter(item => item[1] && item[1].length);
+      const bits = families.map(item => item[0] + ' ' + item[1].join('/') + (item[2] === false ? '（关）' : ''));
+      const balance = s.balance_refresh || {};
+      bits.push('余额刷新 ' + (balance.enabled ? ('每 ' + (balance.minutes || 5) + ' 分钟') : '关闭'));
+      if(s.include_disabled_in_tasks) bits.push('保号任务覆盖已禁用账号');
+      const logs = (s.logs || []).slice(-3);
+      details.innerHTML = '<div>' + esc(bits.join(' · ')) + '</div>' +
+        (logs.length ? '<div style="margin-top:4px;max-height:52px;overflow:auto;font-family:monospace;font-size:11px">' + logs.map(line => esc(line)).join('<br>') + '</div>' : '');
+      details.style.display = 'block';
+    }
   }catch(e){}
 }
 
@@ -1750,13 +1826,6 @@ async function toggleScheduler(btn){
   }finally{
     if(btn){ btn.disabled = false; }
   }
-}
-function filterRealm(m){
-  REALM_FILTER = m;
-  document.getElementById("fltAll").className = m === "all" ? "active" : "";
-  document.getElementById("fltIntl").className = m === "intl" ? "active" : "";
-  document.getElementById("fltCn").className = m === "cn" ? "active" : "";
-  renderAccounts();
 }
 async function doCheckin(btn){
   btn.disabled = true; const ot = btn.textContent; btn.textContent = "签到中...";
@@ -1963,12 +2032,21 @@ function accountRow(a){
   const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
   const nameAttr = esc(String(a.nickname || '').replace(/["'\\<>]/g, ''));
   const usage = USAGE_BY_ACCOUNT[a.uid] || {};
-  const state = !a.enabled ? '<span class="badge off">已停用</span>'
+  const state = !a.enabled
+              ? (a.sessionDeadFails > 0
+                  ? '<span class="badge bad" title="Session 连续失效达到阈值后自动停用">Session失效 ' + a.sessionDeadFails + '/' + (a.sessionDeadThreshold || 3) + '</span>'
+                  : '<span class="badge off">已停用</span>')
+              : a.balanceCooledFor > 0 ? '<span class="badge bad" title="上游余额不足，等待签到/余额刷新恢复">402冷却 ' + a.balanceCooledFor + 's</span>'
+              : a.breakerFor > 0 ? '<span class="badge bad">熔断 ' + a.breakerFor + 's</span>'
+              : a.degradeFor > 0 ? '<span class="badge warn">降权 ' + a.degradeFor + 's</span>'
               : a.reserveBlocked ? '<span class="badge warn">保留积分</span>'
               : a.dailyLimitBlocked ? '<span class="badge warn" title="今日已用 ' + fmt(a.dailyTokensToday || 0) + ' / ' + fmt(a.dailyTokenLimit || 0) + ' token，暂停接单（本地 0 点恢复）">日限额</span>'
               : a.inCooldown ? '<span class="badge warn">冷却 ' + (a.cooldownFor||0) + 's</span>'
               : a.expiresIn === 'expired' ? '<span class="badge bad">已过期</span>'
               : '<span class="badge ok">可用</span>';
+  const flight = (a.inFlight || a.maxInFlight)
+              ? '<div style="margin-top:3px"><span class="badge ' + (a.maxInFlight && a.inFlight >= a.maxInFlight ? 'warn' : 's') + ' mini">在途 ' + (a.inFlight || 0) + '/' + (a.maxInFlight || 0) + '</span></div>'
+              : '';
   const pills = coolPills(a);
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
     ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
@@ -1981,7 +2059,7 @@ function accountRow(a){
     + '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(a.uid.slice(0,8)) + ' · ' + esc(a.source) + ' · 到期 ' + esc(a.expiresIn || '?') + '</div>'
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
     + err + pills + '</td>'
-    + '<td style="text-align:center" data-label="状态">' + state + '</td>'
+    + '<td style="text-align:center" data-label="状态">' + state + flight + '</td>'
     + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
     + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
     + '<td style="text-align:right" data-label="请求">' + fmt(usage.requests) + '</td>'
@@ -2215,7 +2293,8 @@ async function deleteAccount(uid, name, btn){
   if(!confirm("确定删除账号 " + name + "？")) return;
   if(btn) btn.disabled = true;
   try{
-    await postJSON('/accounts/delete', {uid: uid});
+    const res = await postJSON('/accounts/delete', {uid: uid});
+    if(res.deleted === false) throw new Error('account not found');
     await loadAccounts();
     toast('已成功删除账号 ' + name, 'ok');
   }catch(e){
@@ -2870,6 +2949,193 @@ async function startDashboard(){
   ];
 }
 
+
+/* ---- advanced settings (audit 2026-10-06) --------------------------------
+ * The backend has validated these six groups since M1/M2. Keep the field
+ * descriptions here rather than duplicating 49 static inputs in the markup;
+ * renderAdvancedSettings() redraws the cards from GET /settings and each card
+ * saves one deep-merge patch through /settings/save.
+ */
+const ADVANCED_SETTING_GROUPS = [
+  {
+    id: 'pool', title: '账号池与流量治理',
+    desc: '加权选号、软冷却、熔断、降权、在途租约、成本探索、积分保底与粘性路由。',
+    fields: [
+      {key:'weighted_pick', label:'加权选号', type:'bool', hint:'按积分比例与闲置补偿加权抽取账号，关闭则恢复轮询。'},
+      {key:'soft_rate', label:'软冷却基数（秒）', type:'number', min:0, step:'any', hint:'遇到上游软限流后的基础冷却秒数。'},
+      {key:'soft_rate_max', label:'软冷却上限（秒）', type:'number', min:0, step:'any', hint:'指数退避的封顶秒数。'},
+      {key:'breaker_threshold', label:'熔断阈值', type:'int', min:1, hint:'连续失败达到此数后进入熔断。'},
+      {key:'breaker_cooldown', label:'熔断基础（秒）', type:'number', min:0, step:'any', hint:'首次熔断时长。'},
+      {key:'breaker_cooldown_max', label:'熔断上限（秒）', type:'number', min:0, step:'any', hint:'熔断指数退避封顶。'},
+      {key:'degrade_threshold', label:'降权阈值', type:'int', min:1, hint:'连续未知错误达到此数后临时出池。'},
+      {key:'degrade_cooldown', label:'降权基础（秒）', type:'number', min:0, step:'any', hint:'首次降权时长。'},
+      {key:'degrade_cooldown_max', label:'降权上限（秒）', type:'number', min:0, step:'any', hint:'降权指数退避封顶。'},
+      {key:'idle_weight_per_hour', label:'闲置补偿 / 小时', type:'number', min:0, step:'any', hint:'账号闲置越久权重越高。'},
+      {key:'idle_weight_max', label:'闲置补偿上限', type:'number', min:0, step:'any', hint:'闲置补偿最大点数。'},
+      {key:'max_in_flight', label:'单账号最大在途', type:'int', min:0, hint:'0 = 不限制；每账号同时处理的请求数。'},
+      {key:'max_in_flight_global', label:'国际版在途上限', type:'int', min:0, hint:'国际版区域总在途上限；0 = 回落单账号上限。'},
+      {key:'top_n', label:'候选短名单 Top N', type:'int', min:1, hint:'加权随机前先取前 N 名。'},
+      {key:'cost_ledger_ttl', label:'成本账本 TTL（秒）', type:'int', min:60, hint:'实测成本层的有效秒数。'},
+      {key:'cost_explore_interval', label:'成本探索窗口（秒）', type:'number', min:0, step:'any', hint:'免费层垄断时，每隔多久搭车探索未知号；0 = 关闭。'},
+      {key:'credit_floor', label:'积分保底', type:'int', min:0, hint:'只挡 tier2 付费模型；0 = 关闭。'},
+      {key:'min_pick_gap', label:'最小重复间隔（秒）', type:'number', min:0, step:'any', hint:'短名单内尽量避免刚用过同一账号。'},
+      {key:'affinity_ttl', label:'会话粘性 TTL（秒）', type:'int', min:60, hint:'同一会话固定账号的缓存窗口。'},
+      {key:'affinity_max_entries', label:'会话粘性容量', type:'int', min:100, hint:'内存中最多保存的会话路由数。'},
+      {key:'session_dead_threshold', label:'Session-dead 阈值', type:'int', min:1, hint:'12153/session not found 连续出现多少次才停用账号。'},
+    ]
+  },
+  {
+    id: 'schedule', title: '后台排程',
+    desc: '签到、旅行、保活、夜猫、每日活跃与成长队列的时点、开关和余额巡检。',
+    fields: [
+      {key:'checkin_hours', label:'签到时点（小时）', type:'hours', placeholder:'9, 21', hint:'逗号分隔，0-23；空 = 不跑。'},
+      {key:'travel_hours', label:'猫猫旅行时点（小时）', type:'hours', placeholder:'9, 21', hint:'逗号分隔，0-23。'},
+      {key:'keepalive_hours', label:'Token 保活时点（小时）', type:'hours', placeholder:'22', hint:'逗号分隔，0-23。'},
+      {key:'cat_hours', label:'夜猫窗口时点（小时）', type:'hours', placeholder:'1, 23', hint:'逗号分隔，0-23。'},
+      {key:'daily_chat_hours', label:'国际活跃时点（小时）', type:'hours', placeholder:'9, 21', hint:'逗号分隔，0-23。'},
+      {key:'growth_hours', label:'成长队列时点（小时）', type:'hours', placeholder:'1', hint:'逗号分隔，0-23。'},
+      {key:'checkin_enabled', label:'启用签到', type:'bool', hint:'国内版签到。'},
+      {key:'travel_enabled', label:'启用猫猫旅行', type:'bool', hint:'派出与领奖闭环。'},
+      {key:'keepalive_enabled', label:'启用 Token 保活', type:'bool', hint:'集中刷新凭证。'},
+      {key:'cat_enabled', label:'启用夜猫', type:'bool', hint:'23:00-08:00 窗口任务。'},
+      {key:'daily_chat_enabled', label:'启用国际活跃', type:'bool', hint:'每日活跃对话打卡。'},
+      {key:'growth_enabled', label:'启用成长队列', type:'bool', hint:'每日自动扫描并执行成长任务。'},
+      {key:'include_disabled_in_tasks', label:'保号任务覆盖已禁用账号', type:'bool', hint:'禁用号不参与选号，但仍可签到/保活。'},
+      {key:'balance_refresh_enabled', label:'后台刷新余额', type:'bool', hint:'定时刷新积分并解锁余额恢复账号。'},
+      {key:'balance_refresh_minutes', label:'余额刷新间隔（分钟）', type:'int', min:1, hint:'仅在上方开关开启时生效。'},
+    ]
+  },
+  {
+    id: 'redis', title: 'Upstash Redis 镜像',
+    desc: '可选的会话粘性镜像；失败会降级回内存，不影响请求主路径。',
+    fields: [
+      {key:'url', label:'Upstash REST URL', type:'text', placeholder:'https://...upstash.io', hint:'留空即关闭镜像。'},
+      {key:'token', label:'Upstash Token', type:'secret', placeholder:'token', hint:'只保存在本机 settings.json，不会回显明文。'},
+      {key:'affinity_mirror', label:'启用粘性镜像', type:'bool', hint:'重启后保留账号路由。'},
+      {key:'ttl_seconds', label:'镜像 TTL（秒）', type:'int', min:60, hint:'默认 604800 = 7 天。'},
+    ]
+  },
+  {
+    id: 'upstream', title: '上游与设备令牌',
+    desc: 'SSE 首字节/流中空闲超时，以及可选的 X-Device-Token 文件兜底。',
+    fields: [
+      {key:'header_timeout_seconds', label:'首字节超时（秒）', type:'int', min:1, hint:'聊天 header 阶段超时。'},
+      {key:'idle_timeout_seconds', label:'流中空闲超时（秒）', type:'int', min:1, hint:'活跃流会续命；静默到期释放租约。'},
+      {key:'device_token', label:'X-Device-Token 值', type:'secret', placeholder:'留空 = 不注入', hint:'直接注入请求头的值。'},
+      {key:'device_token_file', label:'X-Device-Token 文件', type:'text', placeholder:'C:/path/to/token', hint:'5 分钟热读；>1KB 忽略。'},
+    ]
+  },
+  {
+    id: 'prompt', title: '系统提示词',
+    desc: 'PANEL parity 的 prompt.mode；默认 passthrough，不影响旧行为。',
+    fields: [
+      {key:'mode', label:'提示词模式', type:'select', options:['passthrough','custom','append'], default:'passthrough', hint:'passthrough = 透传；custom = 网关自有；append = 客户端后追加。'},
+      {key:'file', label:'提示词文件路径', type:'text', placeholder:'留空 = 内置默认', hint:'custom/append 模式才读取。'},
+    ]
+  },
+  {
+    id: 'logging', title: '日志归档',
+    desc: '来源记录是个人数据，默认关闭；轮转窗口与大小上限在这里配置。',
+    fields: [
+      {key:'record_client_info', label:'记录调用来源（IP/UA）', type:'bool', hint:'默认关闭。'},
+      {key:'retention_days', label:'保留天数', type:'int', min:1, hint:'默认 7 天。'},
+      {key:'archive_max_mb', label:'归档大小上限（MB）', type:'int', min:1, hint:'默认 100MB。'},
+    ]
+  }
+];
+let ADVANCED_SETTINGS_DATA = {};
+
+function advancedFieldId(group, key){ return 'adv_' + group + '_' + key; }
+function advancedFieldValue(cfg, key, type){
+  const value = cfg ? cfg[key] : undefined;
+  if(type === 'hours') return Array.isArray(value) ? value.join(', ') : '';
+  if(value === undefined || value === null) return '';
+  return String(value);
+}
+function renderAdvancedSettings(data){
+  ADVANCED_SETTINGS_DATA = data || {};
+  const box = document.getElementById('advancedSettingsCards');
+  if(!box) return;
+  box.innerHTML = ADVANCED_SETTING_GROUPS.map(function(group){
+    const cfg = (data && data[group.id]) || {};
+    const fields = group.fields.map(function(field){
+      const common = 'id="' + advancedFieldId(group.id, field.key) + '" data-adv-group="' + group.id + '" data-adv-key="' + field.key + '" data-adv-type="' + field.type + '"';
+      const label = '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">' + field.label + '</div>';
+      const hint = field.hint ? '<div style="font-size:11px;color:var(--dim);line-height:1.35">' + field.hint + '</div>' : '';
+      const value = advancedFieldValue(cfg, field.key, field.type);
+      let control = '';
+      if(field.type === 'bool'){
+        control = '<label style="display:flex;align-items:center;gap:8px;min-height:40px;font-size:13px;color:var(--fg)"><input type="checkbox" ' + common + (cfg[field.key] ? ' checked' : '') + ' style="width:16px;height:16px"><span>' + field.label + '</span></label>';
+        return '<div style="min-width:190px">' + control + (field.hint ? '<div style="font-size:11px;color:var(--dim);line-height:1.35;margin-left:24px">' + field.hint + '</div>' : '') + '</div>';
+      }
+      if(field.type === 'select'){
+        const options = (field.options || []).map(function(option){
+          return '<option value="' + option + '"' + (String(value || field.default || '') === option ? ' selected' : '') + '>' + option + '</option>';
+        }).join('');
+        control = '<select class="slot-select" style="width:100%;max-width:none" ' + common + '>' + options + '</select>';
+      } else if(field.type === 'hours' || field.type === 'text' || field.type === 'secret'){
+        const inputType = field.type === 'secret' ? 'password' : 'text';
+        control = '<input type="' + inputType + '" class="slot-input" ' + common + ' value="' + esc(value) + '" placeholder="' + esc(field.placeholder || '') + '">';
+      } else {
+        const min = field.min == null ? 0 : field.min;
+        const step = field.type === 'int' ? '1' : (field.step || 'any');
+        control = '<input type="number" class="slot-input" ' + common + ' min="' + min + '" step="' + step + '" value="' + esc(value) + '">';
+      }
+      return '<div style="min-width:190px">' + label + control + hint + '</div>';
+    }).join('');
+    return '<section style="margin-bottom:16px"><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px"><div><h2 style="margin:0;font-size:15px">' + group.title + '</h2><div style="font-size:12px;color:var(--dim);margin-top:4px">' + group.desc + '</div></div></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px">' + fields + '</div><div style="margin-top:12px"><button data-action="saveAdvancedSettings" data-on="click" data-arg="' + group.id + '">保存' + group.title + '</button></div></section>';
+  }).join('');
+}
+function readAdvancedSettingsGroup(groupId){
+  const group = ADVANCED_SETTING_GROUPS.find(function(item){ return item.id === groupId; });
+  if(!group) throw new Error('未知的设置组');
+  const out = {};
+  group.fields.forEach(function(field){
+    const el = document.getElementById(advancedFieldId(groupId, field.key));
+    if(!el) throw new Error(field.label + ' 控件不存在');
+    if(field.type === 'bool'){ out[field.key] = !!el.checked; return; }
+    const raw = String(el.value == null ? '' : el.value).trim();
+    if(field.type === 'int' || field.type === 'number'){
+      const number = Number(raw);
+      const minimum = field.min == null ? 0 : field.min;
+      if(!Number.isFinite(number) || number < minimum){
+        throw new Error(field.label + ' 必须是不小于 ' + minimum + ' 的数字');
+      }
+      if(field.type === 'int' && !Number.isInteger(number)){
+        throw new Error(field.label + ' 必须是整数');
+      }
+      out[field.key] = number;
+    } else if(field.type === 'hours'){
+      const parts = raw ? raw.split(',').map(function(part){ return part.trim(); }).filter(Boolean) : [];
+      const hours = parts.map(function(part){ return Number(part); });
+      if(hours.some(function(hour){ return !Number.isInteger(hour) || hour < 0 || hour > 23; })){
+        throw new Error(field.label + ' 必须是 0-23，逗号分隔');
+      }
+      out[field.key] = hours;
+    } else {
+      out[field.key] = raw;
+    }
+  });
+  return out;
+}
+async function saveAdvancedSettings(btn, ev, groupId){
+  const group = ADVANCED_SETTING_GROUPS.find(function(item){ return item.id === groupId; });
+  if(!group) return;
+  if(btn) btn.disabled = true;
+  try{
+    const payload = {};
+    payload[group.id] = readAdvancedSettingsGroup(group.id);
+    if(group.id === 'schedule') payload.restart_scheduler = true;
+    await postJSON('/settings/save', payload);
+    toast(group.title + '已保存', 'ok');
+    await loadSettings();
+  }catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
 async function loadSettings(showToast){
   try {
     const data = await getJSON('/settings');
@@ -2942,6 +3208,7 @@ async function loadSettings(showToast){
     }));
     window.API_KEY_ROWS = API_KEY_ROWS;
     renderKeyRows();
+    renderAdvancedSettings(data);
     updateUI();
     const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
     set('setVersion', data.version);
@@ -2949,6 +3216,8 @@ async function loadSettings(showToast){
     set('setUsageDir', data.usage_dir);
     set('setFile', data.settings_file);
     set('setSettingsFile', data.settings_file);
+    set('setMaxConcurrent', data.max_concurrent_chat == null ? '-' : String(data.max_concurrent_chat));
+    set('setChatSlotWait', data.chat_slot_wait_seconds == null ? '-' : String(data.chat_slot_wait_seconds) + 's');
     if(showToast) toast('设置已刷新', 'ok');
   } catch(e) {
     if(showToast) toast('读取设置失败: ' + e.message, 'bad');
@@ -3719,7 +3988,10 @@ function setLogFilterTag(tag){
     'tasks': 'Tasks',
     'scheduler': 'Sched',
     'accounts': 'Acct',
-    'system': 'Sys'
+    'system': 'Sys',
+    'catalog': 'Catalog',
+    'auth': 'Auth',
+    'settings': 'Settings'
   };
   Object.keys(tagMap).forEach(k => {
     const btn = document.getElementById('btnLogTag' + tagMap[k]);
@@ -4542,6 +4814,7 @@ const ACTION_HANDLERS = {
   saveAutoSwitchProduct: (el) => saveAutoSwitchProduct(el),
   saveDailyChatWeb: (el) => saveDailyChatWeb(el),
   saveLocalWebTools: (el) => saveLocalWebTools(el),
+  saveAdvancedSettings: (el, ev, arg) => saveAdvancedSettings(el, ev, arg),
   loadSettings: (el, ev, arg) => loadSettings(arg === '1'),
   panelLogout: () => panelLogout(),
   fetchNewLogs: (el, ev, arg) => fetchNewLogs(arg === '1'),

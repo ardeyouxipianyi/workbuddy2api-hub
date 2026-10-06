@@ -80,6 +80,7 @@ try {
   api = new Function(code + `
     ; return {
         getRecentLimit: () => RECENT_LIMIT,
+        getAdvancedGroups: () => ADVANCED_SETTING_GROUPS,
         getLogLevel: () => logFilterLevel,
         getViewRealm: () => window.VIEW_REALM,
         getProxySlots: () => PROXY_SLOTS,
@@ -178,7 +179,13 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
   await flush();
   assert.strictEqual(requests.length, 0, 'click must not trigger a change-only action');
 
-  console.log('action dispatch assertions passed (9 checks)');
+  // 10. advanced settings schema covers all six backend groups and 49 keys.
+  const groups = api.getAdvancedGroups();
+  assert.strictEqual(groups.length, 6, 'advanced settings must have six groups');
+  assert.strictEqual(groups.reduce((n, g) => n + g.fields.length, 0), 49,
+    'advanced settings must expose all 49 backend keys');
+
+  console.log('action dispatch assertions passed (10 checks)');
 })().catch(err => {
   console.log('ASSERTION ERROR:', err.message);
   process.exit(1);

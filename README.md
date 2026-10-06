@@ -127,7 +127,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 52 个套件：45 个 Python + 7 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 53 个套件：46 个 Python + 7 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。推送 `v*` tag 时额外断言 **tag == 源码版本**（`wb_proxy.py` 里的两处版本串必须先一致，`-ci` 演练 tag 豁免）。
 
@@ -251,7 +251,9 @@ export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **模型目录与治理（M5）**：context/output 四级查找（上游 → 知识表 → `model.json` 缓存 → models.dev 异步）、真实输出上限探测（`scripts/probe_max_tokens.py` + 看板「钳制 N×」标注）、缓存 token 别名归一。
 - **工程（M6）**：Release 附 `checksums.txt`、CI `tag == 源码版本` 断言、Docker `HEALTHCHECK` 与 PUID/PGID 指引。
 
-> 分支状态：`feat/panel-parity`，基线 `6c2a663`；上游恢复更新后再决定 PR/发布节奏。
+- **UI 審計修復（2026-10-06）**：新增六組進階設定表單（pool / schedule / redis / upstream / prompt / logging）；帳號表顯示在途、熔斷、降權、402 冷卻與 session-dead 狀態；請求歸檔補齊帳號/狀態/結果/路徑/請求 ID/時間篩選與 `gateway_hint` 欄位；503 busy 寫入歸檔；刪除不存在帳號改回 404；未知 realm 改回 400；`/requests*` 改為面板 session 認證；日誌頻道補齊 catalog/auth/settings；realm 檢視卡改為可鍵盤操作的 button。
+
+> 分支狀態：`feat/panel-parity`，基线 `6c2a663`；上游恢复更新后再决定 PR/发布节奏。
 
 ### v1.6.10
 

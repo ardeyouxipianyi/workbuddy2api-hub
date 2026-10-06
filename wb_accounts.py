@@ -431,6 +431,10 @@ class Account(object):
             "cooldownFor": round(max(0.0, deadline - now)) or None,
             "modelCooldowns": models,
             "softStreak": int(self.soft_streak),
+            "sessionDeadFails": int(self.session_dead_fails),
+            "sessionDeadThreshold": max(
+                1, int(self.pool_cfg.get("session_dead_threshold") or 3)
+            ),
             "breakerFor": round(max(0.0, self.breaker_until - now)) or None,
             "degradeFor": round(max(0.0, self.degrade_until - now)) or None,
             "balanceCooledFor": round(max(0.0, self.balance_until - now)) or None,

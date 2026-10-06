@@ -602,7 +602,7 @@ def _persist_usage(row, fail_label):
 
 def record_error(model, status, message, elapsed_ms=None, account=None,
                  usage=None, stream=None, ttft_ms=None, gen_ms=None, fp=None,
-                 outcome="failed"):
+                 outcome="failed", hint=None):
     """Record one failed request as exactly one JSONL row.
 
     Passing the account uid records which account the request was bound to, so
@@ -628,6 +628,9 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
         "message": str(message)[:200],
         "elapsed_ms": elapsed_ms,
     }
+    hint = gateway_hint(status, message) if hint is None else str(hint or "")
+    if hint:
+        row["gateway_hint"] = hint
     if stream is not None:
         row["stream"] = bool(stream)
     if ttft_ms is not None:
@@ -1729,11 +1732,13 @@ def runtime_settings_view():
     keys = []
     for entry in configured_keys():
         raw = entry.get("key") or ""
+        stored_models = entry.get("models")
         keys.append({
             "id": entry.get("id") or "",
             "name": entry.get("name") or "",
             "realm": entry.get("realm") or "",
             "enabled": entry.get("enabled", True) is not False,
+            "models": list(stored_models) if isinstance(stored_models, list) else [],
             "masked": (raw[:4] + "*" * 6 + raw[-4:]) if len(raw) > 8 else "*" * len(raw),
             "source": entry.get("source") or "panel",
             "created_at": entry.get("created_at") or "",
@@ -1759,6 +1764,8 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
+        "max_concurrent_chat": MAX_CONCURRENT_CHAT,
+        "chat_slot_wait_seconds": CHAT_SLOT_WAIT_SECONDS,
         "version": "1.6.10",
     }
 def current_account():
@@ -3544,6 +3551,8 @@ def gateway_hint(status, message):
     """
     text = str(message or "")
     lower = text.lower()
+    if status == 503 and "concurrent chat limit" in lower:
+        return "gateway is busy at its concurrency limit; retry shortly"
     if ("11133" in lower or "model_param_invalid" in lower
             or "invalid request parameters" in lower):
         return ("request parameters were rejected by the model provider; "
@@ -6194,6 +6203,8 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if path.startswith("/tasks") or path.startswith("/scheduler"):
             return True
+        if path.startswith("/requests"):
+            return True
         if path.startswith("/settings"):
             return True
         if path.startswith("/logs"):
@@ -7263,10 +7274,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_requests(self, payload):
         """Request archive query (newest first) with multi-dimensional filters."""
+        raw_limit = payload.get("limit", 200)
+        if isinstance(raw_limit, bool):
+            return self._error(400, "limit must be a whole number between 1 and 5000",
+                               "invalid_request_error")
         try:
-            limit = max(1, min(5000, int(payload.get("limit") or 200)))
+            limit = 200 if raw_limit is None else int(raw_limit)
         except (TypeError, ValueError):
-            limit = 200
+            return self._error(400, "limit must be a whole number between 1 and 5000",
+                               "invalid_request_error")
+        if not 1 <= limit <= 5000:
+            return self._error(400, "limit must be a whole number between 1 and 5000",
+                               "invalid_request_error")
         rows = wb_reqlog.read_rows(USAGE_DIR)
         filtered = wb_reqlog.filter_rows(rows, **self._request_filters(payload))
         total = len(filtered)
@@ -7411,9 +7430,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "changing the upstream exit requires the "
                                     "panel session, not an API key",
                                "invalid_request_error")
-        new_realm = payload.get("realm")
-        if new_realm in ("intl", "cn"):
-            save_persisted_realm(new_realm)
+        new_realm = str(payload.get("realm") or "").strip().lower()
+        if new_realm not in ("intl", "cn"):
+            return self._error(400, "realm must be intl or cn",
+                               "invalid_request_error")
+        save_persisted_realm(new_realm)
         return self._json(200, {"ok": True, "current": CURRENT_REALM, "persisted": True})
 
     def _route_accounts_checkin(self, payload):
@@ -7623,8 +7644,10 @@ class Handler(BaseHTTPRequestHandler):
         if not uid:
             return self._error(400, "uid required")
         removed = POOL.remove(uid)
+        if not removed:
+            return self._error(404, "no such account", "invalid_request_error")
         log("account %s deleted" % uid[:8])
-        return self._json(200, {"deleted": removed, "accounts": account_views()})
+        return self._json(200, {"deleted": True, "accounts": account_views()})
 
     def _route_accounts_import(self, payload):
         # Import a previously exported document (or any hand-written list
@@ -7953,8 +7976,22 @@ class Handler(BaseHTTPRequestHandler):
         # Take a slot for the duration; release it in finally so every early
         # return (including client disconnects) gives the slot back.
         if not _chat_slots.acquire(timeout=CHAT_SLOT_WAIT_SECONDS):
-            return self._error(503, "gateway is at its concurrent chat limit "
-                                    "(%d in flight); retry shortly" % MAX_CONCURRENT_CHAT)
+            message = ("gateway is at its concurrent chat limit "
+                       "(%d in flight); retry shortly" % MAX_CONCURRENT_CHAT)
+            try:
+                client_ip = self.client_address[0] if self.client_address else ""
+            except Exception:
+                client_ip = ""
+            set_request_context(
+                request_id=(self.headers.get("X-Request-Id")
+                            or self.headers.get("X-Request-ID") or uuid.uuid4().hex),
+                client_ip=client_ip,
+                user_agent=self.headers.get("User-Agent") or "",
+                path=path,
+            )
+            record_error(payload.get("model") or "unknown", 503, message,
+                         stream=payload.get("stream"))
+            return self._error(503, message)
         try:
             return self._dispatch_chat_post(path, payload)
         finally:
