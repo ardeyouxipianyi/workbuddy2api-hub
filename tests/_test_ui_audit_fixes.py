@@ -158,6 +158,23 @@ class DashboardCoverageTests(unittest.TestCase):
         missing = sorted(key for key in keys if key not in self.html)
         self.assertEqual(missing, [], "advanced keys missing from dashboard: %s" % missing)
 
+    def test_mobile_fixes_are_present(self):
+        for marker in (
+            "#logTagFilters{flex-wrap:wrap;max-width:100%}",
+            "#pageSettings table:not(.data-cards){table-layout:fixed;width:100%}",
+            "#accounts .id-btn{min-height:30px;min-width:32px}",
+        ):
+            self.assertIn(marker, self.html)
+
+    def test_mobile_checker_uses_cross_platform_temp_paths(self):
+        with open(os.path.join(ROOT, "tests", "_mobile_check.py"), encoding="utf-8") as fh:
+            checker = fh.read()
+        self.assertIn("tempfile.gettempdir()", checker)
+        self.assertIn("WB_MOBILE_FIXTURES", checker)
+        self.assertIn("WB_MOBILE_SHOTS", checker)
+        self.assertNotIn('"/tmp/mobile-fixtures"', checker)
+        self.assertNotIn('"/tmp/mobile-shots"', checker)
+
     def test_cloud_filters_and_governance_markers_are_present(self):
         for marker in (
             "reqFilterAccount", "reqFilterStatus", "reqFilterOutcome",

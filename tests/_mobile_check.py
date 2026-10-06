@@ -5,11 +5,13 @@ credentials. Starts the gateway on 127.0.0.1:18789 and drives it with
 Playwright/Firefox at phone and desktop widths.
 
 Usage:
-    python3 _mobile_check.py            # run every check
-    python3 _mobile_check.py account    # only checks whose name contains "account"
+    python _mobile_check.py             # run every check
+    python _mobile_check.py account     # only checks whose name contains "account"
 
-Screenshots are written to /tmp/mobile-shots for human review; the checks
-themselves assert DOM properties (the reviewer model cannot see images).
+Synthetic fixtures and screenshots go to the OS temp directory by default
+(``WB_MOBILE_FIXTURES`` / ``WB_MOBILE_SHOTS`` can override them), so the
+checker runs on Windows as well as POSIX. The checks assert DOM properties;
+screenshots are for human review only.
 """
 
 import json
@@ -18,10 +20,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
-FIX = "/tmp/mobile-fixtures"
-SHOTS = "/tmp/mobile-shots"
+_TMP_ROOT = os.environ.get("WB_MOBILE_TMP") or tempfile.gettempdir()
+FIX = os.environ.get("WB_MOBILE_FIXTURES") or os.path.join(_TMP_ROOT, "mobile-fixtures")
+SHOTS = os.environ.get("WB_MOBILE_SHOTS") or os.path.join(_TMP_ROOT, "mobile-shots")
 PASSWORD = "testpass123"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the gateway lives one level up
 
@@ -52,8 +56,8 @@ def build_fixtures():
         shutil.rmtree(FIX)
     acc = os.path.join(FIX, "accounts")
     use = os.path.join(FIX, "usage")
-    os.makedirs(acc)
-    os.makedirs(use)
+    os.makedirs(acc, exist_ok=True)
+    os.makedirs(use, exist_ok=True)
 
     def account(uid, nick, realm, enabled=True, slot="", cooldown=0, err=""):
         return {
@@ -242,7 +246,14 @@ def goto_tab(page, tab):
 
 
 def run_checks(filter_name):
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit(
+            "Playwright is required for the mobile/desktop layout checker; "
+            "install it with 'python -m pip install playwright' and then "
+            "'python -m playwright install firefox'."
+        ) from exc
 
     os.makedirs(SHOTS, exist_ok=True)
 

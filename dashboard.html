@@ -246,6 +246,14 @@ a:hover{text-decoration:underline}
 .log-empty{padding:48px 24px;text-align:center;color:#64748b;font-size:13px;font-family:inherit}
 /* ===== Phone: ≤640px ===== */
 @media (max-width: 640px){
+  #accounts .id-btn{min-height:30px;min-width:32px}
+  #logTagFilters{flex-wrap:wrap;max-width:100%}
+  /* The run-information table contains absolute Windows paths. Without
+     table-layout:fixed those unbroken strings force a 2px horizontal scroll
+     at 390px on browsers that reserve a scrollbar. */
+  #pageSettings table:not(.data-cards){table-layout:fixed;width:100%}
+  #pageSettings table:not(.data-cards) td{white-space:normal;word-break:break-all;padding-left:8px;padding-right:8px}
+  #pageSettings table:not(.data-cards) td:first-child{width:96px}
   header{padding:10px 12px;gap:8px}
   header > div:first-child{width:100%;gap:8px}
   h1{font-size:15px;flex:1;min-width:0}
@@ -962,7 +970,7 @@ a:hover{text-decoration:underline}
         <button class="range-btn" id="btnLogLvlError"  data-action="setLogFilterLevel" data-on="click" data-arg="ERROR">ERROR</button>
       </div>
 
-      <div style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
+      <div id="logTagFilters" style="display:inline-flex;gap:3px;background:var(--panel2);padding:3px;border-radius:8px;border:1px solid var(--line)">
         <button class="range-btn active" id="btnLogTagAll"  data-action="setLogFilterTag" data-on="click" data-arg="">全部模块</button>
         <button class="range-btn" id="btnLogTagChat"  data-action="setLogFilterTag" data-on="click" data-arg="chat">对话</button>
         <button class="range-btn" id="btnLogTagTasks"  data-action="setLogFilterTag" data-on="click" data-arg="tasks">任务福利</button>
