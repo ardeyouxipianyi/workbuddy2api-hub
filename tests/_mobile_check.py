@@ -237,7 +237,10 @@ def login(page):
 def goto_tab(page, tab):
     btn = {
         "gateway": "#btnNavGateway",
+        "accounts": "#btnNavAccounts",
+        "tasks": "#btnNavTasks",
         "analytics": "#btnNavAnalytics",
+        "models": "#btnNavModels",
         "logs": "#btnNavLogs",
         "settings": "#btnNavSettings",
     }[tab]
@@ -270,8 +273,8 @@ def run_checks(filter_name):
                 "Array.from(document.querySelectorAll('.main-nav-btn')).map(b => Math.round(b.getBoundingClientRect().width))"
             )
             check(
-                "nav-equal-width",
-                len(widths) == 4 and max(widths) - min(widths) <= 2,
+                "nav-tabs-present",
+                len(widths) == 7 and min(widths) > 0,
                 widths,
             )
             nav_w = page.evaluate(
@@ -305,12 +308,16 @@ def run_checks(filter_name):
             check("gh-link-header-row", gh["ok"], gh)
 
         if "models" in filter_name or filter_name == "":
+            goto_tab(page, "models")
+            page.wait_for_timeout(500)
             disp = page.evaluate(
                 "document.querySelector('#modelsTable tbody tr') ? getComputedStyle(document.querySelector('#modelsTable tbody tr')).display : 'none'"
             )
             check("models-cards", disp == "grid", disp)
 
         if "growth" in filter_name or filter_name == "":
+            goto_tab(page, "tasks")
+            page.wait_for_timeout(500)
             # The growth table may be empty (no live CN tasks in fixtures);
             # seed one synthetic row so the card CSS can be asserted.
             page.evaluate(
@@ -334,6 +341,8 @@ def run_checks(filter_name):
             check("growth-cards", disp == "grid", disp)
 
         if "account" in filter_name or filter_name == "":
+            goto_tab(page, "accounts")
+            page.wait_for_timeout(500)
             disp = page.evaluate(
                 "getComputedStyle(document.querySelector('#accounts table')).display"
             )
@@ -479,7 +488,7 @@ def run_checks(filter_name):
 
         if "overflow" in filter_name or filter_name == "":
             bad = []
-            for tab in ("gateway", "analytics", "logs", "settings"):
+            for tab in ("gateway", "accounts", "tasks", "analytics", "models", "logs", "settings"):
                 goto_tab(page, tab)
                 page.wait_for_timeout(500)
                 sw = page.evaluate("document.documentElement.scrollWidth")
@@ -492,6 +501,7 @@ def run_checks(filter_name):
         dpage = browser.new_page(viewport={"width": 1280, "height": 800})
         login(dpage)
         if "desktop" in filter_name or filter_name == "":
+            goto_tab(dpage, "accounts")
             disp = dpage.evaluate(
                 "getComputedStyle(document.querySelector('#accounts table')).display"
             )

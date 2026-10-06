@@ -422,6 +422,56 @@ a:hover{text-decoration:underline}
   table.data-cards tr{padding:10px}
   .log-ts{font-size:11px}
 }
+
+/* ===== 2026-10-07 UI rewrite: 分頁資訊架構 ===== */
+.page-hero{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  background:linear-gradient(135deg,var(--panel) 0%,var(--panel2) 100%);
+  border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-bottom:18px;
+  box-shadow:var(--shadow);
+}
+.page-hero .eyebrow{
+  font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:6px;
+}
+.page-hero h2{margin:0;font-size:20px;letter-spacing:-.3px;color:var(--fg)}
+.page-hero p{margin:6px 0 0;color:var(--dim);font-size:13px;max-width:760px;line-height:1.65}
+.page-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.quick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:18px}
+.quick-card{
+  text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:13px;
+  padding:14px 16px;color:var(--fg);cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:all .15s ease;display:flex;flex-direction:column;gap:5px;font:inherit;
+}
+.quick-card:hover{transform:translateY(-1px);border-color:var(--accent);box-shadow:var(--shadow-md)}
+.quick-card b{font-size:14px}
+.quick-card span{font-size:12px;color:var(--dim);line-height:1.5}
+.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.section-head h2{margin:0}
+.section-note{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.55}
+.settings-subnav{
+  position:sticky;top:74px;z-index:8;display:flex;gap:6px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:8px;margin-bottom:16px;box-shadow:var(--shadow-sm);
+}
+.settings-subnav a{
+  font-size:12px;color:var(--dim);text-decoration:none;padding:6px 10px;
+  border-radius:8px;border:1px solid transparent;
+}
+.settings-subnav a:hover{color:var(--fg);background:var(--panel2);border-color:var(--line);text-decoration:none}
+#pageSettings section[id], #pageSettings [id^="settings-"]{scroll-margin-top:132px}
+@media (max-width: 760px){
+  .page-hero{padding:15px;border-radius:14px}
+  .page-hero h2{font-size:18px}
+  .quick-grid{grid-template-columns:1fr}
+  .settings-subnav{top:8px;overflow-x:auto;flex-wrap:nowrap}
+  .settings-subnav a{white-space:nowrap}
+}
+@media (max-width: 700px){
+  .main-nav{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}
+  .main-nav::-webkit-scrollbar{display:none}
+  .main-nav-btn{flex:0 0 auto;min-width:58px;padding:8px 8px;font-size:12px}
+}
 </style>
 <script>
 /* Runs before <body> is parsed, so the page the user last had is the
@@ -536,7 +586,7 @@ a:hover{text-decoration:underline}
   };
 
   // 3. Tab 初始化
-  var TABS = ['gateway','analytics','logs','settings'];
+  var TABS = ['gateway','accounts','tasks','analytics','models','logs','settings'];
   var pick = null;
   try {
     var q = new URLSearchParams(location.search).get('tab');
@@ -562,18 +612,13 @@ a:hover{text-decoration:underline}
   <div class="header-left" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
     <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关看板</h1>
     <nav class="main-nav">
-      <button class="main-nav-btn active" id="btnNavGateway"  data-action="switchMainTab" data-on="click" data-arg="gateway">
-        网关与运维
-      </button>
-      <button class="main-nav-btn" id="btnNavAnalytics"  data-action="switchMainTab" data-on="click" data-arg="analytics">
-        数据指标看板
-      </button>
-      <button class="main-nav-btn" id="btnNavLogs"  data-action="switchMainTab" data-on="click" data-arg="logs">
-        运行日志
-      </button>
-      <button class="main-nav-btn" id="btnNavSettings"  data-action="switchMainTab" data-on="click" data-arg="settings">
-        设置
-      </button>
+      <button class="main-nav-btn active" id="btnNavGateway" data-action="switchMainTab" data-on="click" data-arg="gateway" title="總覽">總覽</button>
+      <button class="main-nav-btn" id="btnNavAccounts" data-action="switchMainTab" data-on="click" data-arg="accounts" title="帳號池與運維">帳號</button>
+      <button class="main-nav-btn" id="btnNavTasks" data-action="switchMainTab" data-on="click" data-arg="tasks" title="任務中心">任務</button>
+      <button class="main-nav-btn" id="btnNavAnalytics" data-action="switchMainTab" data-on="click" data-arg="analytics" title="用量與成本">用量</button>
+      <button class="main-nav-btn" id="btnNavModels" data-action="switchMainTab" data-on="click" data-arg="models" title="模型與檔位">模型</button>
+      <button class="main-nav-btn" id="btnNavLogs" data-action="switchMainTab" data-on="click" data-arg="logs" title="運行日誌">日誌</button>
+      <button class="main-nav-btn" id="btnNavSettings" data-action="switchMainTab" data-on="click" data-arg="settings" title="設定">設定</button>
     </nav>
     <a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
        title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
@@ -636,9 +681,26 @@ a:hover{text-decoration:underline}
 </div>
 <main>
   <div id="pageGateway" class="main-page">
+  <div class="page-hero">
+    <div>
+      <div class="eyebrow">HUB 控制台</div>
+      <h2>總覽</h2>
+      <p>出口狀態、後台調度器、即時指標與最近請求。帳號運維、任務中心、模型與設定都已拆成獨立分頁。</p>
+    </div>
+    <div class="page-actions">
+      <button class="sec" data-action="triggerSchedulerNow" data-on="click">立即巡檢保活</button>
+      <button class="sec" data-action="switchMainTab" data-on="click" data-arg="tasks">任務中心</button>
+    </div>
+  </div>
+  <div class="quick-grid">
+    <button class="quick-card" data-action="switchMainTab" data-on="click" data-arg="accounts"><b>帳號池與運維</b><span>帳號、積分、治理狀態、代理出口</span></button>
+    <button class="quick-card" data-action="switchMainTab" data-on="click" data-arg="tasks"><b>任務中心</b><span>簽到、一鍵任務、貓貓旅行、任務佇列</span></button>
+    <button class="quick-card" data-action="switchMainTab" data-on="click" data-arg="models"><b>模型與檔位</b><span>模型庫、上下文、倍率與輸出上限</span></button>
+    <button class="quick-card" data-action="switchMainTab" data-on="click" data-arg="analytics"><b>用量與成本</b><span>Token、積分、API Key 歸屬與性能</span></button>
+  </div>
   <!-- 版本中枢控制栏 (三列等高对齐网格) -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:18px">
-    
+
     <!-- 卡片 1: 国际版 (Global) -->
     <button type="button" id="tabIntl" class="realm-card active" data-action="switchViewRealm" data-on="click" data-arg="intl">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -711,29 +773,13 @@ a:hover{text-decoration:underline}
 
   <div class="cards" id="cards"></div>
 
-  <section>
-    <h2>账号<em id="acctCount"></em></h2>
-    <div class="toolbar">
-    <button  data-action="openLoginModal" data-on="click">+ 添加账号 (OAuth)</button>
-    <button class="sec" id="btnCheckin"  data-action="doCheckin" data-on="click" style="display:none">每日签到 (国内版)</button>
-      <button class="sec" id="btnDailyChat"  data-action="doDailyChat" data-on="click" style="display:none">每日活跃打卡 (国际版)</button>
-      <button class="sec" id="btnDailyChatWeb"  data-action="doDailyChatWeb" data-on="click" style="display:none">网页通道打卡 (国际版)</button>
-    <!-- 桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted 信封）。
-         网关会从正在运行的桌面端进程内存里回收静态密钥来解密（只读，密钥只留在内存里，见 wb_atrest.py），所以入口重新放出来。 -->
-    <button class="sec" id="btnScanDesktop"  data-action="scanDesktop" data-on="click">扫描桌面客户端账号</button>
-    <button class="sec"  data-action="exportAccounts" data-on="click">导出账号</button>
-    <button class="sec"  data-action="openImport" data-on="click">导入账号</button>
-    <button class="sec"  data-action="fetchCredits" data-on="click">刷新积分</button>
-    <button class="sec"  data-action="autoAssignSlots" data-on="click" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">分配代理出口给未绑定账号</button>
-    <button class="sec"  data-action="setAll" data-on="click" data-arg="1">全部启用</button>
-    <button class="sec"  data-action="setAll" data-on="click" data-arg="0">全部停用</button>
-    
-  </div>
-    <div id="accounts"></div>
-  </section>
 
   <!-- 融合后的：模型性能与用量矩阵 -->
-  
+
+
+
+
+
 
   <section>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -758,31 +804,69 @@ a:hover{text-decoration:underline}
       </div>
     </div>
   </section>
-
-  <!-- 版本模型库与能力清单 -->
+  </div><!-- /pageGateway -->
+  <div id="pageAccounts" class="main-page">
+    <div class="page-hero">
+      <div>
+        <div class="eyebrow">帳號池</div>
+        <h2>帳號池與運維</h2>
+        <p>新增、導入、啟停與綁定出口；表格徽章顯示在途、熔斷、降權、402 冷卻與 session-dead。這些狀態由帳號池治理模組實時提供。</p>
+      </div>
+      <div class="page-actions">
+        <button class="sec" data-action="switchMainTab" data-on="click" data-arg="tasks">任務中心</button>
+        <button class="sec" data-action="switchMainTab" data-on="click" data-arg="settings">代理出口設定</button>
+      </div>
+    </div>
   <section>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <h2 style="margin:0">当前版本模型库与能力清单 <em id="availModelCount"></em></h2>
-      <div style="font-size:12px;color:var(--dim)">展示当前视图下官方对话大模型、上下文容量、推理/视觉能力及在售倍率</div>
-    </div>
-    <div style="overflow-x:auto">
-      <table id="modelsTable" class="data-cards">
-        <thead>
-          <tr>
-            <th style="text-align:left;width:220px">模型 ID</th>
-            <th style="text-align:center;width:140px">消费倍率 / 优惠</th>
-            <th style="text-align:center;width:160px">模型能力</th>
-            <th style="text-align:center;width:110px">上下文窗口</th>
-            <th style="text-align:center;width:100px">最大输出</th>
-            <th style="text-align:left">思考档位</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
+    <h2>账号<em id="acctCount"></em></h2>
+    <div class="toolbar">
+    <button  data-action="openLoginModal" data-on="click">+ 添加账号 (OAuth)</button>
+    <!-- 桌面客户端自 2026-09-24 起把 token 改成加密存储（$wbEncrypted 信封）。
+         网关会从正在运行的桌面端进程内存里回收静态密钥来解密（只读，密钥只留在内存里，见 wb_atrest.py），所以入口重新放出来。 -->
+    <button class="sec" id="btnScanDesktop"  data-action="scanDesktop" data-on="click">扫描桌面客户端账号</button>
+    <button class="sec"  data-action="exportAccounts" data-on="click">导出账号</button>
+    <button class="sec"  data-action="openImport" data-on="click">导入账号</button>
+    <button class="sec"  data-action="fetchCredits" data-on="click">刷新积分</button>
+    <button class="sec"  data-action="autoAssignSlots" data-on="click" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">分配代理出口给未绑定账号</button>
+    <button class="sec"  data-action="setAll" data-on="click" data-arg="1">全部启用</button>
+    <button class="sec"  data-action="setAll" data-on="click" data-arg="0">全部停用</button>
 
-  <!-- 国内版专属成长任务与日常福利 -->
+  </div>
+    <div id="accounts"></div>
+  </section>
+  </div>
+
+  <div id="pageTasks" class="main-page">
+    <div class="page-hero">
+      <div>
+        <div class="eyebrow">任務與福利</div>
+        <h2>任務中心</h2>
+        <p>國內版成長任務、每日簽到、貓貓旅行、任務佇列與國際版每日打卡集中在此頁。切換上方視圖會即時顯示對應操作。</p>
+      </div>
+      <div class="page-actions">
+        <button class="sec" data-action="switchViewRealm" data-on="click" data-arg="cn">切到國內版</button>
+        <button class="sec" data-action="switchViewRealm" data-on="click" data-arg="intl">切到國際版</button>
+      </div>
+    </div>
+    <section class="task-center-hero">
+      <div class="section-head">
+        <div>
+          <h2>每日福利與批量任務</h2>
+          <div class="section-note">國內版：簽到、成長任務、貓貓旅行；國際版：每日活躍打卡與網頁通道打卡。</div>
+        </div>
+        <div class="page-actions">
+          <button class="sec" id="btnCheckin" data-action="doCheckin" data-on="click" style="display:none">每日簽到 (國內版)</button>
+          <button class="sec" id="btnDailyChat" data-action="doDailyChat" data-on="click" style="display:none">每日活躍打卡 (國際版)</button>
+          <button class="sec" id="btnDailyChatWeb" data-action="doDailyChatWeb" data-on="click" style="display:none">網頁通道打卡 (國際版)</button>
+        </div>
+      </div>
+      <div class="quick-grid">
+        <div class="quick-card"><b>每日簽到</b><span>連續打卡、成長能量與每日福利。</span></div>
+        <div class="quick-card"><b>一鍵做任務領積分</b><span>批量接取、事件上報點亮、領取成長任務獎勵。</span></div>
+        <div class="quick-card"><b>貓貓旅行</b><span>派出、領獎、每日次數與旅行狀態。</span></div>
+        <div class="quick-card"><b>任務中心佇列</b><span>掃描待辦、運行佇列、查看每個帳號的執行狀態。</span></div>
+      </div>
+    </section>
   <section id="sectionGrowthTasks" style="display:none">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
@@ -835,9 +919,42 @@ a:hover{text-decoration:underline}
 
     <div id="taskLogBox" style="display:none;margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:12px;font-family:ui-monospace,monospace;line-height:1.6;max-height:220px;overflow-y:auto"></div>
   </section>
+  </div>
 
-  
-  </div><!-- /pageGateway -->
+  <div id="pageModels" class="main-page">
+    <div class="page-hero">
+      <div>
+        <div class="eyebrow">模型目錄</div>
+        <h2>模型與檔位</h2>
+        <p>當前版本模型庫、上下文容量、推理／視覺能力、消費倍率與輸出上限鉗制標注。</p>
+      </div>
+      <div class="page-actions">
+        <button class="sec" data-action="switchMainTab" data-on="click" data-arg="analytics">查看用量</button>
+      </div>
+    </div>
+  <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="margin:0">当前版本模型库与能力清单 <em id="availModelCount"></em></h2>
+      <div style="font-size:12px;color:var(--dim)">展示当前视图下官方对话大模型、上下文容量、推理/视觉能力及在售倍率</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table id="modelsTable" class="data-cards">
+        <thead>
+          <tr>
+            <th style="text-align:left;width:220px">模型 ID</th>
+            <th style="text-align:center;width:140px">消费倍率 / 优惠</th>
+            <th style="text-align:center;width:160px">模型能力</th>
+            <th style="text-align:center;width:110px">上下文窗口</th>
+            <th style="text-align:center;width:100px">最大输出</th>
+            <th style="text-align:left">思考档位</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
   <div id="pageAnalytics" class="main-page">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
       <div>
@@ -1012,11 +1129,28 @@ a:hover{text-decoration:underline}
 
 
   <div id="pageSettings" class="main-page">
-    <div style="margin-bottom:16px">
-      <h2 style="margin:0;font-size:16px;color:var(--fg)">网关设置</h2>
+    <div class="page-hero">
+      <div>
+        <div class="eyebrow">設定</div>
+        <h2>網關設定</h2>
+        <p>存取、出口、額度、計價、行為工具與進階治理。每一區塊獨立保存，排程修改會立即重載調度器。</p>
+      </div>
+      <div class="page-actions">
+        <button class="sec" data-action="loadSettings" data-on="click" data-arg="1">重新讀取</button>
+      </div>
     </div>
+    <nav class="settings-subnav" aria-label="設定分類">
+      <a href="#settings-access">存取</a>
+      <a href="#settings-keys">API Key</a>
+      <a href="#settings-slots">代理槽</a>
+      <a href="#settings-quota">額度治理</a>
+      <a href="#settings-pricing">計價</a>
+      <a href="#settings-behavior">行為與工具</a>
+      <a href="#settings-advanced">進階</a>
+      <a href="#settings-runtime">運行資訊</a>
+    </nav>
 
-    <section>
+    <section id="settings-access">
       <h2>面板访问密码 <em id="setPwdState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">用于打开本看板。默认密码为 <b>admin</b>，建议立即修改。</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -1034,7 +1168,7 @@ a:hover{text-decoration:underline}
       </div>
     </section>
 
-    <section>
+    <section id="settings-keys">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">API Key 与出口绑定 <em id="setKeyState"></em></h2>
@@ -1050,7 +1184,7 @@ a:hover{text-decoration:underline}
       <div id="deletedKeySection"></div>
     </section>
 
-    <section>
+    <section id="settings-slots">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">代理槽 <em id="slotState"></em></h2>
@@ -1068,7 +1202,7 @@ a:hover{text-decoration:underline}
       <div id="slotDiscover"></div>
     </section>
 
-    <section>
+    <section id="settings-quota">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">保留积分 <em id="setReserveState"></em></h2>
@@ -1144,7 +1278,7 @@ a:hover{text-decoration:underline}
         </div>
       </section>
 
-      <section>
+      <section id="settings-pricing">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">定价刷新 <em id="setPricingState"></em></h2>
@@ -1174,7 +1308,7 @@ a:hover{text-decoration:underline}
         </div>
       </section>
 
-      <section>
+      <section id="settings-behavior">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">429 自动切换出站身分 <em id="setAutoSwitchState"></em></h2>
@@ -1237,6 +1371,7 @@ a:hover{text-decoration:underline}
         </div>
       </section>
 
+      <span id="settings-advanced"></span>
       <section id="advancedSettingsSection">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div>
@@ -1250,7 +1385,7 @@ a:hover{text-decoration:underline}
         <div id="advancedSettingsCards"></div>
       </section>
 
-      <section>
+      <section id="settings-runtime">
         <h2>运行信息</h2>
       <table>
         <tbody>
@@ -4022,7 +4157,7 @@ function generatePageList(current, total){
 
 // Tab ids in nav order. One list so the restore path and the nav cannot
 // drift apart.
-const MAIN_TABS = ['gateway', 'analytics', 'logs', 'settings'];
+const MAIN_TABS = ['gateway', 'accounts', 'tasks', 'analytics', 'models', 'logs', 'settings'];
 const MAIN_TAB_STORE = 'wb-proxy-main-tab';
 let currentMainTab = 'gateway';
 let analyticsRange = 'today';
@@ -4156,6 +4291,10 @@ async function startDashboard(){
       if(!PANEL_READY) return;
       if(currentMainTab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
     }, 5000),
+    setInterval(() => {
+      if(!PANEL_READY) return;
+      if(currentMainTab === 'tasks'){ loadGrowthTasks(); }
+    }, 15000),
     setInterval(refresh, 5000),
     setInterval(loadSchedulerStatus, 30000),
     setInterval(loadAccounts, 15000),
@@ -5388,36 +5527,32 @@ async function autoAssignSlots(){
 
 function switchMainTab(tab){
   currentMainTab = tab;
-  // Remember the page across reloads. The URL is updated so the address bar
-  // matches what is on screen and a copied link reopens the same page;
-  // storage covers a plain reload and the ?key= link, which strips the
-  // query string on load.
   try {
     const url = new URL(window.location.href);
     url.searchParams.set('tab', tab);
     history.replaceState(null, '', url.toString());
   } catch(e){}
   try { localStorage.setItem(MAIN_TAB_STORE, tab); } catch(e){}
-  const btnGateway = document.getElementById('btnNavGateway');
-  const btnAnalytics = document.getElementById('btnNavAnalytics');
-  const btnLogs = document.getElementById('btnNavLogs');
-  const btnSettings = document.getElementById('btnNavSettings');
-  const pageGateway = document.getElementById('pageGateway');
-  const pageAnalytics = document.getElementById('pageAnalytics');
-  const pageLogs = document.getElementById('pageLogs');
-  const pageSettings = document.getElementById('pageSettings');
   const tabs = [
-    ['gateway', btnGateway, pageGateway],
-    ['analytics', btnAnalytics, pageAnalytics],
-    ['logs', btnLogs, pageLogs],
-    ['settings', btnSettings, pageSettings]
+    ['gateway', 'btnNavGateway', 'pageGateway'],
+    ['accounts', 'btnNavAccounts', 'pageAccounts'],
+    ['tasks', 'btnNavTasks', 'pageTasks'],
+    ['analytics', 'btnNavAnalytics', 'pageAnalytics'],
+    ['models', 'btnNavModels', 'pageModels'],
+    ['logs', 'btnNavLogs', 'pageLogs'],
+    ['settings', 'btnNavSettings', 'pageSettings']
   ];
-  tabs.forEach(([name, btn, page]) => {
+  tabs.forEach(([name, btnId, pageId]) => {
+    const btn = document.getElementById(btnId);
+    const page = document.getElementById(pageId);
     if(!btn || !page) return;
     const on = (name === tab);
     btn.classList.toggle('active', on);
     page.classList.toggle('active', on);
   });
+  if(tab === 'accounts'){ loadAccounts(); loadProxySlots(); }
+  if(tab === 'tasks'){ loadGrowthTasks(); loadSchedulerStatus(); }
+  if(tab === 'models'){ loadModels(); }
   if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
   if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
   if(tab === 'logs'){
@@ -6286,7 +6421,7 @@ function renderAnalytics(data){
         const st = a.window || {};
         const modelsMap = a.window_models || {};
         const entries = Object.entries(modelsMap || {}).sort((x, y) => (y[1].tokens || 0) - (x[1].tokens || 0));
-        
+
         let pills = '<span style="color:var(--dim)">无调用</span>';
         if(entries.length){
           pills = entries.map(([mid, ms]) => {
