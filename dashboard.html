@@ -293,6 +293,34 @@ a:hover{text-decoration:underline}
    page on every reload. */
 .main-page{display:none}
 .main-page.active{display:block}
+/* 设置页两栏：左侧区块导航由 initSettingsSidebar() 依据 section 标题生成，
+   这里的样式只描述外观，不预设任何区块。 */
+.settings-layout{display:grid;grid-template-columns:196px minmax(0,1fr);gap:20px;align-items:start}
+.settings-sidebar{position:sticky;top:var(--settings-nav-top,84px);z-index:6;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px;
+  box-shadow:var(--shadow);max-height:calc(100vh - var(--settings-nav-top,84px) - 20px);overflow:auto}
+.settings-sidebar-title{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.6px;padding:6px 10px 8px}
+.settings-nav{display:flex;flex-direction:column;gap:2px}
+.settings-nav-item{appearance:none;background:transparent;border:1px solid transparent;color:var(--dim);
+  text-align:left;padding:8px 10px;border-radius:8px;font:inherit;font-size:13px;line-height:1.35;
+  cursor:pointer;transition:all .15s ease;overflow-wrap:anywhere}
+.settings-nav-item:hover{color:var(--fg);background:var(--panel2)}
+.settings-nav-item.active{color:var(--fg);background:var(--panel2);border-color:var(--line);font-weight:600}
+.settings-body{min-width:0}
+.settings-body > section{scroll-margin-top:var(--settings-nav-top,84px)}
+/* 点击导航后短暂描边，明确「跳到这里了」 */
+.settings-body > section.settings-flash{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:860px){
+  .settings-layout{grid-template-columns:minmax(0,1fr);gap:14px}
+  .settings-sidebar{max-height:none;overflow:visible;padding:8px;border-radius:12px;
+    background:var(--header-bg);backdrop-filter:blur(10px)}
+  .settings-sidebar-title{display:none}
+  .settings-nav{flex-direction:row;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
+    scrollbar-width:thin}
+  .settings-nav-item{white-space:nowrap;padding:7px 12px;border-radius:999px;
+    background:var(--panel2);border-color:var(--line)}
+}
 .range-btn{background:transparent;border:none;color:var(--dim);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s ease}
 .range-btn:hover{color:var(--fg)}
 .range-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
@@ -963,6 +991,12 @@ a:hover{text-decoration:underline}
       <h2 style="margin:0;font-size:16px;color:var(--fg)">网关设置</h2>
     </div>
 
+    <!-- 左侧导航由 initSettingsSidebar() 扫描下面的 section 自动生成，
+         增删设置区块无需同步改动这里。 -->
+    <div class="settings-layout">
+      <aside class="settings-sidebar" id="settingsSidebar" aria-label="设置区块导航"></aside>
+      <div class="settings-body" id="settingsBody">
+
     <section>
       <h2>面板访问密码 <em id="setPwdState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">用于打开本看板。默认密码为 <b>admin</b>，建议立即修改。</div>
@@ -1203,6 +1237,9 @@ a:hover{text-decoration:underline}
         <button class="sec" onclick="panelLogout()">退出面板登录</button>
       </div>
     </section>
+
+      </div><!-- /settings-body -->
+    </div><!-- /settings-layout -->
   </div>
 
   <div id="pageLogs" class="main-page">
@@ -3815,6 +3852,170 @@ async function startDashboard(){
   ];
 }
 
+/* ---- 设置页左侧区块导航 ----
+   导航项完全由 #settingsBody 内的 section 现场生成：标题取该 section 首个
+   h2 的文本（忽略用于显示状态的 <em>），锚点 id 由标题内容哈希得到，
+   所以新增、删除或调整设置区块的顺序都不需要改这里。 */
+const SETTINGS_NAV_TOP_VAR = '--settings-nav-top';
+let settingsNavLock = 0;
+
+/* 跳转时要让开的距离：吸顶 header，窄屏下再加上同样吸顶的导航条本身 */
+function settingsHeaderOffset(){
+  const header = document.querySelector('header');
+  const base = (header ? header.offsetHeight : 64) + 14;
+  const sidebar = document.getElementById('settingsSidebar');
+  if(sidebar && window.matchMedia('(max-width:860px)').matches){
+    return base + sidebar.offsetHeight + 10;
+  }
+  return base;
+}
+
+function syncSettingsNavOffset(){
+  const header = document.querySelector('header');
+  const top = (header ? header.offsetHeight : 64) + 14;
+  document.documentElement.style.setProperty(SETTINGS_NAV_TOP_VAR, top + 'px');
+}
+
+function settingsSectionLabel(section, index){
+  const h2 = section.querySelector('h2');
+  if(h2){
+    const clone = h2.cloneNode(true);
+    clone.querySelectorAll('em').forEach(el => el.remove());
+    const text = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+    if(text) return text;
+  }
+  return '未命名区块 ' + (index + 1);
+}
+
+/* 由标题内容导出稳定 id：与区块顺序无关，链接可长期复用 */
+function settingsAnchorId(label, taken){
+  let hash = 5381;
+  for(let i = 0; i < label.length; i++) hash = ((hash << 5) + hash + label.charCodeAt(i)) >>> 0;
+  const base = 'set-sec-' + hash.toString(36);
+  let id = base, n = 2;
+  while(taken.has(id)) id = base + '-' + (n++);
+  return id;
+}
+
+function setActiveSettingsNav(id){
+  const nav = document.getElementById('settingsNav');
+  if(!nav) return;
+  nav.querySelectorAll('.settings-nav-item').forEach(item => {
+    item.classList.toggle('active', !!id && item.dataset.target === id);
+  });
+}
+
+function scrollToSettingsSection(id, smooth){
+  const section = document.getElementById(id);
+  if(!section) return;
+  const top = section.getBoundingClientRect().top + window.pageYOffset - settingsHeaderOffset();
+  window.scrollTo({ top: Math.max(0, top), behavior: smooth === false ? 'auto' : 'smooth' });
+  setActiveSettingsNav(id);
+  // 平滑滚动期间抑制滚动高亮，避免中途掠过其它区块把高亮抢走
+  settingsNavLock = Date.now() + 700;
+  section.classList.add('settings-flash');
+  setTimeout(() => section.classList.remove('settings-flash'), 900);
+  try {
+    const url = new URL(window.location.href);
+    url.hash = id;
+    history.replaceState(null, '', url.toString());
+  } catch(e){}
+}
+
+function settingsSpy(){
+  const page = document.getElementById('pageSettings');
+  if(!page || !page.classList.contains('active')) return;
+  if(Date.now() < settingsNavLock) return;
+  const nav = document.getElementById('settingsNav');
+  if(!nav) return;
+  const items = Array.from(nav.querySelectorAll('.settings-nav-item'));
+  if(!items.length) return;
+  const threshold = settingsHeaderOffset() + 8;
+  let activeId = items[0].dataset.target;
+  for(const item of items){
+    const section = document.getElementById(item.dataset.target);
+    if(!section) continue;
+    if(section.getBoundingClientRect().top - threshold <= 0) activeId = item.dataset.target;
+    else break;
+  }
+  // 滚到底时高亮最后一项，否则末尾区块永远点不亮
+  if(window.innerHeight + window.pageYOffset >= document.documentElement.scrollHeight - 4){
+    activeId = items[items.length - 1].dataset.target;
+  }
+  setActiveSettingsNav(activeId);
+}
+
+/* 滚动高亮：滚动事件本身已按帧节流，这里不再叠一层 requestAnimationFrame
+   （后台标签页会挂起 rAF，反而让高亮停在旧位置）。 */
+function onSettingsScroll(){
+  settingsSpy();
+}
+
+function initSettingsSidebar(){
+  const body = document.getElementById('settingsBody');
+  const sidebar = document.getElementById('settingsSidebar');
+  if(!body || !sidebar) return;
+  syncSettingsNavOffset();
+  const sections = Array.from(body.children).filter(el => el.tagName === 'SECTION');
+  if(!sections.length) return;
+
+  const taken = new Set(Array.from(document.querySelectorAll('[id]')).map(el => el.id));
+  const anchors = [];
+  sections.forEach((section, i) => {
+    const label = settingsSectionLabel(section, i);
+    let id = section.id;
+    if(!id){
+      id = settingsAnchorId(label, taken);
+      section.id = id;
+    }
+    taken.add(id);
+    anchors.push({ id: id, label: label });
+  });
+
+  // 重建时保留原来的高亮，别因为一次重建就闪回第一项
+  const prevActive = sidebar.querySelector('.settings-nav-item.active');
+  const prevTarget = prevActive ? prevActive.dataset.target : null;
+
+  sidebar.textContent = '';
+  const title = document.createElement('div');
+  title.className = 'settings-sidebar-title';
+  title.textContent = '设置导航';
+  sidebar.appendChild(title);
+
+  const nav = document.createElement('nav');
+  nav.className = 'settings-nav';
+  nav.id = 'settingsNav';
+  anchors.forEach(function(a){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-nav-item';
+    btn.dataset.target = a.id;
+    btn.textContent = a.label;
+    btn.title = a.label;
+    btn.addEventListener('click', function(){ scrollToSettingsSection(a.id); });
+    nav.appendChild(btn);
+  });
+  sidebar.appendChild(nav);
+
+  if(!window.__settingsSidebarBound){
+    window.__settingsSidebarBound = true;
+    window.addEventListener('scroll', onSettingsScroll, { passive: true });
+    window.addEventListener('resize', function(){ syncSettingsNavOffset(); onSettingsScroll(); });
+  }
+  const keep = prevTarget && anchors.some(function(a){ return a.id === prevTarget; });
+  setActiveSettingsNav(keep ? prevTarget : anchors[0].id);
+  onSettingsScroll();
+}
+
+/* 带 #锚点 打开时直接落到对应区块 */
+function restoreSettingsHash(){
+  const id = (window.location.hash || '').slice(1);
+  if(!id) return;
+  const body = document.getElementById('settingsBody');
+  const section = body && document.getElementById(id);
+  if(section && body.contains(section)) scrollToSettingsSection(id, false);
+}
+
 async function loadSettings(showToast){
   try {
     const data = await getJSON('/settings');
@@ -4882,7 +5083,7 @@ function switchMainTab(tab){
     page.classList.toggle('active', on);
   });
   if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
-  if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
+  if(tab === 'settings'){ loadSettings(); loadProxySlots(); initSettingsSidebar(); restoreSettingsHash(); }
   if(tab === 'logs'){
     startLogPolling();
     fetchNewLogs(true);
