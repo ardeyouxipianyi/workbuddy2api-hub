@@ -721,6 +721,16 @@ a:hover{text-decoration:underline}
     <div id="accounts"></div>
   </section>
 
+  <!-- 当前禁用总览：把散落在账号卡片上的停用/限流状态汇总成一张表。
+       数据全部取自 /accounts（window.ACCOUNTS），不额外发请求。 -->
+  <section>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <h2 style="margin:0">当前禁用账号与模型 <em id="disabledCount"></em></h2>
+      <div class="legend" style="margin:0"><span>「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复</span></div>
+    </div>
+    <div id="disabledList"></div>
+  </section>
+
   <!-- 融合后的：模型性能与用量矩阵 -->
   
 
@@ -2410,8 +2420,12 @@ function accountRow(a){
               : '<span class="badge ok">可用</span>';
   const pills = coolPills(a);
   const limitPills = modelLimitPills(a);
+  // The visible label keeps the exact truncation it had before; the tooltip carries
+  // the whole upstream body (lastErrorDetail) so a 429 reason is readable on hover
+  // without widening the card.
+  const errFull = a.lastErrorDetail || a.lastError || '';
   const err = a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')
-    ? '<div class="hint" style="color:var(--warn);margin:2px 0 0">' + esc(a.lastError) + '</div>' : '';
+    ? '<div class="hint" style="color:var(--warn);margin:2px 0 0;cursor:help" data-tip="' + esc(errFull) + '">' + esc(a.lastError) + '</div>' : '';
   const cred = a.credits;
   let expBadge = '';
   if(cred && cred.earliest_expiring && cred.earliest_expiring.days_left !== undefined && cred.earliest_expiring.days_left !== null){
@@ -2466,7 +2480,137 @@ function accountRow(a){
     + '</td></tr>';
 }
 
+// 悬停气泡（全局单例）。用自定义 DOM 而不是原生 title：原生 tooltip 由浏览器
+// 自己绘制，既截不进图、也没法控制样式与换行。元素只要带 data-tip 就生效，
+// 事件走委托，动态重渲染出来的节点不必重新绑定。
+let _hoverTip = null;
+function moveHoverTip(e){
+  if(!_hoverTip) return;
+  const pad = 14;
+  const w = _hoverTip.offsetWidth, h = _hoverTip.offsetHeight;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if(x + w > window.innerWidth - 8) x = Math.max(8, e.clientX - w - pad);
+  if(y + h > window.innerHeight - 8) y = Math.max(8, e.clientY - h - pad);
+  _hoverTip.style.left = x + 'px';
+  _hoverTip.style.top = y + 'px';
+}
+function ensureHoverTip(){
+  if(_hoverTip) return _hoverTip;
+  const el = document.createElement('div');
+  el.id = 'hoverTip';
+  el.style.cssText = 'position:fixed;z-index:9999;display:none;max-width:560px;'
+    + 'padding:8px 10px;border-radius:8px;background:var(--panel);border:1px solid var(--line);'
+    + 'box-shadow:var(--shadow-sm);font-size:12px;line-height:1.55;color:var(--fg);'
+    + 'white-space:pre-wrap;word-break:break-word;pointer-events:none';
+  document.body.appendChild(el);
+  _hoverTip = el;
+  document.addEventListener('mouseover', e => {
+    const host = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+    if(!host) return;
+    el.textContent = host.getAttribute('data-tip');
+    el.style.display = 'block';
+    moveHoverTip(e);
+  });
+  document.addEventListener('mousemove', e => {
+    if(el.style.display === 'block') moveHoverTip(e);
+  });
+  document.addEventListener('mouseout', e => {
+    const host = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+    if(host) el.style.display = 'none';
+  });
+  return el;
+}
+
+// 当前禁用总览：把散落在账号卡片上的停用/限流状态汇总成一张表。
+// 四类来源：①面板手动停用 ②上游账号级冷却 ③上游模型级冷却 ④本地日限额/积分护栏。
+// 全部读 window.ACCOUNTS，不额外发请求；数据与账号卡片同源，不会互相矛盾。
+function disabledRows(){
+  const rows = [];
+  const now = Math.floor(Date.now() / 1000);
+  // 日限额与积分护栏按本地自然日恢复，这里取下一个零点。
+  const nextMidnight = (() => {
+    const d = new Date(); d.setHours(24, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  })();
+  (window.ACCOUNTS || []).forEach(a => {
+    const who = (a.nickname || '?') + ' (' + String(a.uid || '').slice(0, 8) + ')';
+    const realm = a.realm === 'cn' ? '国内版' : '国际版';
+    const detail = a.lastErrorDetail || '';
+    if(!a.enabled){
+      rows.push({who, realm, scope: '账号', kind: '本地停用', manual: true,
+                 reason: '面板手动停用，该账号不参与轮询', until: ''});
+    }
+    if(a.inCooldown){
+      const secs = Number(a.cooldownFor || 0);
+      rows.push({who, realm, scope: '账号', kind: '上游限流', detail,
+                 reason: a.lastError || '上游 429',
+                 until: secs > 0 ? fmtCoolAt(now + secs) : ''});
+    }
+    (Array.isArray(a.modelCooldowns) ? a.modelCooldowns : []).forEach(c => {
+      if(!c || !c.model) return;
+      rows.push({who, realm, scope: c.model, kind: '上游限流', detail,
+                 reason: '该模型配额耗尽（code 6004），同账号其他模型不受影响',
+                 until: fmtCoolAt(c.expiresAt)});
+    });
+    if(a.dailyLimitBlocked){
+      rows.push({who, realm, scope: '账号', kind: '日限额',
+                 reason: '今日 token ' + Number(a.dailyTokensToday || 0).toLocaleString()
+                       + ' / 上限 ' + Number(a.dailyTokenLimit || 0).toLocaleString(),
+                 until: fmtCoolAt(nextMidnight)});
+    }
+    if(a.creditLimitReached){
+      rows.push({who, realm, scope: '账号', kind: '积分限额',
+                 reason: '剩余积分低于保留线', until: fmtCoolAt(nextMidnight)});
+    }
+    const mcap = Number(a.modelDailyTokenLimit || 0);
+    if(mcap > 0 && a.modelDailyTokens){
+      Object.entries(a.modelDailyTokens).forEach(([mid, v]) => {
+        if(Number(v) >= mcap){
+          rows.push({who, realm, scope: mid, kind: '日限额',
+                     reason: '今日 token ' + Number(v).toLocaleString() + ' / 上限 ' + mcap.toLocaleString(),
+                     until: fmtCoolAt(nextMidnight)});
+        }
+      });
+    }
+  });
+  return rows;
+}
+
+function renderDisabled(){
+  const box = document.getElementById('disabledList');
+  if(!box) return;
+  ensureHoverTip();
+  const count = document.getElementById('disabledCount');
+  const rows = disabledRows();
+  if(count) count.textContent = rows.length ? '(' + rows.length + ')' : '';
+  if(!rows.length){
+    box.innerHTML = '<div class="legend" style="margin:0"><span>当前没有禁用的账号或模型。</span></div>';
+    return;
+  }
+  const badge = k => k === '上游限流' ? 'warn' : (k === '本地停用' ? 'bad' : 's');
+  box.innerHTML = '<div class="table-wrap"><table class="data-cards"><thead><tr>'
+    + '<th style="text-align:left">账号</th>'
+    + '<th style="text-align:center;width:76px">版本</th>'
+    + '<th style="text-align:left">范围</th>'
+    + '<th style="text-align:center;width:100px">类型</th>'
+    + '<th style="text-align:left">原因</th>'
+    + '<th style="text-align:center;width:156px">恢复时间</th>'
+    + '</tr></thead><tbody>'
+    + rows.map(r => '<tr>'
+        + '<td style="text-align:left">' + esc(r.who) + '</td>'
+        + '<td style="text-align:center">' + esc(r.realm) + '</td>'
+        + '<td style="text-align:left" class="mono">' + esc(r.scope) + '</td>'
+        + '<td style="text-align:center"><span class="badge ' + badge(r.kind) + '">' + esc(r.kind) + '</span></td>'
+        + '<td style="text-align:left"' + (r.detail ? ' data-tip="' + esc(r.detail) + '"' : '') + '>'
+          + esc(r.reason) + '</td>'
+        + '<td style="text-align:center">' + (r.manual ? '—（需手动启用）' : (r.until || '—')) + '</td>'
+        + '</tr>').join('')
+    + '</tbody></table></div>';
+}
+
 function renderAccounts(){
+  // Same data source as the account cards, so the two views can never disagree.
+  renderDisabled();
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = (window.ACCOUNTS || []).filter(a => !a.realm || a.realm === currentView);
