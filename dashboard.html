@@ -3951,12 +3951,23 @@ function onSettingsScroll(){
   settingsSpy();
 }
 
-function initSettingsSidebar(){
+/* 参与导航的区块：settingsBody 的直接子级 section，且自身没被 display:none 隐藏。
+   按 realm 之类条件整块隐藏的设置不应该出现在导航里。
+   判据用 computed display 而不是 offsetParent —— 后者在设置页整体隐藏时
+   会把所有区块都判成不可见，导航会整个空掉。 */
+function settingsNavSections(){
   const body = document.getElementById('settingsBody');
+  if(!body) return [];
+  return Array.from(body.children).filter(function(el){
+    return el.tagName === 'SECTION' && getComputedStyle(el).display !== 'none';
+  });
+}
+
+function initSettingsSidebar(){
   const sidebar = document.getElementById('settingsSidebar');
-  if(!body || !sidebar) return;
+  if(!sidebar) return;
   syncSettingsNavOffset();
-  const sections = Array.from(body.children).filter(el => el.tagName === 'SECTION');
+  const sections = settingsNavSections();
   if(!sections.length) return;
 
   const taken = new Set(Array.from(document.querySelectorAll('[id]')).map(el => el.id));
@@ -4011,9 +4022,11 @@ function initSettingsSidebar(){
 function restoreSettingsHash(){
   const id = (window.location.hash || '').slice(1);
   if(!id) return;
-  const body = document.getElementById('settingsBody');
-  const section = body && document.getElementById(id);
-  if(section && body.contains(section)) scrollToSettingsSection(id, false);
+  const section = document.getElementById(id);
+  if(!section) return;
+  // 被隐藏的区块不进导航，也不该作为锚点落点（否则会滚到一个不可见的位置）
+  const navigable = settingsNavSections().some(function(s){ return s === section; });
+  if(navigable) scrollToSettingsSection(id, false);
 }
 
 async function loadSettings(showToast){
