@@ -1,6 +1,13 @@
+# 部署与更新（推荐）：直接拉取 GHCR 上的预编译镜像，无需克隆仓库、无需本地构建。
+#
+#   首次部署：docker compose up -d
+#   更新版本：docker compose pull && docker compose up -d
+#   查看日志：docker compose logs -f
+#
+# 从源码构建（开发者）请改用：docker compose -f docker-compose.build.yml up -d --build
 services:
   wb-proxy:
-    build: .
+    # 追最新稳定版用 :latest；想固定版本就换成具体版本号（如 :v1.6.11），升级前改这一行
     image: ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
     container_name: wb-proxy
     restart: unless-stopped
@@ -15,6 +22,6 @@ services:
       # - API_KEY=your_api_key_here
       - TZ=Asia/Shanghai
     volumes:
-      # 持久化挂载账号凭证与用量流水
+      # 持久化挂载账号凭证与用量流水（更新镜像不会动这两个目录）
       - ./accounts:/app/accounts
       - ./usage:/app/usage

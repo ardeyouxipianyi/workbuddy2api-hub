@@ -91,37 +91,50 @@
 
 ### 5. Docker 容器化部署
 
-自带完整容器配置，零外部依赖：
+镜像发布在 GHCR（`ghcr.io/ardeyouxipianyi/workbuddy2api-hub`，amd64 / arm64 双架构，公开免登录），直接拉镜像运行即可，不需要克隆仓库、也不用本地构建。
 
-```bash
-docker compose up -d          # 后台启动（自动构建）
-docker compose logs -f        # 查看网关日志
+**首次部署**：把下面的 `docker-compose.yml` 保存到任意目录（NAS 的 Compose 界面可直接粘贴），然后 `docker compose up -d`（首次会自动拉取镜像）：
+
+```yaml
+services:
+  wb-proxy:
+    image: ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest   # 固定版本改成如 :v1.6.11
+    container_name: wb-proxy
+    restart: unless-stopped
+    ports:
+      - "8788:8788"          # 左侧宿主端口可自选；右侧必须与下面的 PORT 一致
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8788
+      # - API_KEY=your_api_key_here   # 不填则自动生成并打印在启动日志
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./accounts:/app/accounts    # 账号凭证（更新时不要删）
+      - ./usage:/app/usage          # 用量流水（更新时不要删）
 ```
 
-也可直接用 `docker run`：
+**更新**：两条命令，账号与用量数据原样保留：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+- 默认 `:latest` 追最新稳定版；想固定版本就把 `image:` 末尾换成具体版本号（如 `:v1.6.11`），更新时改这一行再执行上面的命令，回滚同理；
+- 从源码构建（改代码 / 离线环境）：`docker compose -f docker-compose.build.yml up -d --build`；
+- 不用 compose 的等价写法：
 
 ```bash
 docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
   -v $(pwd)/accounts:/app/accounts -v $(pwd)/usage:/app/usage \
-  -e API_KEY=your_secret_key $(docker build -q .)
+  ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
 ```
 
-每次 GitHub Release 发布后，也可从 GHCR 拉取预编译镜像运行（正式版同步更新 `latest`，预发布版只有版本标签）：
-
-```bash
-docker pull ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
-docker run -d --name wb-proxy --restart unless-stopped -p 8788:8788 \
-  -v $(pwd)/accounts:/app/accounts -v $(pwd)/usage:/app/usage \
-  -e API_KEY=your_secret_key ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest
-```
-
-GHCR 新包默认私有；如需免登录拉取，首次发布后在 Packages 设置中将其改为 Public。保持私有时需先登录 `ghcr.io`。
-
-- **持久化目录**：`./accounts`（账号凭证与活动区域）与 `./usage`（请求流水与指标快照）；
+- **持久化目录**：`./accounts`（账号凭证与活动区域）与 `./usage`（请求流水与指标快照），更新与重建容器都不会动它们；
 - **配置参数**：环境变量 `API_KEY`、`PORT`；
 - **改 `PORT` 要同步改端口映射**：`PORT` 只决定容器内监听哪个端口，`-p HOST:CONTAINER` 的**右侧必须与之一致**，例如 `-e PORT=9000 -p 9000:9000`；只改 `PORT` 而映射仍是 `8788:8788`，请求会打到没人监听的端口上。用 compose 时 `ports` 与 `PORT` 要同时改（默认的 `8788:8788` + `PORT=8788` 本来就一致）。
 - **鉴权**：容器以 `--lan` 启动（监听 `0.0.0.0`），会生成 API Key 写入 `./accounts/settings.json`，并打印在启动日志里：
   `docker compose logs wb-proxy | grep -i "api key"`。不带这个 Key 调 `/v1` 会收到 401；想用自己的 Key 就传 `-e API_KEY=...`。
+- **报错 `pull access denied ... repository does not exist`**：compose 文件里的镜像名少了 `ghcr.io/` 前缀，Docker 去 Docker Hub 找了（本项目不在 Docker Hub）——按上面的写法补上前缀即可；GHCR 包是公开的，正常拉取不需要 `docker login`。
 
 ### 6. 测试
 
