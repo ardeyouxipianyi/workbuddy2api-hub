@@ -260,6 +260,24 @@ class CacheAliasTests(unittest.TestCase):
             "cache_read_input_tokens": 0})
         self.assertEqual(fields["cached_tokens"], 60)
 
+    def test_cached_tokens_stay_integers(self):
+        # Codex parses response.completed strictly: a float like 631168.0 is
+        # rejected with "failed to parse ResponseCompleted: invalid number".
+        usage = {"prompt_tokens_details": {"cached_tokens": 631168.0}}
+        best = wb_proxy._best_cached_tokens(usage)
+        self.assertIsInstance(best, int)
+        self.assertEqual(best, 631168)
+        out = wb_proxy.normalize_usage_cache_aliases(dict(usage))
+        for value in (out["cached_tokens"], out["prompt_cache_hit_tokens"],
+                      out["cache_read_input_tokens"],
+                      out["prompt_tokens_details"]["cached_tokens"]):
+            self.assertIsInstance(value, int)
+        payload = wb_proxy._responses_usage({
+            "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+            "prompt_tokens_details": {"cached_tokens": 631168.0}})
+        self.assertIsInstance(payload["input_tokens_details"]["cached_tokens"], int)
+        self.assertNotIn(".0", json.dumps(payload))
+
     def test_clean_chunk_rewrites_zero_aliases(self):
         raw = json.dumps({"choices": [{"delta": {"content": "x"}}],
                           "usage": {"prompt_tokens": 10,

@@ -273,7 +273,9 @@ def _best_cached_tokens(usage):
         except (TypeError, ValueError):
             continue
         if number > 0:
-            return number
+            # Token counts must stay integers: the Codex client parses
+            # response.completed strictly and rejects 123.0 (invalid number).
+            return int(number)
     return 0
 
 
