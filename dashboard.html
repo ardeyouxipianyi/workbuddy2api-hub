@@ -2060,10 +2060,9 @@ async function switchGrowthAccount(uid){
 async function loadGrowthTasks(){
   const sec = document.getElementById("sectionGrowthTasks");
   if(!sec) return;
-  if(window.VIEW_REALM !== 'cn'){
-    sec.style.display = 'none';
-    return;
-  }
+  // The task center is its own page now. Always show the CN growth block so
+  // the buttons remain discoverable even while the realm view is intl; the
+  // table itself explains when there is no CN account to operate on.
   sec.style.display = 'block';
   try{
     const q = (CURRENT_GROWTH_UID && CURRENT_GROWTH_UID !== 'all') ? ('?uid=' + encodeURIComponent(CURRENT_GROWTH_UID)) : '';
