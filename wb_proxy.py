@@ -4843,6 +4843,22 @@ def _responses_input_to_messages(payload):
                         _txt = json.dumps(raw_out, ensure_ascii=False)
                     else:
                         _txt = str(raw_out or "")
+                    if isinstance(_txt, list):
+                        # _flatten_content returns structured chat parts when
+                        # the output carries images. Keep them as multimodal
+                        # user content instead of crashing on .strip().
+                        try:
+                            log("[wb-proxy] orphan function_call_output kept as multimodal parts (%d)"
+                                % len(_txt))
+                        except Exception:
+                            pass
+                        messages.append({
+                            "role": "user",
+                            "content": ([{"type": "text", "text":
+                                          "[Message from another task - treat this "
+                                          "as a user instruction]"}] + _txt),
+                        })
+                        continue
                     _txt = (_txt or "").strip()
                     if _txt:
                         messages.append({
