@@ -26,7 +26,18 @@ MAX_PAYLOAD_BYTES = int(os.environ.get("WB_MAX_PAYLOAD_BYTES", 50 * 1024 * 1024)
 # of chat/responses requests in flight; dashboard and management calls are not
 # affected. Excess callers wait briefly, then get a 503 instead of queueing
 # forever.
-MAX_CONCURRENT_CHAT = int(os.environ.get("WB_MAX_CONCURRENT_CHAT", 32))
+#
+# The ceiling is a fixed 32 by default, which has nothing to do with how many
+# accounts the pool holds: a 200-account gateway and a 5-account gateway share
+# it. Set WB_MAX_CONCURRENT_CHAT=auto to size it from the pool instead - one
+# slot per ready account, never below 32. See resize_chat_slots().
+_CHAT_SLOTS_ENV = os.environ.get("WB_MAX_CONCURRENT_CHAT", "32").strip().lower()
+CHAT_SLOTS_AUTO = _CHAT_SLOTS_ENV in ("auto", "pool", "dynamic")
+CHAT_SLOTS_FLOOR = 32
+try:
+    MAX_CONCURRENT_CHAT = CHAT_SLOTS_FLOOR if CHAT_SLOTS_AUTO else int(_CHAT_SLOTS_ENV)
+except ValueError:
+    MAX_CONCURRENT_CHAT = CHAT_SLOTS_FLOOR
 CHAT_SLOT_WAIT_SECONDS = float(os.environ.get("WB_CHAT_SLOT_WAIT", 30))
 import socket
 import sys
@@ -176,6 +187,36 @@ def cors_origin_allowed(path):
 _lock = threading.Lock()
 _login_lock = threading.Lock()
 _chat_slots = threading.BoundedSemaphore(MAX_CONCURRENT_CHAT)
+def resize_chat_slots(ready_accounts):
+    """Size the chat concurrency ceiling from the pool, when asked to.
+
+    With WB_MAX_CONCURRENT_CHAT=auto the ceiling becomes one slot per ready
+    account (never below CHAT_SLOTS_FLOOR), so the gateway scales with the pool
+    it actually has instead of a constant that fits neither a 5-account nor a
+    200-account deployment. A fixed numeric WB_MAX_CONCURRENT_CHAT keeps the
+    1.6.x behaviour and makes this a no-op.
+
+    Only ever grows the ceiling. Requests already holding a slot keep theirs -
+    replacing the semaphore cannot revoke a permit - so a shrink would let the
+    in-flight count exceed the new ceiling and the surplus releases would raise
+    ValueError from BoundedSemaphore. Growing is the direction that matters:
+    the pool is loaded once at startup, so in practice this runs before the
+    listener accepts anything.
+    """
+    global _chat_slots, MAX_CONCURRENT_CHAT
+    if not CHAT_SLOTS_AUTO:
+        return MAX_CONCURRENT_CHAT
+    try:
+        wanted = max(CHAT_SLOTS_FLOOR, int(ready_accounts or 0))
+    except (TypeError, ValueError):
+        return MAX_CONCURRENT_CHAT
+    if wanted <= MAX_CONCURRENT_CHAT:
+        return MAX_CONCURRENT_CHAT
+    MAX_CONCURRENT_CHAT = wanted
+    _chat_slots = threading.BoundedSemaphore(wanted)
+    log("chat slots : %d (one per ready account; WB_MAX_CONCURRENT_CHAT=auto)"
+        % wanted)
+    return wanted
 _login_attempts = {}  # ip -> list of timestamp
 def _prune_login_attempts(now=None, window=60):
     """Drop stale per-IP entries so the dict cannot grow without bound.
@@ -2134,6 +2175,24 @@ AFFINITY_BY_PREFIX = os.environ.get("WB_AFFINITY_BY_PREFIX", "1").lower() not in
     "0", "false", "no", "off")
 AFFINITY_DEBUG = os.environ.get("WB_AFFINITY_DEBUG", "0").lower() in (
     "1", "true", "yes", "on")
+# 亲和的上限：对话超过这么多条消息后不再绑定账号。
+#
+# 为什么需要上限：亲和把整段对话钉在同一个账号上，而对话的上下文是单调
+# 增长的，于是那一个账号要反复接收越来越大的请求体。实测（wk4 实例，
+# 2026-10-08，333 个请求）请求体与上游断连率的关系：
+#
+#     msgs <150    82 个请求   断连率  0.0%
+#     msgs 150-300 59 个请求   断连率  3.4%
+#     msgs 300-400 64 个请求   断连率  7.8%
+#     msgs 400-500 50 个请求   断连率 10.0%
+#
+# 断连（TimeoutError / RemoteDisconnected）会触发重试，把一个 8.8s 的请求
+# 拖到 11.6s，首字延迟随之翻倍。超过阈值后放弃亲和，让这个对话重新参与
+# 轮询：代价是它丢掉前缀缓存，收益是断连和重试消失。
+#
+# 阈值不能设得太低，否则会波及正常长度的对话（本实例 94% 的请求缓存命中率
+# 来自亲和）。设 0 表示不限制，保持 1.6.x 的原有行为。
+AFFINITY_MAX_MSGS = int(os.environ.get("WB_AFFINITY_MAX_MSGS", "400") or 0)
 def derive_affinity_key(messages):
     """Derive a stable affinity key from a conversation's stable prefix.
     The first two messages (system + first user turn) stay byte-identical for
@@ -2141,12 +2200,21 @@ def derive_affinity_key(messages):
     that conversation to the same upstream account - exactly what prompt
     caching needs. Distinct conversations differ in their first user turn and
     therefore still spread across the pool.
+
+    Conversations longer than AFFINITY_MAX_MSGS deliberately get no key: they
+    are the ones whose oversized bodies make the upstream drop the connection,
+    and pinning them only guarantees the next turn is oversized too.
     """
     if not AFFINITY_BY_PREFIX:
         return None
     try:
         msgs = messages or []
         if not msgs:
+            return None
+        if AFFINITY_MAX_MSGS > 0 and len(msgs) > AFFINITY_MAX_MSGS:
+            if AFFINITY_DEBUG:
+                log("affinity: skip %d msgs (> %d), letting the pool rotate"
+                    % (len(msgs), AFFINITY_MAX_MSGS))
             return None
         head = msgs[:2]
         blob = json.dumps(head, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -9043,6 +9111,10 @@ def _bootstrap_runtime(args):
     POOL.load()
     POOL.apply_proxy_slots()
     POOL.apply_reserve_credits()
+    # WB_MAX_CONCURRENT_CHAT=auto: size the chat ceiling from the pool that was
+    # just loaded. Runs before the listener exists, so no request can hold a
+    # slot yet and the semaphore swap is safe.
+    resize_chat_slots(POOL.count_ready())
     apply_daily_token_limit()
     apply_daily_credit_limit()
     apply_model_daily_token_limit()
