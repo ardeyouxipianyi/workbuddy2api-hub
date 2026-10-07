@@ -3582,6 +3582,7 @@ function accountRow(a){
     +     '<button class="sec mini" onclick="toggleAccount(&quot;' + uidAttr + '&quot;,' + (!a.enabled) + ', this)">' + (a.enabled ? '停用' : '启用') + '</button>'
     +     '<button class="sec mini" onclick="testAccount(&quot;' + uidAttr + '&quot;, this)">测试</button>'
     +     '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>'
+    +     '<button class="sec mini" onclick="syncProfile(&quot;' + uidAttr + '&quot;, this)" title="从 Web 控制台同步最新昵称（改名后免重登）">同步昵称</button>'
     +   '</div>'
     +   '<div class="acct-actions-row">'
     +     '<div class="id-btn-group" title="出站身份：默认 WorkBuddy 桌面端 (WB) / 官方 VSCode 插件 (VSC) / 官方 CodeBuddy CLI (CLI)">'
@@ -3848,6 +3849,22 @@ async function refreshOne(uid, btn){
     toast('刷新失败: ' + e.message, 'bad');
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '刷新凭证'; }
+  }
+}
+async function syncProfile(uid, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '同步中...'; }
+  try{
+    const r = await postJSON('/accounts/sync-profile', {uid: uid});
+    const item = (r.updated || [])[0];
+    const bad = (r.failed || [])[0];
+    if(item && item.nickname) toast('昵称已同步: ' + item.nickname, 'ok');
+    else if(bad) toast('同步失败: ' + bad.error, 'bad');
+    else toast('同步完成（上游未返回昵称）', 'warn');
+    await loadAccounts();
+  }catch(e){
+    toast('同步失败: ' + e.message, 'bad');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '同步昵称'; }
   }
 }
 async function testAccount(uid, btn){

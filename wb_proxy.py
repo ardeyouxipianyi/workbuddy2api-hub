@@ -7713,6 +7713,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._route_accounts_import_desktop(payload)
         if path == "/accounts/refresh":
             return self._route_accounts_refresh(payload)
+        if path == "/accounts/sync-profile":
+            return self._route_accounts_sync_profile(payload)
         if path == "/accounts/test":
             return self._route_accounts_test(payload)
         if path == "/accounts/set":
@@ -8104,6 +8106,39 @@ class Handler(BaseHTTPRequestHandler):
             account.save(ACCOUNTS_DIR)
             results.append({"uid": account.uid, "ok": ok, "error": account.last_error})
         return self._json(200, {"results": results})
+
+    def _route_accounts_sync_profile(self, payload):
+        """Manual nickname refresh from the web console.
+
+        Opt-in by nature: only runs when the operator asks for it. The
+        upstream response carries phone numbers and other personal fields;
+        wb_accounts.fetch_account_profile parses only uid/nickname.
+        """
+        uid = str(payload.get("uid") or "").strip()
+        realm = payload.get("realm")
+        if uid:
+            targets = [POOL.get(uid)]
+        elif realm and realm != "all":
+            targets = [a for a in POOL.accounts if a.realm == realm]
+        else:
+            targets = list(POOL.accounts)
+        updated = []
+        failed = []
+        for account in targets:
+            if account is None:
+                continue
+            try:
+                nickname = account.sync_nickname()
+            except Exception as exc:
+                failed.append({"uid": account.uid, "error": str(exc)[:200]})
+                log("profile sync failed for %s: %s" % (account.uid[:8], exc),
+                    level="WARN")
+                continue
+            updated.append({"uid": account.uid, "nickname": nickname})
+            log("account %s: nickname synced from the web console"
+                % account.uid[:8], level="INFO")
+        return self._json(200, {"updated": updated, "failed": failed,
+                                "accounts": account_views()})
 
     def _route_accounts_test(self, payload):
         uid = payload.get("uid")
