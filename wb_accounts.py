@@ -289,6 +289,21 @@ def resolve_device_token(accounts_dir):
     return token
 
 
+def next_local_4am(now=None):
+    """Epoch of the next local 04:00.
+
+    The daily reset that puts CN credits back happens overnight, so the
+    04:00 wall is what an out-of-credits park waits for. A timestamp already
+    past 04:00 rolls to tomorrow, so a deadline is never reused in place.
+    """
+    now = time.time() if now is None else now
+    lt = time.localtime(now)
+    stamp = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                         4, 0, 0, 0, 0, -1))
+    if stamp <= now:
+        stamp += 86400
+    return stamp
+
 class Account(object):
     def __init__(self, data, path=None):
         data = data or {}
@@ -353,6 +368,11 @@ class Account(object):
         # otherwise a single throttled model blackholes every request on the pool.
         # Deliberately runtime-only (not persisted): see VOLATILE_FIELDS.
         self.model_cooldowns = {}
+        # 402 (out of credits): a hard park until the next local 04:00,
+        # instead of a short cooldown that would retry an empty account all
+        # day. Runtime-only, like the other throttle windows; a balance
+        # refresh that shows credits again lifts it early.
+        self.balance_until = 0.0
         self.credits = data.get("credits") or None
         self.last_checkin = data.get("lastCheckin") or None
         self.last_daily_chat = data.get("lastDailyChat") or None
@@ -435,7 +455,7 @@ class Account(object):
         with self._throttle_lock:
             error = self.last_error
             detail = self.last_error_detail
-            deadline = self.cooldown_until
+            deadline = max(self.cooldown_until, self.balance_until)
             active = [(model, until) for model, until in self.model_cooldowns.items()
                       if until > now]
         active.sort(key=lambda pair: (pair[1], pair[0]))
@@ -1394,6 +1414,14 @@ class Account(object):
         return {"ok": True, "credits": self.credits}
 
     def fetch_credits(self):
+        """Refresh the balance; a refresh that shows credits again also lifts
+        an early 402 park (revive_balance_cooldown)."""
+        res = self._fetch_credits_raw()
+        if isinstance(res, dict) and res.get("ok"):
+            self.revive_balance_cooldown()
+        return res
+
+    def _fetch_credits_raw(self):
         if self.realm == "cn":
             try:
                 res = self._fetch_credits_cn_detailed()
@@ -1439,13 +1467,50 @@ class Account(object):
             actual_cooldown = 3 if single_account else cooldown
             self.cooldown_until = time.time() + actual_cooldown
 
+    def note_balance_cooled(self, message="insufficient credits"):
+        """402 / out of credits: park until the next local 04:00.
+
+        A short cooldown would hand the empty account out again minutes
+        later, and every request to it fails the same way; the daily reset
+        is when credits come back, so that is the wall clock this waits for.
+        A refresh that shows credits again can lift it early - see
+        revive_balance_cooldown().
+        """
+        until = next_local_4am()
+        with self._throttle_lock:
+            self.last_error = str(message)[:200]
+            self.balance_until = max(self.balance_until, until)
+        return until
+
+    def revive_balance_cooldown(self):
+        """A balance refresh that shows credits again lifts the 402 park only.
+
+        Rate-limit and model cooldowns stay exactly as they are; this is not
+        a general clear_error().
+        """
+        if not self.balance_until:
+            return False
+        credits = self.credits if isinstance(self.credits, dict) else {}
+        try:
+            remain = int(credits.get("remain"))
+        except (TypeError, ValueError):
+            remain = None
+        if remain is None or remain <= 0:
+            return False
+        with self._throttle_lock:
+            self.balance_until = 0.0
+            self.last_error = ""
+            self.last_error_detail = ""
+        return True
+
     def throttle_wait(self, model=None):
         """Seconds until this account can serve `model` again (0 = right now)."""
         if not self.enabled or not self.access_token:
             return 0.0
         now = time.time()
         with self._throttle_lock:
-            wait = max(0.0, self.cooldown_until - now)
+            wait = max(0.0, self.cooldown_until - now,
+                       self.balance_until - now)
             if model:
                 wait = max(wait, max(0.0, self.model_cooldowns.get(model, 0.0) - now))
         return wait
@@ -1456,10 +1521,12 @@ class Account(object):
                 self.model_cooldowns.pop(model, None)
             else:
                 self.model_cooldowns.clear()
-            if self.last_error or self.cooldown_until or self.last_error_detail:
+            if (self.last_error or self.cooldown_until
+                    or self.last_error_detail or self.balance_until):
                 self.last_error = ""
                 self.last_error_detail = ""
                 self.cooldown_until = 0
+                self.balance_until = 0.0
 
 def _human_delta(seconds):
     if seconds is None: return None

@@ -4110,6 +4110,18 @@ def open_upstream(payload, session_key=None, target_realm=None):
                 last_error = exc
                 last_403_detail = detail
                 break
+            if exc.code == 402:
+                try:
+                    detail = exc.read(400).decode("utf-8", "replace")
+                except Exception:
+                    detail = ""
+                account.note_balance_cooled(detail or "HTTP 402 (insufficient credits)")
+                log("account %s out of credits (402), parked until 04:00"
+                    % account.uid[:8])
+                if session_key and POOL:
+                    POOL.affinity.unbind(session_key)
+                last_error = exc
+                continue
             if exc.code == 401:
                 log("account %s rejected (HTTP 401), rotating" % account.uid[:8])
                 if session_key and POOL:
