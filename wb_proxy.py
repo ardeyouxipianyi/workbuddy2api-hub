@@ -3049,6 +3049,91 @@ def sanitize_messages(messages):
 # ---------------------------------------------------------------------------
 # Tool-call pairing repair
 # ---------------------------------------------------------------------------
+def _empty_content(value):
+    """True when an assistant message carries no content at all.
+
+    None / "" / [] all mean "no content": clients disagree on which empty
+    shape they emit, and a batch split into adjacent assistant messages must
+    merge for either shape (a missed [] was the original 11148 case).
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
+
+
+def _merge_reasoning_content(dst, src):
+    """Fold src's reasoning_content into dst, newline-joined when both exist."""
+    rc = src.get("reasoning_content")
+    if not isinstance(rc, str) or not rc:
+        return
+    prev = dst.get("reasoning_content")
+    if isinstance(prev, str) and prev:
+        dst["reasoning_content"] = prev + "\n" + rc
+    else:
+        dst["reasoning_content"] = rc
+
+
+def merge_adjacent_tool_calls(messages):
+    """Merge back-to-back assistant tool_calls messages into one.
+
+    Some OpenAI-compatible agent clients replay a parallel batch as several
+    adjacent assistant messages, each carrying one tool_call. DeepSeek-family
+    upstreams answer 400 / code 11148 (tool_call_sequence_broken) for that
+    shape and retire the conversation, because every retry replays the same
+    history and switching accounts cannot help. Merging the declarations
+    restores the shape the upstream accepts.
+
+    Conditions are strict, so no semantics are invented:
+      - the messages must be adjacent;
+      - the trailing message must have empty content (None/""/[]);
+      - the leading message must already be an assistant with tool_calls.
+
+    A second form folds a plain assistant's string content into a preceding
+    tool_calls assistant that has no content of its own (the same split batch
+    replayed in the other order). reasoning_content is preserved either way,
+    because DeepSeek multi-turn thinking requires it back.
+    """
+    if not isinstance(messages, list) or len(messages) < 2:
+        return messages, False
+    out = []
+    changed = False
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        if m.get("role") == "assistant" and out:
+            prev = out[-1] if isinstance(out[-1], dict) else None
+            if prev is not None and prev.get("role") == "assistant":
+                tcs = m.get("tool_calls")
+                prev_calls = prev.get("tool_calls")
+                # Form 1: this message declares tool calls and has no content.
+                if (isinstance(tcs, list) and tcs
+                        and _empty_content(m.get("content"))
+                        and isinstance(prev_calls, list) and prev_calls):
+                    prev["tool_calls"] = prev_calls + tcs
+                    _merge_reasoning_content(prev, m)
+                    changed = True
+                    continue
+                # Form 2: plain string content folds into a preceding
+                # content-less tool_calls assistant.
+                if ("tool_calls" not in m
+                        and isinstance(m.get("content"), str) and m["content"]
+                        and isinstance(prev_calls, list) and prev_calls
+                        and _empty_content(prev.get("content"))):
+                    prev["content"] = m["content"]
+                    _merge_reasoning_content(prev, m)
+                    changed = True
+                    continue
+        out.append(m)
+    if not changed:
+        return messages, False
+    return out, True
+
+
 def repack_tool_result_blocks(messages):
     """Keep a tool_calls batch and its results adjacent.
 
@@ -3179,6 +3264,45 @@ def cleanup_orphan_tool_calls(messages):
     if not changed:
         return messages, False
     return out, True
+
+
+def is_truncated_arguments(raw):
+    """True when a non-empty tool-arguments string is not valid JSON.
+
+    A stream cut off by max_tokens or a dropped connection leaves the last
+    tool call with half-written JSON. An empty/whitespace string is a legal
+    no-argument tool, and any parseable JSON (including null/scalars/arrays)
+    is the model's own output for the client to validate - only non-empty
+    unparsable strings count as truncation.
+    """
+    if not isinstance(raw, str):
+        return False
+    trimmed = raw.strip()
+    if not trimmed:
+        return False
+    try:
+        json.loads(trimmed)
+        return False
+    except Exception:
+        return True
+
+
+def drop_truncated_tool_calls(calls):
+    """Return the tool calls whose arguments are not half-written JSON."""
+    if not isinstance(calls, list):
+        return calls
+    kept = []
+    for call in calls:
+        if not isinstance(call, dict):
+            kept.append(call)
+            continue
+        fn = call.get("function")
+        if isinstance(fn, dict) and is_truncated_arguments(fn.get("arguments")):
+            continue
+        kept.append(call)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # DeepSeek Multi-turn Consistency: reasoning_content backfill
 # ---------------------------------------------------------------------------
@@ -3617,9 +3741,12 @@ def build_upstream_body(payload):
     body["model"] = model
     body["messages"] = messages
     # Repair tool-call pairing before the body leaves: a call whose result never
-    # came back, or results split from their batch by an interleaved message,
-    # makes the upstream reject every later turn of that conversation.
-    repaired, _repacked = repack_tool_result_blocks(body["messages"])
+    # came back, results split from their batch by an interleaved message, or a
+    # parallel batch split into adjacent assistant messages makes the upstream
+    # reject every later turn of that conversation. Order matters: merge the
+    # split declarations first, so repack sees one complete batch.
+    repaired, _merged = merge_adjacent_tool_calls(body["messages"])
+    repaired, _repacked = repack_tool_result_blocks(repaired)
     repaired, _cleaned = cleanup_orphan_tool_calls(repaired)
     body["messages"] = repaired
     translate_max_completion_tokens(body)
@@ -4214,9 +4341,12 @@ def aggregate_stream(raw_iter, model, resp_id):
     usage = None
     started = time.time()
     first_chunk_at = None
+    saw_done = False
     for line in raw_iter:
         data = strip_data_prefix(line.decode("utf-8", "replace"))
         if not data or data == "[DONE]":
+            if data == "[DONE]":
+                saw_done = True
             continue
         try:
             chunk = json.loads(data)
@@ -4297,6 +4427,15 @@ def aggregate_stream(raw_iter, model, resp_id):
         tool_calls_map = {
             k: v for k, v in tool_calls_map.items()
             if (v.get("function") or {}).get("name")
+        }
+    # A stream cut off by max_tokens / a dropped connection leaves the last
+    # tool call with half-written JSON. Drop those calls instead of handing
+    # the client unparsable arguments; only non-empty unparsable strings
+    # count as truncated, so no-argument tools survive.
+    if tool_calls_map and (finish == "length" or not saw_done):
+        tool_calls_map = {
+            k: v for k, v in tool_calls_map.items()
+            if not is_truncated_arguments((v.get("function") or {}).get("arguments"))
         }
     if tool_calls_map:
         ordered_tcs = [tool_calls_map[k] for k in sorted(tool_calls_map.keys())]
@@ -5889,6 +6028,7 @@ def stream_responses_events(upstream, model, holder):
     tool_calls_map = {}
     text_buffer = ""
     dsml_tool_calls = []
+    saw_done = False
     custom_names = set(holder.get("custom_names") or ())
     ns_map = holder.get("namespace_map") or {}
     # 由反代代跑的網路工具呼叫，收集起來不轉發給客戶端
@@ -6150,7 +6290,8 @@ def stream_responses_events(upstream, model, holder):
                     "prompt_tokens_details": {"cached_tokens": 0},
                 }
                 holder["usage"] = usage
-        status = "completed" if finish != "length" else "incomplete"
+        status = ("completed" if (finish != "length" and not dropped_truncated)
+                  else "incomplete")
         final = resp_obj(status)
         if finish == "length":
             final["incomplete_details"] = {"reason": "max_output_tokens"}
@@ -6165,6 +6306,8 @@ def stream_responses_events(upstream, model, holder):
     for raw in upstream:
         data = strip_data_prefix(raw.decode("utf-8", "replace"))
         if not data or data == "[DONE]":
+            if data == "[DONE]":
+                saw_done = True
             continue
         try:
             chunk = json.loads(data)
@@ -6350,6 +6493,18 @@ def stream_responses_events(upstream, model, holder):
                             break
             if choice.get("finish_reason"):
                 finish = choice["finish_reason"]
+    # Truncated streams (max_tokens, dropped connection) can leave tool-call
+    # arguments as half-written JSON. Do not close those calls out as
+    # completed: drop them before finalize so the client never receives a
+    # function_call_arguments.done / output_item.done with unparsable
+    # arguments. Complete calls in the same batch are kept.
+    dropped_truncated = 0
+    if tool_calls_map and (finish == "length" or not saw_done):
+        for idx in sorted(tool_calls_map.keys()):
+            entry = tool_calls_map[idx]
+            if is_truncated_arguments(entry.get("arguments")):
+                tool_calls_map.pop(idx, None)
+                dropped_truncated += 1
     yield from _finalize()
 
 # ---------------------------------------------------------------------------
