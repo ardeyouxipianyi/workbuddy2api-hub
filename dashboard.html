@@ -6868,7 +6868,6 @@ function renderPerfMatrix(usage, perf){
   if(!rowsData.length){
     matrixEl.innerHTML = '<div class="empty">当前版本暂无模型请求或性能数据</div>';
   } else {
-    const maxTok = Math.max(1, ...rowsData.map(m => m.total_tokens));
     /* Summary row (Total / All Models).
      *
      * With no filter this is the endpoint-wide figure, as before. With a
@@ -6949,7 +6948,13 @@ function renderPerfMatrix(usage, perf){
       const m_tps = mpEff.tokens_per_sec ? ('<b style="color:var(--accent2)">' + mpEff.tokens_per_sec.avg.toFixed(1) + '</b> <span style="font-size:11px;color:var(--dim)">tok/s</span>') : "-";
       const m_wall = mpEff.wall_ms ? ms(mpEff.wall_ms.avg) : "-";
       const m_cache = (m.prompt_tokens > 0) ? pct(m.cached_tokens / m.prompt_tokens * 100) : (mpEff.cache_hit_pct ? mpEff.cache_hit_pct.avg.toFixed(1) + "%" : "-");
-      const pctTok = Math.round(m.total_tokens / maxTok * 100);
+      /* Share of the table's own total - the figure in the summary row -
+       * rather than of the largest row. Dividing by the maximum made the
+       * biggest model read 100% and every other row a fraction of it, which
+       * is a relative ranking, not the share the column name promises.
+       * One decimal, like every other percentage on the page: a whole-percent
+       * reading collapses a model that spent millions of tokens to "0%". */
+      const pctTok = sumTok > 0 ? Math.round(m.total_tokens / sumTok * 1000) / 10 : 0;
       // 0 is a real result (the model ran and never failed), so it stays
       // visible as a muted zero rather than the dash used for no data.
       const errCell = mpEff.errors
@@ -7012,7 +7017,7 @@ function renderPerfMatrix(usage, perf){
         + '<td data-label="生成速度">' + m_tps + '</td>'
         + '<td data-label="端到端耗时">' + m_wall + '</td>'
         + '<td data-label="缓存命中">' + m_cache + '</td>'
-        + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok + '%</span></td>'
+        + '<td style="min-width:90px" data-label="用量占比"><span class="bar-fill" style="width:' + Math.max(3, pctTok).toFixed(1) + '%"></span> <span style="font-size:11px;color:var(--dim)">' + pctTok.toFixed(1) + '%</span></td>'
         + '<td data-label="OpenRouter 价估算" class="pricing-col" style="color:var(--warn)" title="OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示">'
         +   ((m.cost_cny || 0) > 0 ? fmtCost(m.cost_cny) : '<span style="color:var(--dim)">—</span>')
         + '</td>'
