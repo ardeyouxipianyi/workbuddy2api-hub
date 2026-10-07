@@ -20,6 +20,12 @@ VOLUME ["/app/accounts", "/app/usage"]
 
 EXPOSE 8788
 
+# Health probe for docker / orchestrators: /health always answers 200 and
+# only exposes account identity to an authorised caller. The URL follows
+# PORT so a remapped container still reports healthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT','8788'), timeout=3)" || exit 1
+
 # Launch the proxy in the project's LAN mode: --lan listens on every interface
 # and forces an api key (generated once, persisted in ./accounts/settings.json
 # and printed in the startup log). Without it the container published port 8788

@@ -158,6 +158,9 @@ docker run -d --name wb-proxy-watchtower --restart unless-stopped \
   `docker compose logs wb-proxy | grep -i "api key"`。
 - **报错 `pull access denied ... repository does not exist`**：镜像名若省略了 Registry 地址（如写成了 `ardeyouxipianyi/workbuddy2api-hub`），Docker 默认访问 Docker Hub。若遇网络受阻，请确保镜像名补全为 `ghcr.io/ardeyouxipianyi/workbuddy2api-hub:latest`；GHCR 包是公开的，拉取无需登录。
 
+- **目录权限（PUID/PGID）**：容器默认以 root（`0:0`）运行，与历史行为一致。想以宿主用户身份跑，就在 compose 里设 `PUID=$(id -u)` / `PGID=$(id -g)`（或写进 `.env`），并确保 `./accounts`、`./usage` 对该 uid 可写；`docker run` 也可直接加 `--user $(id -u):$(id -g)`。
+- **健康检查**：镜像自带 `HEALTHCHECK`（每 30s 请求一次 `/health`），`docker ps` 的 STATUS 列会显示 healthy/unhealthy，编排器也可直接探活。
+
 ### 6. 测试
 
 全部测试集中在 `tests/`，一条命令跑完：
@@ -168,7 +171,8 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
-- CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。
+- 58 个套件：44 个 Python + 14 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12。推送 `v*` tag 时额外断言 **tag == 源码版本**（`wb_proxy.py` 里的两处版本串必须先一致，`-ci` 演练 tag 豁免）。
 
 ---
 
