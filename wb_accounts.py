@@ -284,12 +284,19 @@ class Account(object):
         # Runtime-resolved value; recomputed by AccountPool.apply_proxy_slots().
         self.proxy = self.proxy_legacy
         self.enabled = data.get("enabled", True)
-        self.last_error = str(data.get("lastError") or "")
+        # Live error state, never restored from the credential file: the label
+        # describes the last upstream answer, not the credential. It used to be
+        # persisted and read back, so a 429 that had long since recovered came
+        # back on the panel after every restart - a successful request only
+        # clears it in memory, and the file is rewritten on unrelated events, so
+        # a stale value could sit on disk for days. Runtime-only, like
+        # model_cooldowns below; see RUNTIME_ONLY_FIELDS and VOLATILE_FIELDS.
+        self.last_error = ""
         # Full upstream body behind `last_error`, for the dashboard tooltip. Kept
         # in its own runtime-only field so the visible label keeps the truncation
         # it has always had; never persisted, never exported.
         self.last_error_detail = ""
-        self.cooldown_until = float(data.get("cooldownUntil") or 0)
+        self.cooldown_until = 0.0
         # Per-model throttling. Upstream rate limits (code 6004 "usage exceeds
         # frequency limit") apply to ONE model for one account, not to the whole
         # account: other models keep working. Cooldown the offending model only,
@@ -344,6 +351,12 @@ class Account(object):
         self._throttle_lock = threading.Lock()
 
     def to_dict(self):
+        """Full view of the account, including live state.
+
+        This is what an export is built from, so it carries the live error and
+        cooldown for inspection. The local credential file must not: save()
+        strips RUNTIME_ONLY_FIELDS before writing.
+        """
         return {
             "uid": self.uid,
             "nickname": self.nickname,
@@ -449,8 +462,14 @@ class Account(object):
         with self._save_lock:
             tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
             try:
+                payload = self.to_dict()
+                # Live error/cooldown state stays out of the credential file;
+                # writing it is what made a long-recovered 429 label reappear on
+                # every restart (see RUNTIME_ONLY_FIELDS).
+                for field in RUNTIME_ONLY_FIELDS:
+                    payload.pop(field, None)
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(self.to_dict(), fh, ensure_ascii=False, indent=2)
+                    json.dump(payload, fh, ensure_ascii=False, indent=2)
                 os.replace(tmp, path)
             except Exception:
                 try:
@@ -2013,6 +2032,11 @@ EXPORT_VERSION = 1
 # exported for inspection but never trusted on import: a stale cooldown or a
 # disabled flag from another machine would silently cripple the target pool.
 VOLATILE_FIELDS = ("cooldownUntil", "lastError", "credits", "lastCheckin", "lastDailyChat")
+
+# The subset of VOLATILE_FIELDS that must not round-trip through the local
+# credential file at all: they are not trusted on load and not written by save(),
+# exactly like model_cooldowns. An export still carries them (see to_dict()).
+RUNTIME_ONLY_FIELDS = ("lastError", "cooldownUntil")
 
 
 def account_to_export(account):
