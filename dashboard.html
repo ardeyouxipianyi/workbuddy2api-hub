@@ -5244,6 +5244,10 @@ async function loadSettings(showToast){
 
     applyLimits(data);
 
+      const pricingOn = data.pricing_enabled !== false;
+      const pricingEnabledInput = document.getElementById('setPricingEnabled');
+      if(pricingEnabledInput) pricingEnabledInput.checked = pricingOn;
+      applyPricingEnabled(pricingOn);
       const pricingMinutes = Number(data.pricing_refresh_minutes || 0);
       const pricingInput = document.getElementById('setPricingMinutes');
       if(pricingInput) pricingInput.value = String(pricingMinutes);
