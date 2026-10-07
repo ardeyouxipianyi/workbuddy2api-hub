@@ -154,6 +154,7 @@ RESOURCE_SUMMARY_PATH = "/billing/meter/get-user-resource-summary"
 RESOURCE_FREE_PACKAGES_PATH = "/billing/meter/get-user-resource-free-packages"
 RESOURCE_PAID_PACKAGES_PATH = "/billing/meter/get-user-resource-paid-packages"
 CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status"
+ENTERPRISE_USAGE_PATH = "/billing/meter/get-enterprise-user-usage"
 
 LOGIN_PENDING = 11217
 LOGIN_TTL_SECONDS = 600
@@ -277,6 +278,11 @@ class Account(object):
         self.access_token = token
         self.refresh_token = str(data.get("refreshToken") or "")
         self.expires_at = normalize_epoch(data.get("expiresAt")) or jwt_exp(token)
+        # 企业账号登录时切到企业空间（token_source=enterprise_switch），企业 id
+        # 只写在 token 里，凭据文件的 enterpriseId 往往是空的。不回填的话每个
+        # 请求都会带上 X-No-Enterprise-Id: 1，企业目录/配额分支走错。
+        if not self.enterprise_id:
+            self.enterprise_id = self.jwt_enterprise_id(token)
         self.added_at = data.get("addedAt") or time.time()
         self.source = str(data.get("source") or "oauth")
         self.proxy_slot = str(data.get("proxySlot") or "").strip()
@@ -1208,14 +1214,131 @@ class Account(object):
             self.save(os.path.dirname(self.path))
         return {"ok": True, "credits": self.credits}
 
+    def jwt_enterprise_id(self, token=None):
+        """企业空间 id，取自 token 自身（或已存的 accessToken）。
+
+        企业账号是登录时切到企业空间换来的 token（token_source=enterprise_switch），
+        账号文件里的 enterpriseId 常常是空的——只有 token 里有。拿不到就返回 ""。
+        """
+        return str(_jwt_claims(token or self.access_token).get("enterprise_id") or "")
+
+    def is_enterprise(self):
+        """True when this account belongs to an enterprise (team) space.
+
+        Enterprise members have no personal resource packages, so the personal
+        billing endpoint always answers TotalCount=0 and the panel shows 0/0.
+        Their credit lives on /billing/meter/get-enterprise-user-usage instead.
+        """
+        return bool(self.enterprise_id or self.jwt_enterprise_id())
+
+    def _fetch_credits_enterprise(self):
+        """企业账号积分：周期内已用 + 周期额度，剩余 = 额度 - 已用。
+
+        上游只回 4 个字段：credit（本周期已消耗，实测随时间单调递增）、
+        limitNum（周期额度）、cycleStartTime / cycleEndTime。没有包列表，
+        所以合成一个包条目，让看板的明细弹窗与到期提示照常工作。
+        """
+        cfg = get_realm_config(self.realm)
+        url = cfg["billing_upstream"] + ENTERPRISE_USAGE_PATH
+        headers = self.headers(purpose="billing")
+        headers["X-Client-Platform"] = "web"
+        try:
+            res = http_json(url, data=b"{}", method="POST", headers=headers,
+                            timeout=15, proxy=self.proxy)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        data = res.get("data") or {}
+        try:
+            used = round(float(data.get("credit") or 0), 2)
+        except (TypeError, ValueError):
+            used = 0.0
+        try:
+            size = round(float(data.get("limitNum") or 0), 2)
+        except (TypeError, ValueError):
+            size = 0.0
+        # 上游只给额度与已用；已用超过额度（或额度缺失）时不要算出负余额。
+        remain = round(max(0.0, size - used), 2) if size > 0 else 0.0
+
+        cycle_start = str(data.get("cycleStartTime") or "")
+        cycle_end = str(data.get("cycleEndTime") or data.get("cycleResetTime") or "")
+        days_left = None
+        is_expired = False
+        if cycle_end:
+            try:
+                clean = cycle_end.replace("T", " ")[:19]
+                end_ts = time.mktime(time.strptime(clean, "%Y-%m-%d %H:%M:%S"))
+                days_left = round((end_ts - time.time()) / 86400.0, 1)
+                is_expired = (end_ts - time.time()) < 0
+            except Exception:
+                pass
+
+        package = {
+            "name": "企业额度" if size else "企业周期额度",
+            "package_code": "enterprise",
+            "product_name": "",
+            "sub_product_name": "",
+            "grant_reason": "企业空间发放",
+            "resource_id": "",
+            "deal_name": "",
+            "create_time": cycle_start,
+            "remain": remain,
+            "used": used,
+            "size": size,
+            "unit": "credits",
+            "in_usage": bool(used > 0),
+            "auto_renew": True,
+            "cycle_start_time": cycle_start,
+            "cycle_end_time": cycle_end,
+            "days_left": days_left,
+            "is_expired": is_expired,
+            "status": 0,
+        }
+        self.credits = {
+            "remain": remain,
+            "used": used,
+            "size": size,
+            "used_percent": ("%.1f%%" % (used / size * 100)) if size > 0 else "0.0%",
+            "remain_percent": ("%.1f%%" % (remain / size * 100)) if size > 0 else "100.0%",
+            "is_paid_user": True,
+            "is_enterprise": True,
+            "checkin": None,
+            "earliest_expiring": ({
+                "name": package["name"],
+                "package_code": "enterprise",
+                "remain": remain,
+                "cycle_end_time": cycle_end,
+                "days_left": days_left,
+            } if cycle_end else None),
+            "packages": [package] if size > 0 else [],
+            "updated_at": time.time(),
+            "updated_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if self.path and os.path.exists(os.path.dirname(self.path)):
+            self.save(os.path.dirname(self.path))
+        return {"ok": True, "credits": self.credits}
+
     def fetch_credits(self):
         if self.realm == "cn":
             try:
                 res = self._fetch_credits_cn_detailed()
+                # 企业账号在个人计费接口上没有资源包：返回 ok 但全是 0。
+                # 这时改问企业用量接口，否则看板永远是 0/0。
+                if res.get("ok") and not (self.credits or {}).get("size"):
+                    if self.is_enterprise():
+                        ent = self._fetch_credits_enterprise()
+                        if ent.get("ok"):
+                            return ent
                 if res.get("ok"):
                     return res
             except Exception:
                 pass
+            if self.is_enterprise():
+                try:
+                    ent = self._fetch_credits_enterprise()
+                    if ent.get("ok"):
+                        return ent
+                except Exception:
+                    pass
         return self._fetch_credits_fallback()
 
     def _set_last_error(self, message):
