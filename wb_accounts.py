@@ -2304,6 +2304,20 @@ def normalise_import_row(row, realm=None):
     so a file from either source imports cleanly. Raises ValueError when the
     row carries no usable credential.
     """
+    # cockpit tools exports a bare array of snake_case OAuth rows. Map it onto
+    # the flat shape the rest of this function already understands; expires_at
+    # is milliseconds, which normalize_epoch() below converts to seconds.
+    if (isinstance(row, dict) and "access_token" in row
+            and "accessToken" not in row):
+        row = {
+            "uid": row.get("uid"),
+            "nickname": row.get("nickname") or row.get("email") or "",
+            "domain": row.get("domain"),
+            "accessToken": row.get("access_token"),
+            "refreshToken": row.get("refresh_token"),
+            "expiresAt": row.get("expires_at"),
+            "source": "cockpit",
+        }
     auth = row.get("auth") if isinstance(row.get("auth"), dict) else None
     profile = row.get("account") if isinstance(row.get("account"), dict) else None
 
@@ -2353,7 +2367,7 @@ def normalise_import_row(row, realm=None):
         "accessToken": token,
         "refreshToken": str(pick("refreshToken") or ""),
         "expiresAt": normalize_epoch(pick("expiresAt")) or jwt_exp(token),
-        "source": "import",
+        "source": str(pick("source") or "import"),
         "enabled": True,
         # Volatile state is intentionally reset - see VOLATILE_FIELDS.
         "lastError": "",
