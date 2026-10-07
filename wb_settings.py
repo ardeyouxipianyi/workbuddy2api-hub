@@ -78,6 +78,24 @@ def save(accounts_dir, data):
         return path
 
 
+def deep_merge(base, patch):
+    """Recursively merge patch into base; unknown sibling keys survive.
+
+    The panel form only submits the keys it manages. Replacing a whole group
+    would silently drop hand-written or future keys, so nested objects merge
+    key by key. Returns a new dict; the inputs are not mutated.
+    """
+    if not isinstance(base, dict) or not isinstance(patch, dict):
+        return patch
+    out = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def panel_password_is_default(accounts_dir):
     data = load(accounts_dir)
     if not data.get("panel_password_hash"):
@@ -805,7 +823,7 @@ def set_upstream_config(accounts_dir, cfg):
     clean = validate_upstream_patch(current)
     with _lock:
         data = load(accounts_dir)
-        data["upstream"] = clean
+        data["upstream"] = deep_merge(data.get("upstream"), clean)
         save(accounts_dir, data)
     return clean
 
