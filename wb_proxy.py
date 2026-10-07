@@ -241,18 +241,42 @@ def _empty_stats():
             "gen_ms_sum": 0, "gen_samples": 0,
             "wall_ms_sum": 0, "wall_samples": 0}
 _usage = _empty_stats()
+def normalize_usage_cache_aliases(usage):
+    """Write the best cache-hit value into every alias.
+
+    Some responses carry the real hit in prompt_tokens_details.cached_tokens
+    while also emitting cache_read_input_tokens: 0 / cached_tokens: 0
+    compatibility aliases; strict downstream parsers may prefer the zero
+    aliases and lose the hit. Mutates and returns the usage dict.
+    """
+    if not isinstance(usage, dict):
+        return usage
+    best = _best_cached_tokens(usage)
+    if best <= 0:
+        return usage
+    usage["cache_read_input_tokens"] = best
+    usage["cached_tokens"] = best
+    usage["prompt_cache_hit_tokens"] = best
+    prompt_details = dict(usage.get("prompt_tokens_details") or {})
+    prompt_details["cached_tokens"] = best
+    usage["prompt_tokens_details"] = prompt_details
+    if isinstance(usage.get("input_tokens_details"), dict):
+        input_details = dict(usage["input_tokens_details"])
+        input_details["cached_tokens"] = best
+        usage["input_tokens_details"] = input_details
+    return usage
+
+
 def _extract_usage(usage):
     """Normalize the upstream usage block into the fields we track."""
     if not usage:
         return {}
     details = usage.get("completion_tokens_details") or {}
-    prompt_details = usage.get("prompt_tokens_details") or {}
     return {
         "prompt_tokens": usage.get("prompt_tokens") or 0,
         "completion_tokens": usage.get("completion_tokens") or 0,
         "reasoning_tokens": details.get("reasoning_tokens") or 0,
-        "cached_tokens": usage.get("prompt_cache_hit_tokens") or details.get("cached_tokens") \
-            or prompt_details.get("cached_tokens") or 0,
+        "cached_tokens": _best_cached_tokens(usage),
         "total_tokens": usage.get("total_tokens") or 0,
         "credit": usage.get("credit") or 0,
     }
@@ -2847,6 +2871,11 @@ def clean_chunk(raw):
     except Exception:
         return raw
     changed = False
+    if isinstance(obj.get("usage"), dict):
+        before = dict(obj["usage"])
+        normalize_usage_cache_aliases(obj["usage"])
+        if obj["usage"] != before:
+            changed = True
     for choice in obj.get("choices") or []:
         delta = choice.get("delta")
         if not isinstance(delta, dict):
@@ -4327,6 +4356,7 @@ def aggregate_stream(raw_iter, model, resp_id):
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
     }
     if usage:
+        normalize_usage_cache_aliases(usage)
         out["usage"] = usage
     out["elapsed_ms"] = int((time.time() - started) * 1000)
     out["first_chunk_at"] = first_chunk_at
