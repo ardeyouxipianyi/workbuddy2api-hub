@@ -1,6 +1,6 @@
 /* The multiplier the panel shows must be the one the gateway fetched.
 
-   renderAvailableModels() used to force "限时免费 0.00x" for three hardcoded ids
+   renderAvailableModels() used to force "限時免費 0.00x" for three hardcoded ids
    (hy3, hy4-preview-f, intl deepseek-v4.1-flash) no matter what /v1/models
    reported for their credits, and to print a hardcoded 0.79x when a cn model
    carried none - so the panel could keep advertising a price the catalogue no
@@ -60,7 +60,7 @@ const creditsCell = model => {
   global.MODELS_DATA = [model];
   window.MODELS_DATA = [model];
   api.renderAvailableModels();
-  const m = /data-label="消费倍率">([\s\S]*?)<\/td>/.exec(tbody.innerHTML);
+  const m = /data-label="消費倍率">([\s\S]*?)<\/td>/.exec(tbody.innerHTML);
   return m ? m[1] : '';
 };
 
@@ -73,29 +73,29 @@ const check = (label, cond, extra) => {
 // 1. A free model is recognised by its value, whatever its id.
 window.VIEW_REALM = 'intl';
 let cell = creditsCell({id: 'space-bunny', credits: 'x0.00'});
-check('x0.00 is the free badge', cell.includes('限时免费 0.00x'), cell);
+check('x0.00 is the free badge', cell.includes('限時免費 0.00x'), cell);
 cell = creditsCell({id: 'hy3', credits: 'x0.00'});
 check('a pinned id that is still free keeps the free badge',
-      cell.includes('限时免费 0.00x'), cell);
+      cell.includes('限時免費 0.00x'), cell);
 
 // 2. The regression: a pinned id that stopped being free must follow the value.
 cell = creditsCell({id: 'hy3', credits: 'x0.50'});
 check('hy3 at x0.50 shows 0.50x', cell.includes('0.50x'), cell);
-check('hy3 at x0.50 is not advertised as free', !cell.includes('限时免费'), cell);
+check('hy3 at x0.50 is not advertised as free', !cell.includes('限時免費'), cell);
 cell = creditsCell({id: 'hy4-preview-f', credits: 'x0.29'});
 check('hy4-preview-f at x0.29 shows 0.29x', cell.includes('0.29x'), cell);
 check('hy4-preview-f at x0.29 is not advertised as free',
-      !cell.includes('限时免费'), cell);
+      !cell.includes('限時免費'), cell);
 cell = creditsCell({id: 'deepseek-v4.1-flash', credits: 'x0.11'});
 check('intl deepseek at x0.11 shows 0.11x', cell.includes('0.11x'), cell);
 check('intl deepseek at x0.11 is not advertised as free',
-      !cell.includes('限时免费'), cell);
+      !cell.includes('限時免費'), cell);
 
 // 3. cn keeps its night note, but only next to a fetched value.
 window.VIEW_REALM = 'cn';
 cell = creditsCell({id: 'glm-5.2', credits: 'x0.79'});
 check('cn glm-5.2 shows the fetched 0.79x', cell.includes('0.79x'), cell);
-check('cn glm-5.2 keeps the night note', cell.includes('(夜间0.5x)'), cell);
+check('cn glm-5.2 keeps the night note', cell.includes('(夜間0.5x)'), cell);
 cell = creditsCell({id: 'glm-5.2'});
 check('cn glm-5.2 without credits shows no number', !cell.includes('0.79x'), cell);
 check('cn glm-5.2 without credits falls back to the dash',
@@ -115,17 +115,17 @@ check('an empty credits string shows the dash', cell.trim() === '-', cell);
 cell = creditsCell({id: 'hy3', credits: '  x1.33 '});
 check('surrounding spaces are tolerated', cell.includes('1.33x'), cell);
 cell = creditsCell({id: 'hy3', credits: 'X0.00'});
-check('an upper-case X still reads as free', cell.includes('限时免费'), cell);
+check('an upper-case X still reads as free', cell.includes('限時免費'), cell);
 cell = creditsCell({id: 'hy3', credits: 0});
-check('a numeric 0 still reads as free', cell.includes('限时免费'), cell);
+check('a numeric 0 still reads as free', cell.includes('限時免費'), cell);
 cell = creditsCell({id: 'hy3', credits: 'x0'});
-check('a bare x0 still reads as free', cell.includes('限时免费'), cell);
+check('a bare x0 still reads as free', cell.includes('限時免費'), cell);
 // A non-string value must not take the whole table down: the old code called
 // m.credits.startsWith() unguarded, so a numeric credits threw and the table
 // came out empty.
 cell = creditsCell({id: 'hy3', credits: 0.5});
 check('a numeric credits renders instead of throwing', cell.includes('0.5x'), cell);
-check('a numeric credits is not advertised as free', !cell.includes('限时免费'), cell);
+check('a numeric credits is not advertised as free', !cell.includes('限時免費'), cell);
 // Every shape lands in the same multiplier format.
 cell = creditsCell({id: 'hy3', credits: '0.50'});
 check('a value without the x prefix is shown in the same format',

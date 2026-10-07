@@ -1,15 +1,15 @@
-/* 「OpenRouter 价估算」列的悬停提示必须把一条请求的价说圆。
+/* 「OpenRouter 價估算」列的懸停提示必須把一條請求的價說圓。
  *
- * 这一列显示的只是一个数，用户真正要问的是「这个数怎么来的」：按哪条策略、
- * 三档单价各多少、按什么汇率折算、这条价是直接同名命中、人工映射还是剥后缀
- * 继承来的、落在哪个条件档、是不是补算。原来的原生 title 只说策略 id，既看
- * 不到价也看不出匹配链。
+ * 這一列顯示的只是一個數，使用者真正要問的是「這個數怎麼來的」：按哪條策略、
+ * 三檔單價各多少、按什麼匯率折算、這條價是直接同名命中、人工對映還是剝字尾
+ * 繼承來的、落在哪個條件檔、是不是補算。原來的原生 title 只說策略 id，既看
+ * 不到價也看不出匹配鏈。
  *
- * 这里守住四件事：
- *   1. 三种匹配方式各自给出可区分的证据链，direct 不冒充 override；
- *   2. 条件档位那档的三档单价，不是基准档的；
- *   3. 未定价照实说「暂无定价数据」，不显示 0 或空白；
- *   4. 提示里的动态文本一律转义（模型名来自上游，不能当 HTML 拼进去）。
+ * 這裡守住四件事：
+ *   1. 三種匹配方式各自給出可區分的證據鏈，direct 不冒充 override；
+ *   2. 條件檔位那檔的三檔單價，不是基準檔的；
+ *   3. 未定價照實說「暫無定價資料」，不顯示 0 或空白；
+ *   4. 提示裡的動態文字一律轉義（模型名來自上游，不能當 HTML 拼進去）。
  *
  * Run with Node: node tests/_test_pricing_tooltip.js
  */
@@ -49,7 +49,7 @@ global.fetch = () => Promise.resolve({status: 200, ok: true,
 const api = new Function(script + `
   return {costTitle, costTipHtml, costTipModel, costVariantSuffix, fmtRate};`)();
 
-// 一条真实的直接匹配行：deepseek-v4.1-flash 的三档价就是它唯一的档。
+// 一條真實的直接匹配行：deepseek-v4.1-flash 的三檔價就是它唯一的檔。
 const direct = {
   model: 'deepseek-v4.1-flash', cost_cny: 0.001234, cost_band: null,
   cost_source: '09bbbab71283', cost_source_at: 1790908275, cost_backfilled: false,
@@ -60,21 +60,21 @@ const direct = {
   cost_via_derived: false,
 };
 
-// 1. 直接匹配：说清策略、三档价、汇率，且不冒充人工映射。
+// 1. 直接匹配：說清策略、三檔價、匯率，且不冒充人工對映。
 {
   const text = api.costTitle(direct);
   assert.ok(text.includes('09bbbab71283'), '策略 id 要在: ' + text);
   assert.ok(text.includes('0.02185') && text.includes('0.63'),
-            '三档单价要在: ' + text);
-  assert.ok(text.includes('输入（缓存未命中）') && text.includes('输入（缓存命中）')
-            && text.includes('输出'), '三档要分别标明: ' + text);
-  assert.ok(text.includes('7.10'), '汇率要在: ' + text);
-  assert.ok(text.includes('直接匹配'), '要说明是直接匹配: ' + text);
-  assert.ok(!text.includes('人工映射'), '直接匹配不得写成人工映射: ' + text);
+            '三檔單價要在: ' + text);
+  assert.ok(text.includes('輸入（快取未命中）') && text.includes('輸入（快取命中）')
+            && text.includes('輸出'), '三檔要分別標明: ' + text);
+  assert.ok(text.includes('7.10'), '匯率要在: ' + text);
+  assert.ok(text.includes('直接匹配'), '要說明是直接匹配: ' + text);
+  assert.ok(!text.includes('人工對映'), '直接匹配不得寫成人工對映: ' + text);
   assert.ok(text.includes('deepseek/deepseek-v4.1-flash'), 'or_id 要在: ' + text);
 }
 
-// 2. 人工映射：给出 原始 hub 名 → or_id 这条链，并标出是映射表命中。
+// 2. 人工對映：給出 原始 hub 名 → or_id 這條鏈，並標出是對映表命中。
 {
   const r = Object.assign({}, direct, {
     model: 'deepseek-v3-1-volc', cost_via: 'override',
@@ -82,13 +82,13 @@ const direct = {
     cost_or_id: 'deepseek/deepseek-chat-v3.1',
   });
   const text = api.costTitle(r);
-  assert.ok(text.includes('人工映射表'), '要说明来自映射表: ' + text);
+  assert.ok(text.includes('人工對映表'), '要說明來自對映表: ' + text);
   assert.ok(text.includes('deepseek-v3-1-volc → deepseek/deepseek-chat-v3.1'),
-            '要给出原始名 → or_id: ' + text);
-  assert.ok(!text.includes('推断'), '记录下来的映射不该标成推断: ' + text);
+            '要給出原始名 → or_id: ' + text);
+  assert.ok(!text.includes('推斷'), '記錄下來的對映不該標成推斷: ' + text);
 }
 
-// 3. 老策略行没有 via 字段，只能按当前映射表推断 —— 必须照实标出来。
+// 3. 老策略行沒有 via 欄位，只能按當前對映表推斷 —— 必須照實標出來。
 {
   const r = Object.assign({}, direct, {
     model: 'hy4-preview-f', cost_via: 'override',
@@ -96,12 +96,12 @@ const direct = {
     cost_or_id: 'tencent/hy4-preview',
   });
   const text = api.costTitle(r);
-  assert.ok(text.includes('推断'), '推断来的要标注: ' + text);
+  assert.ok(text.includes('推斷'), '推斷來的要標註: ' + text);
   assert.ok(text.includes('hy4-preview-f → tencent/hy4-preview'),
-            '推断也要给出映射链: ' + text);
+            '推斷也要給出對映鏈: ' + text);
 }
 
-// 4. 变体继承：原始名 → 基准名 → or_id，并标明剥掉的后缀。
+// 4. 變體繼承：原始名 → 基準名 → or_id，並標明剝掉的字尾。
 {
   const r = Object.assign({}, direct, {
     model: 'deepseek-r1-0528-lkeap', cost_via: 'variant',
@@ -109,16 +109,16 @@ const direct = {
     cost_or_id: 'deepseek/deepseek-r1-0528',
   });
   const text = api.costTitle(r);
-  assert.ok(text.includes('变体后缀继承'), '要说明是变体继承: ' + text);
-  assert.ok(text.includes('deepseek-r1-0528-lkeap → deepseek-r1-0528（基准） → deepseek/deepseek-r1-0528'),
-            '三段链要在: ' + text);
-  assert.ok(text.includes('剥掉的后缀：-lkeap'), '剥掉的后缀要在: ' + text);
+  assert.ok(text.includes('變體字尾繼承'), '要說明是變體繼承: ' + text);
+  assert.ok(text.includes('deepseek-r1-0528-lkeap → deepseek-r1-0528（基準） → deepseek/deepseek-r1-0528'),
+            '三段鏈要在: ' + text);
+  assert.ok(text.includes('剝掉的字尾：-lkeap'), '剝掉的字尾要在: ' + text);
   assert.equal(api.costVariantSuffix(r), '-lkeap');
-  // 基准名不是前缀时不能瞎截。
+  // 基準名不是字首時不能瞎截。
   assert.equal(api.costVariantSuffix({model: 'x-lkeap', cost_inherited_from: 'other'}), '');
 }
 
-// 5. 条件档位：显示的是这一行实际落的那一档的价，不是基准价。
+// 5. 條件檔位：顯示的是這一行實際落的那一檔的價，不是基準價。
 {
   const r = Object.assign({}, direct, {
     model: 'hy4-preview-f', cost_band: 1,
@@ -126,60 +126,60 @@ const direct = {
     cost_rates: {input_cache_hit: 0.0378, input_cache_miss: 0.7506, output: 2.2509},
   });
   const text = api.costTitle(r);
-  assert.ok(text.includes('第 2 档'), '档位序号要在: ' + text);
-  assert.ok(text.includes('每天 16:00–24:00 UTC'), '档位条件要在: ' + text);
+  assert.ok(text.includes('第 2 檔'), '檔位序號要在: ' + text);
+  assert.ok(text.includes('每天 16:00–24:00 UTC'), '檔位條件要在: ' + text);
   assert.ok(text.includes('0.7506') && text.includes('2.2509'),
-            '要显示该档的三档价: ' + text);
-  assert.ok(!text.includes('0.02185'), '不得混进别的档的价: ' + text);
+            '要顯示該檔的三檔價: ' + text);
+  assert.ok(!text.includes('0.02185'), '不得混進別的檔的價: ' + text);
 }
 
-// 6. 补算与出厂快照两条兜底说明还在。
+// 6. 補算與出廠快照兩條兜底說明還在。
 {
   const backfilled = api.costTitle(Object.assign({}, direct, {cost_backfilled: true}));
-  assert.ok(backfilled.includes('补算'), '补算标记要在: ' + backfilled);
+  assert.ok(backfilled.includes('補算'), '補算標記要在: ' + backfilled);
   const builtin = api.costTitle(Object.assign({}, direct, {cost_source: 'builtin',
     cost_source_at: null}));
-  assert.ok(builtin.includes('出厂快照'), '出厂快照依据要在: ' + builtin);
+  assert.ok(builtin.includes('出廠快照'), '出廠快照依據要在: ' + builtin);
 }
 
-// 7. 未定价：照实说，不给 0、不给空白。
+// 7. 未定價：照實說，不給 0、不給空白。
 {
   const r = Object.assign({}, direct, {cost_cny: null, cost_rates: null,
     cost_unit: null, cost_currency: null, cost_usd_cny: null, cost_or_id: null,
     cost_via: null});
   const text = api.costTitle(r);
-  assert.equal(text, '按 OpenRouter 公布的模型价折算的等价 token 花费\n该模型暂无定价数据',
-               '未定价只该有一句说明: ' + text);
-  assert.ok(api.costTipHtml(r).includes('该模型暂无定价数据'), '气泡也要说这句');
-  assert.ok(!api.costTipHtml(r).includes('0.00'), '未定价不得显示 0');
-  assert.deepEqual(api.costTipModel(r).rates, [], '未定价没有三档价可言');
+  assert.equal(text, '按 OpenRouter 公佈的模型價折算的等價 token 花費\n該模型暫無定價資料',
+               '未定價只該有一句說明: ' + text);
+  assert.ok(api.costTipHtml(r).includes('該模型暫無定價資料'), '氣泡也要說這句');
+  assert.ok(!api.costTipHtml(r).includes('0.00'), '未定價不得顯示 0');
+  assert.deepEqual(api.costTipModel(r).rates, [], '未定價沒有三檔價可言');
 }
 
-// 8. 缓存命中价没公布时，说明按未命中价计（计价口径的兜底）。
+// 8. 快取命中價沒公佈時，說明按未命中價計（計價口徑的兜底）。
 {
   const r = Object.assign({}, direct, {
     cost_rates: {input_cache_hit: null, input_cache_miss: 0.3, output: 1.2}});
   const text = api.costTitle(r);
-  assert.ok(text.includes('未公布，按未命中价计'), '要说明兜底口径: ' + text);
+  assert.ok(text.includes('未公佈，按未命中價計'), '要說明兜底口徑: ' + text);
 }
 
-// 9. 动态文本一律转义：模型名来自上游，不能当 HTML 拼进气泡。
+// 9. 動態文字一律轉義：模型名來自上游，不能當 HTML 拼進氣泡。
 {
   const r = Object.assign({}, direct, {model: '<img src=x onerror=alert(1)>',
     cost_or_id: '<b>or</b>'});
   const out = api.costTipHtml(r);
   assert.ok(!out.includes('<img') && !out.includes('<b>'),
-            'HTML 必须被转义: ' + out);
-  assert.ok(out.includes('&lt;b&gt;or&lt;/b&gt;'), '转义后的文本要还在: ' + out);
+            'HTML 必須被轉義: ' + out);
+  assert.ok(out.includes('&lt;b&gt;or&lt;/b&gt;'), '轉義後的文字要還在: ' + out);
 }
 
-// 10. 源码级：最近请求那一列挂的是 data-cost-key（自绘气泡），不是原生 title。
+// 10. 原始碼級：最近請求那一列掛的是 data-cost-key（自繪氣泡），不是原生 title。
 {
-  const cell = html.match(/<td data-label="OpenRouter 价估算"[^>]*>/g) || [];
+  const cell = html.match(/<td data-label="OpenRouter 價估算"[^>]*>/g) || [];
   const recent = cell.find(tag => tag.includes('data-cost-key'));
-  assert.ok(recent, '最近请求的价估算列要有 data-cost-key: ' + cell.join(' | '));
-  assert.ok(!recent.includes('title='), '自绘气泡不应再挂原生 title: ' + recent);
-  assert.ok(/\.cost-cell\{cursor:help\}/.test(html), '悬停列要有手型提示样式');
+  assert.ok(recent, '最近請求的價估算列要有 data-cost-key: ' + cell.join(' | '));
+  assert.ok(!recent.includes('title='), '自繪氣泡不應再掛原生 title: ' + recent);
+  assert.ok(/\.cost-cell\{cursor:help\}/.test(html), '懸停列要有手型提示樣式');
 }
 
 console.log('pricing tooltip: all checks passed');

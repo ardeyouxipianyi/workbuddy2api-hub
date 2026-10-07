@@ -48,10 +48,10 @@ assert.equal(fmtCoolAt(until), localTime);
 assert.equal(fmtCoolAt('bad-value'), '');
 
 const row = accountRow(base({modelCooldowns: [{model: 'glm-5.3', expiresAt: until}]}));
-assert(row.includes('glm-5.3 · ' + localTime + ' 恢复'));
-assert(row.includes('时间为本地时间'));
+assert(row.includes('glm-5.3 · ' + localTime + ' 恢復'));
+assert(row.includes('時間為本地時間'));
 assert(row.includes('>可用</span>')); // The account still serves other models.
-assert(!row.includes('冷却 600s'));
+assert(!row.includes('冷卻 600s'));
 const throttled = accountRow(base({lastError: 'HTTP 429 (model throttled)',
   modelCooldowns: [{model: 'glm-5.3', expiresAt: until}]}));
 assert(!throttled.includes('HTTP 429 (model throttled)'));

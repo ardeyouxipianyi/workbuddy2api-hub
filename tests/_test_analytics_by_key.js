@@ -62,7 +62,7 @@ const key = (o) => Object.assign({
 }, o);
 
 const keys = [
-  key({ key: 'k1', name: '甲 · 生产', realm: 'cn',
+  key({ key: 'k1', name: '甲 · 生產', realm: 'cn',
         window: stat({ requests: 12, errors: 1, total_tokens: 3456, prompt_tokens: 2000,
                        completion_tokens: 1000, reasoning_tokens: 456, cache_hit_pct: 12.5, credit: 3.5 }),
         models: [{ model: 'glm-5.3', requests: 10, tokens: 3000, reasoning: 400 },
@@ -70,11 +70,11 @@ const keys = [
         models_other: { model: '(其他)', other: true, models: 2, requests: 5, tokens: 900, reasoning: 0 } }),
   key({ key: 'k2', name: '乙', enabled: false, realm: '', cross_realm: true,
         window: stat({ requests: 3, total_tokens: 100 }) }),
-  key({ key: 'launcher', name: '启动参数', source: 'launcher', realm: 'intl',
+  key({ key: 'launcher', name: '啟動引數', source: 'launcher', realm: 'intl',
         window: stat({ requests: 2, total_tokens: 50 }) }),
-  key({ key: '__before_keys__', name: '(切换前)', source: 'bucket',
+  key({ key: '__before_keys__', name: '(切換前)', source: 'bucket',
         window: stat({ requests: 9, total_tokens: 9999, credit: 12 }) }),
-  key({ key: '__no_key__', name: '(无 key)', source: 'bucket', window: stat({ requests: 1 }) }),
+  key({ key: '__no_key__', name: '(無 key)', source: 'bucket', window: stat({ requests: 1 }) }),
   key({ key: 'evil', name: '<img src=x onerror=alert(1)>', realm: '',
         models: [{ model: '<b>bold</b>', requests: 1, tokens: 1 }] }),
 ];
@@ -92,34 +92,34 @@ check('the row count is announced next to the title',
 check('every cell carries a data-label (the phone layout depends on it)',
       (out.match(/<td/g) || []).length === (out.match(/data-label=/g) || []).length,
       (out.match(/<td/g) || []).length + ' vs ' + (out.match(/data-label=/g) || []).length);
-check('a named key shows its name', out.includes('甲 · 生产'));
-check('a cn-bound key is labelled', out.includes('国内版'));
-check('an intl-bound key is labelled', out.includes('国际版'));
-check('a key that used both exits is flagged as mixed', out.includes('跟随 · 混合'));
+check('a named key shows its name', out.includes('甲 · 生產'));
+check('a cn-bound key is labelled', out.includes('國內版'));
+check('an intl-bound key is labelled', out.includes('國際版'));
+check('a key that used both exits is flagged as mixed', out.includes('跟隨 · 混合'));
 check('a key that merely follows the model is labelled plainly',
-      out.includes('>跟随<'));
+      out.includes('>跟隨<'));
 check('a disabled key says so', out.includes('已禁用'));
-check('the launcher key is attributed to the start-up argument', out.includes('启动参数'));
+check('the launcher key is attributed to the start-up argument', out.includes('啟動引數'));
 check('panel keys are marked as panel keys', out.includes('面板 Key'));
-check('failures are surfaced next to the request count', out.includes('失败 1'));
+check('failures are surfaced next to the request count', out.includes('失敗 1'));
 check('the credit column is fixed to two decimals', out.includes('3.50'));
 check('cache hit is rendered as a percentage', out.includes('12.5%'));
 
 console.log();
 console.log('[2] the unattributed rows stay distinguishable');
-check('(切换前) is rendered', out.includes('(切换前)'));
-check('(无 key) is rendered separately', out.includes('(无 key)'));
+check('(切換前) is rendered', out.includes('(切換前)'));
+check('(無 key) is rendered separately', out.includes('(無 key)'));
 check('bucket rows show no exit instead of guessing one',
       (out.match(/—<\/span><\/td>/g) || []).length === 2,
       (out.match(/—<\/span><\/td>/g) || []).length);
-check('a bucket row is never badged as disabled', !/\(切换前\)[\s\S]{0,400}?已禁用/.test(out));
+check('a bucket row is never badged as disabled', !/\(切換前\)[\s\S]{0,400}?已禁用/.test(out));
 
 console.log();
 console.log('[3] model pills');
 check('each model gets a pill', out.includes('glm-5.3') && out.includes('kimi-k2'));
-check('the overflow pill reports how many models it covers', out.includes('2 个模型'));
+check('the overflow pill reports how many models it covers', out.includes('2 個模型'));
 check('a key with no calls says so rather than rendering nothing',
-      api.keyModelPills(key({ models: [], models_other: null })).includes('无调用'));
+      api.keyModelPills(key({ models: [], models_other: null })).includes('無呼叫'));
 
 console.log();
 console.log('[4] free text from the settings page cannot become markup');
@@ -129,11 +129,11 @@ check('a model name is escaped', !out.includes('<b>bold</b>') && out.includes('&
 console.log();
 console.log('[5] the footer explains what the reader cannot infer');
 const note = document.getElementById('analyticsKeyNote').innerHTML;
-check('the cross-exit count is called out', note.includes('1 把 Key 没有绑定出口'), note);
-check('the upgrade cut-off is stated once', note.includes('(切换前)'));
+check('the cross-exit count is called out', note.includes('1 把 Key 沒有繫結出口'), note);
+check('the upgrade cut-off is stated once', note.includes('(切換前)'));
 api.renderKeyTable({ keys: [key({ name: 'x', realm: 'cn' })] });
 check('the footer does not cry wolf about cross-exit keys when there are none',
-      !document.getElementById('analyticsKeyNote').innerHTML.includes('没有绑定出口'));
+      !document.getElementById('analyticsKeyNote').innerHTML.includes('沒有繫結出口'));
 
 console.log();
 console.log('[6] empty and degraded payloads');
@@ -142,7 +142,7 @@ out = document.getElementById('analyticsKeyTbody').innerHTML;
 check('an empty axis renders one full-width empty cell', out.includes('colspan="8"'), out);
 check('the empty state does not claim a count',
       document.getElementById('analyticsKeyCount').textContent === '');
-check('a panel with no keys is told so', document.getElementById('analyticsKeyNote').innerHTML.includes('还没有任何 API Key'));
+check('a panel with no keys is told so', document.getElementById('analyticsKeyNote').innerHTML.includes('還沒有任何 API Key'));
 api.renderKeyTable({});
 check('a payload without the axis at all does not throw', document.getElementById('analyticsKeyTbody').innerHTML.includes('colspan="8"'));
 
