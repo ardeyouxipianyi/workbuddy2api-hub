@@ -1971,6 +1971,36 @@ a:hover{text-decoration:underline}
       </div>
     </div>
 
+    <!-- Token 时序 + 积分扣减历史 -->
+    <section style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <h2 style="margin:0;font-size:16px;color:var(--fg)">Token 时序 <em id="usageSeriesRange" style="font-style:normal;color:var(--dim);font-size:12px"></em></h2>
+          <div style="font-size:12px;color:var(--dim)">按当前范围自动选择分钟/小时/天粒度；柱高为总 Token，折线为请求数。</div>
+        </div>
+        <div style="font-size:12px;color:var(--dim)" id="usageSeriesSummary">-</div>
+      </div>
+      <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px">
+        <canvas id="usageSeriesChart" height="220" style="width:100%;height:220px;display:block"></canvas>
+      </div>
+    </section>
+
+    <section style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <h2 style="margin:0;font-size:16px;color:var(--fg)">积分扣减历史</h2>
+          <div style="font-size:12px;color:var(--dim)">当前范围内最近消耗积分（credit &gt; 0）的请求。</div>
+        </div>
+        <button class="sec mini" onclick="loadCreditHistory(this)">刷新</button>
+      </div>
+      <div style="overflow-x:auto;max-height:260px">
+        <table class="data-cards" id="creditHistoryTable">
+          <thead><tr><th>时间</th><th>模型</th><th>账号</th><th>积分</th><th>Token</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- 表格 1：各账号用量透视与各模型消耗明细 -->
     <section>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -7082,9 +7112,104 @@ async function loadAnalytics(){
     // 载荷永远按当前选中的窗口取，它的 window 桶就是第一列要展示的数字。
     const data = await getJSON('/usage/analytics' + analyticsQuery());
     renderAnalytics(data);
+    loadUsageSeries();
   } catch(err) {
     console.error('loadAnalytics failed:', err);
   }
+}
+
+function loadUsageSeries(){
+  getJSON('/usage/timeseries' + analyticsQuery())
+    .then(data => { renderUsageSeries(data); renderCreditHistory(data); })
+    .catch(() => {});
+}
+
+function renderUsageSeries(data){
+  const canvas = document.getElementById('usageSeriesChart');
+  if(!canvas) return;
+  const series = (data && data.series) || [];
+  const summary = document.getElementById('usageSeriesSummary');
+  const totalTokens = series.reduce((sum, b) => sum + (b.total_tokens || 0), 0);
+  const totalCredit = series.reduce((sum, b) => sum + (b.credit || 0), 0);
+  if(summary) summary.textContent = '总 Token ' + fmt(totalTokens) + ' · 扣减积分 ' + fmt(totalCredit)
+    + ' · 桶 ' + (data ? data.bucket_seconds : '-') + 's';
+  const ctx = canvas.getContext('2d');
+  const ratio = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 800;
+  const cssH = 220;
+  canvas.width = cssW * ratio;
+  canvas.height = cssH * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  if(!series.length){
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('当前范围没有请求数据', 12, 24);
+    return;
+  }
+  const pad = {l: 52, r: 16, t: 12, b: 26};
+  const plotW = Math.max(10, cssW - pad.l - pad.r);
+  const plotH = Math.max(10, cssH - pad.t - pad.b);
+  const maxTokens = Math.max(1, ...series.map(b => b.total_tokens || 0));
+  const maxReq = Math.max(1, ...series.map(b => b.requests || 0));
+  const slot = plotW / series.length;
+  const barW = Math.max(1, slot - 2);
+  ctx.strokeStyle = '#1e293b';
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t);
+  ctx.lineTo(pad.l, pad.t + plotH);
+  ctx.lineTo(pad.l + plotW, pad.t + plotH);
+  ctx.stroke();
+  series.forEach((b, i) => {
+    const h = plotH * (b.total_tokens || 0) / maxTokens;
+    const x = pad.l + slot * i + 1;
+    ctx.fillStyle = 'rgba(56,189,248,.55)';
+    ctx.fillRect(x, pad.t + plotH - h, barW, h);
+  });
+  ctx.strokeStyle = '#a78bfa';
+  ctx.beginPath();
+  series.forEach((b, i) => {
+    const x = pad.l + slot * (i + 0.5);
+    const y = pad.t + plotH - plotH * (b.requests || 0) / maxReq;
+    if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px monospace';
+  ctx.fillText(fmt(maxTokens), 4, pad.t + 8);
+  ctx.fillText('0', 4, pad.t + plotH);
+  const tsLabel = t => new Date(t * 1000).toLocaleString();
+  const firstLabel = tsLabel(series[0].at);
+  const lastLabel = tsLabel(series[series.length - 1].at);
+  ctx.fillText(firstLabel, pad.l, cssH - 6);
+  ctx.fillText(lastLabel, Math.max(pad.l, cssW - pad.r - ctx.measureText(lastLabel).width), cssH - 6);
+}
+
+async function loadCreditHistory(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const data = await getJSON('/usage/timeseries' + analyticsQuery());
+    renderUsageSeries(data);
+    renderCreditHistory(data);
+    if(btn) toast('积分扣减历史已刷新', 'ok');
+  }catch(e){
+    if(btn) toast('刷新失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function renderCreditHistory(data){
+  const rows = ((data && data.credits) || []).slice(0, 50);
+  const tbody = document.querySelector('#creditHistoryTable tbody');
+  if(!tbody) return;
+  tbody.innerHTML = rows.map(x => '<tr>'
+    + '<td>' + esc(x.iso || '') + '</td>'
+    + '<td>' + esc(x.model || '') + '</td>'
+    + '<td class="mono">' + esc(String(x.account || '').slice(0,8)) + '</td>'
+    + '<td>' + fmt(x.credit) + '</td>'
+    + '<td>' + fmt(x.total_tokens || 0) + '</td>'
+    + '</tr>').join('') || '<tr><td colspan="5" style="color:var(--dim)">没有积分扣减记录</td></tr>';
 }
 
 /* 第一列的口径随范围切换，标签必须跟着走，否则「本周」的数字会被当成「今日」读。 */
