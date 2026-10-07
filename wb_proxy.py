@@ -3794,6 +3794,59 @@ class RateLimited(Exception):
         super().__init__("upstream rate limit: %s" % (self.detail[:200] or "429"))
 
 
+def gateway_hint(status, message):
+    """A gateway-side note that sits beside the raw upstream message.
+
+    The hint never replaces the upstream wording (clients keep parsing the
+    same envelope); it only explains what the gateway could classify, so a
+    user staring at "400 Bad Request" learns whether the fix is a smaller
+    context, a different model, a re-login or simply waiting. An empty string
+    means "nothing to add" - no hint is invented for unknown failures.
+
+    Covers the shapes the hub can classify from the upstream body/status:
+    11133 model_param_invalid, 11135 invalid_image_data, rate limits, content
+    review, exhausted credits, dead sessions, missing models, prompt-length
+    rejections, WAF blocks and the local no-usable-account case.
+    """
+    text = str(message or "")
+    lower = text.lower()
+    if status == 503 and "concurrent chat limit" in lower:
+        return "gateway is busy at its concurrency limit; retry shortly"
+    if ("11133" in lower or "model_param_invalid" in lower
+            or "invalid request parameters" in lower):
+        return ("request parameters were rejected by the model provider; "
+                "check message format and model capabilities")
+    if ("11135" in lower or "invalid_image_data" in lower
+            or "replace the image" in lower):
+        return ("image data rejected by upstream; use a real/valid image, "
+                "may need a new conversation")
+    if "no usable account" in lower or "no healthy account" in lower:
+        return "no healthy account available in pool; check /status or retry later"
+    if ("context length" in lower or "context_length" in lower
+            or "prompt too long" in lower or "too many tokens" in lower
+            or "maximum context" in lower):
+        return ("request context exceeds the model's limit; reduce "
+                "history/message size")
+    if status == 429 or "rate limit" in lower or "frequency limit" in lower:
+        return "rate limited by upstream; retry after reset"
+    if status == 402 or ("insufficient" in lower and "credit" in lower):
+        return ("account credits exhausted at upstream; waiting for daily "
+                "check-in to restore")
+    if "session" in lower and ("not found" in lower or "expired" in lower):
+        return ("account session expired at upstream; the account is disabled "
+                "until re-login")
+    if "content" in lower and ("reject" in lower or "policy" in lower):
+        return ("request content was rejected by content policy; adjust the "
+                "prompt and retry")
+    if ("no such model" in lower or "model not found" in lower
+            or "unsupported model" in lower):
+        return ("upstream has no such model on this backend; switch model or "
+                "retry on another account")
+    if status == 403 and "waf" in lower:
+        return "upstream WAF blocked the gateway; retry after the block window"
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # 出站身分自動切換
 #
@@ -6587,7 +6640,11 @@ class Handler(BaseHTTPRequestHandler):
         # the drain below waits for data that will never arrive.
         self._handle_expect_continue()
         self._discard_body()
-        self._json(code, {"error": {"message": message, "type": err_type, "code": code}})
+        error = {"message": message, "type": err_type, "code": code}
+        hint = gateway_hint(code, message)
+        if hint:
+            error["gateway_hint"] = hint
+        self._json(code, {"error": error})
     def _anthropic_error(self, code, message, err_type=None):
         """Reply with the Anthropic JSON error envelope, not OpenAI's."""
         self._handle_expect_continue()
