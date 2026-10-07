@@ -23,7 +23,7 @@ const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
 
 const element = (id) => ({
   id: id, innerHTML: '', textContent: '', value: '', checked: false, style: {},
-  classList: {add(){}, remove(){}, contains(){ return false; }},
+  classList: {add(){}, remove(){}, toggle(){}, contains(){ return false; }},
   addEventListener(){}, querySelector(){ return null; }, querySelectorAll(){ return []; },
   appendChild(){}, focus(){}, setAttribute(){}, getAttribute(){ return ''; },
   getBoundingClientRect(){ return {top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0}; },

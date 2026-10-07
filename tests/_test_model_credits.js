@@ -20,7 +20,7 @@ const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
 const tbody = { innerHTML: '' };
 const element = () => ({
   innerHTML: '', textContent: '', value: '', style: {},
-  classList: {add(){}, remove(){}, contains(){ return false; }},
+  classList: {add(){}, remove(){}, toggle(){}, contains(){ return false; }},
   addEventListener(){}, querySelector(){ return null; }, querySelectorAll(){ return []; },
   appendChild(){}, focus(){}, setAttribute(){}, getAttribute(){ return ''; },
 });

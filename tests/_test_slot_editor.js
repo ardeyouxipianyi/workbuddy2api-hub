@@ -22,7 +22,7 @@ const element = (id) => {
   let el = elements.get(id);
   if(!el){
     el = {id: id, innerHTML: '', textContent: '', value: '', checked: false, style: {},
-          classList: {add(){}, remove(){}, contains(){ return false; }},
+          classList: {add(){}, remove(){}, toggle(){}, contains(){ return false; }},
           addEventListener(){}, querySelector(){ return null; }, querySelectorAll(){ return []; },
           appendChild(){}, focus(){}, setAttribute(){}, getAttribute(){ return ''; }};
     elements.set(id, el);

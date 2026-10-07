@@ -20,7 +20,7 @@ const code = blocks.join('\n');
 const els = {};
 const mk = (id) => (els[id] = els[id] || {
   id, innerHTML: '', textContent: '', value: '',
-  classList: { add(){}, remove(){}, contains(){ return false; } },
+  classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
   style: {}, children: [], focus(){}, blur(){}, click(){},
   appendChild(c){ this.children.push(c); },
   querySelectorAll(){ return []; }, querySelector(){ return null; },
