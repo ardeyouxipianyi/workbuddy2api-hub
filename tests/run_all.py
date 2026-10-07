@@ -23,6 +23,27 @@ ROOT = os.path.dirname(HERE)
 TAIL_LINES = 25
 
 
+def _force_utf8_output():
+    """Make this process's stdout/stderr survive non-ASCII suite summaries.
+
+    The suites are run with PYTHONIOENCODING=utf-8 so a child can print its
+    Chinese labels, and their output is read back from a utf-8 log file. This
+    process then re-prints those same lines, and on the Windows CI runner its
+    own stdout is cp1252 - so the very first Chinese summary line aborted the
+    whole run with UnicodeEncodeError, after the suites themselves had passed.
+    Reconfiguring here keeps the two halves consistent; errors="replace" means
+    an exotic code point degrades to '?' instead of killing the run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+_force_utf8_output()
+
+
 def suites(pattern):
     names = sorted(n for n in os.listdir(HERE)
                    if n.startswith("_test_") and n.endswith((".py", ".js")))
