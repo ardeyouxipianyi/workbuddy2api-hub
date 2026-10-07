@@ -118,6 +118,19 @@ tbody tr:hover{background:var(--panel2)}
    设置页的取价子控件与未定价清单一并隐藏，只留下开关，方便随时再打开。 */
 body.pricing-off .pricing-col{display:none}
 body.pricing-off #kpiCostCard{display:none}
+/* 胶囊式开关：原生 checkbox 管状态与键盘可达性，视觉交给 .switch-track。
+   点一下即切换并立即保存，所以不再另配「保存」按钮。 */
+.switch{position:relative;display:inline-flex;align-items:center;gap:8px;font-size:13px;
+  min-height:40px;cursor:pointer;user-select:none}
+.switch input{position:absolute;width:1px;height:1px;opacity:0;margin:0}
+.switch-track{position:relative;flex:0 0 auto;width:38px;height:20px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line);
+  transition:background .18s ease,border-color .18s ease}
+.switch-track::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;
+  border-radius:50%;background:var(--dim);transition:transform .18s ease,background .18s ease}
+.switch input:checked+.switch-track{background:var(--accent2);border-color:var(--accent2)}
+.switch input:checked+.switch-track::after{transform:translateX(18px);background:#fff}
+.switch input:focus-visible+.switch-track{outline:2px solid var(--accent2);outline-offset:2px}
 #costTip{position:fixed;z-index:80;display:none;max-width:min(480px,94vw);padding:10px 12px;
   border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);
   font-size:12px;line-height:1.7;box-shadow:0 14px 34px rgba(15,23,42,.28);pointer-events:none}
@@ -824,6 +837,7 @@ a:hover{text-decoration:underline}
     '向基准模型取价（要求唯一命中，命不中照旧显示未定价）；关掉开关即恢复「只有覆盖表与同名匹配才定价」。': 'priced from the base model (a unique match is required, otherwise it still shows as unpriced); turning the switch off restores pricing from the override table and same-name matches only.',
     '启动参数': 'Launcher args',
     '启用': 'Enable',
+    '启用价估算': 'Enable estimate',
     '启用自动切换': 'Enable auto-switch',
     '启用调度': 'Enable scheduler',
     '回收失败': 'Recovery failed',
@@ -2194,11 +2208,11 @@ a:hover{text-decoration:underline}
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setPricingEnabled" type="checkbox" style="width:16px;height:16px">
-              启用价估算
+            <label class="switch">
+              <input id="setPricingEnabled" type="checkbox" onchange="savePricingEnabled(this)">
+              <span class="switch-track"></span>
+              <span>启用价估算</span>
             </label>
-            <button onclick="savePricingEnabled(this)">保存</button>
             <div id="pricingControls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div>
               <div style="font-size:12px;color:var(--dim);margin-bottom:4px">刷新间隔（分钟）</div>
@@ -5496,6 +5510,8 @@ async function savePricingEnabled(btn){
     loadSettings();
     if(value) loadPricingStatus();
   } catch(e) {
+    // 开关点一下即生效，保存失败就把它拨回原位，别让界面和后端各说各话。
+    if(el) el.checked = !value;
     toast('保存失败: ' + e.message, 'bad');
   } finally {
     if(btn) btn.disabled = false;
