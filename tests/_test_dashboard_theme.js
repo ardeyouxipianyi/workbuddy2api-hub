@@ -1,19 +1,19 @@
-/* 看板主題選單：內聯處理器必須真的能點。
+/* 看板主题菜单：内联处理器必须真的能点。
  *
- * 迴歸背景：主題程式碼整塊包在 head 的 IIFE 裡，而 `window.selectTheme` /
- * `window.toggleThemeMenu` 這兩行匯出被寫進了**函式體內部**——函式第一次被呼叫
- * 之前那個全域性名根本不存在，可按鈕寫的偏偏是 `onclick="toggleThemeMenu(event)"`，
- * 於是每次點選都拋 `ReferenceError: toggleThemeMenu is not defined`，下拉選單永遠
- * 打不開。同一塊裡的 `applyTheme` / `initThemeSystem` 寫在 IIFE 頂層，所以只有這
- * 兩個壞了——README 裡「淺色 / 深色 / 跟隨系統」三檔當時是點了沒反應的。
+ * 回归背景：主题代码整块包在 head 的 IIFE 里，而 `window.selectTheme` /
+ * `window.toggleThemeMenu` 这两行导出被写进了**函数体内部**——函数第一次被调用
+ * 之前那个全局名根本不存在，可按钮写的偏偏是 `onclick="toggleThemeMenu(event)"`，
+ * 于是每次点击都抛 `ReferenceError: toggleThemeMenu is not defined`，下拉菜单永远
+ * 打不开。同一块里的 `applyTheme` / `initThemeSystem` 写在 IIFE 顶层，所以只有这
+ * 两个坏了——README 里「浅色 / 深色 / 跟随系统」三档当时是点了没反应的。
  *
- * `_test_dashboard_handlers.js` 抓不到它：那個掃描是純文字的，只要檔案裡存在
- * `function toggleThemeMenu(` 就算數，看不見作用域。這裡改用執行式驗證——把 head
- * 裡這段主題程式碼原樣抽出來，在 Node 裡配一套最小 DOM 樁跑一遍，釘住四件事：
- *   1. 頁面內聯屬性引用到的處理器，只要主題塊裡提到過，就必須真的掛在 window 上；
- *   2. 點按鈕能開合選單，`aria-expanded` 跟著走；
- *   3. 選一檔能落地（data-theme / data-theme-pref / localStorage）並收起選單；
- *   4. 首次繪製前就按儲存的偏好定好主題（防白閃），跟隨系統時讀 prefers-color-scheme。
+ * `_test_dashboard_handlers.js` 抓不到它：那个扫描是纯文本的，只要文件里存在
+ * `function toggleThemeMenu(` 就算数，看不见作用域。这里改用执行式验证——把 head
+ * 里这段主题代码原样抽出来，在 Node 里配一套最小 DOM 桩跑一遍，钉住四件事：
+ *   1. 页面内联属性引用到的处理器，只要主题块里提到过，就必须真的挂在 window 上；
+ *   2. 点按钮能开合菜单，`aria-expanded` 跟着走；
+ *   3. 选一档能落地（data-theme / data-theme-pref / localStorage）并收起菜单；
+ *   4. 首次绘制前就按存储的偏好定好主题（防白闪），跟随系统时读 prefers-color-scheme。
  *
  * Run with Node: node tests/_test_dashboard_theme.js
  */
@@ -28,14 +28,14 @@ const END = '// 3. Tab 初始化';
 const start = html.indexOf(START);
 const end = html.indexOf(END);
 assert.ok(start > 0 && end > start,
-  'dashboard.html 裡找不到主題塊，測試需要跟著改（找的是 var THEME_KEY / // 3. Tab 初始化）');
+  'dashboard.html 里找不到主题块，测试需要跟着改（找的是 var THEME_KEY / // 3. Tab 初始化）');
 const source = html.slice(start, end);
 
-// 頁面裡所有點選型 data-action 名稱（D3 nonce CSP 後不再有 inline 屬性）。
+// 页面里所有点击型 data-action 名称（D3 nonce CSP 后不再有 inline 属性）。
 const ACTION_ATTR = /\sdata-action="([A-Za-z_$][\w$]*)"[^>]*?\sdata-on="click"/g;
 const handlers = new Set([...html.matchAll(ACTION_ATTR)].map((m) => m[1]));
 assert.ok(handlers.size >= 70,
-  `只掃到 ${handlers.size} 個 data-action，是提取壞了不是頁面變了`);
+  `只扫到 ${handlers.size} 个 data-action，是提取坏了不是页面变了`);
 
 function makeElement(id) {
   const classes = new Set();
@@ -60,7 +60,7 @@ function makeElement(id) {
   };
 }
 
-// 一套最小 DOM 樁：主題塊只碰這些
+// 一套最小 DOM 桩：主题块只碰这些
 function makeHarness(seed) {
   const elements = new Map();
   for (const id of ['themeToggleIcon', 'themeToggleBtn', 'themeDropdown', 'themeDropdownWrap',
@@ -100,88 +100,88 @@ function makeHarness(seed) {
 const evt = () => ({ prevented: false, stopped: false, preventDefault() { this.prevented = true; },
                      stopPropagation() { this.stopped = true; } });
 
-// ---- 1. 內聯屬性引用到的處理器，主題塊提到過就必須真的掛在 window 上 ----
+// ---- 1. 内联属性引用到的处理器，主题块提到过就必须真的挂在 window 上 ----
 const mentioned = new Set([
   ...[...source.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]),
   ...[...source.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]),
 ]);
 const mustBeGlobal = [...mentioned].filter((name) => handlers.has(name)).sort();
 
-// 這一條同時防止「提取壞了」：主題塊就該匯出這兩個處理器
+// 这一条同时防止「提取坏了」：主题块就该导出这两个处理器
 assert.deepStrictEqual(mustBeGlobal, ['selectTheme', 'toggleThemeMenu'],
-  `主題塊裡被內聯屬性引用的處理器應當恰好是 selectTheme / toggleThemeMenu，實得 ${mustBeGlobal.join(', ')}`);
+  `主题块里被内联属性引用的处理器应当恰好是 selectTheme / toggleThemeMenu，实得 ${mustBeGlobal.join(', ')}`);
 
 const h = makeHarness({});
 for (const name of mustBeGlobal) {
   assert.strictEqual(typeof h.win[name], 'function',
-    `內聯處理器 ${name}() 在主題塊裡出現過，卻沒掛到 window 上——` +
-    '內聯屬性只在全域性作用域找名字，宣告在 IIFE 裡等於不存在（v1.6.12 的按鈕就是這麼壞的）');
+    `内联处理器 ${name}() 在主题块里出现过，却没挂到 window 上——` +
+    '内联属性只在全局作用域找名字，声明在 IIFE 里等于不存在（v1.6.12 的按钮就是这么坏的）');
 }
 
-// ---- 2. 點按鈕能開合選單，aria-expanded 跟著走 ----
+// ---- 2. 点按钮能开合菜单，aria-expanded 跟着走 ----
 const menu = h.el('themeDropdown');
 const btn = h.el('themeToggleBtn');
-assert.strictEqual(menu.classList.contains('open'), false, '選單初始必須是收起的');
+assert.strictEqual(menu.classList.contains('open'), false, '菜单初始必须是收起的');
 
 h.win.toggleThemeMenu(evt());
-assert.strictEqual(menu.classList.contains('open'), true, '第一次點選應當展開選單');
-assert.strictEqual(btn.getAttribute('aria-expanded'), 'true', '展開後 aria-expanded 應為 true');
+assert.strictEqual(menu.classList.contains('open'), true, '第一次点击应当展开菜单');
+assert.strictEqual(btn.getAttribute('aria-expanded'), 'true', '展开后 aria-expanded 应为 true');
 
 h.win.toggleThemeMenu(evt());
-assert.strictEqual(menu.classList.contains('open'), false, '再點一次應當收起選單');
-assert.strictEqual(btn.getAttribute('aria-expanded'), 'false', '收起後 aria-expanded 應為 false');
+assert.strictEqual(menu.classList.contains('open'), false, '再点一次应当收起菜单');
+assert.strictEqual(btn.getAttribute('aria-expanded'), 'false', '收起后 aria-expanded 应为 false');
 
-// ---- 3. 選一檔能落地並收起選單 ----
+// ---- 3. 选一档能落地并收起菜单 ----
 h.win.toggleThemeMenu(evt());
 h.win.selectTheme('dark', evt());
-assert.strictEqual(h.documentElement.getAttribute('data-theme'), 'dark', '選深色後 data-theme 應為 dark');
-assert.strictEqual(h.documentElement.getAttribute('data-theme-pref'), 'dark', '偏好應記為 dark');
-assert.strictEqual(h.documentElement.style.colorScheme, 'dark', 'color-scheme 要同步，否則原生控制元件還是淺色');
-assert.strictEqual(h.store.get('wb-theme'), 'dark', '偏好必須持久化到 localStorage');
-assert.strictEqual(menu.classList.contains('open'), false, '選完應當收起選單');
-assert.strictEqual(h.el('themeOptDark').classList.contains('active'), true, '深色那一檔要標成當前項');
-assert.strictEqual(h.el('themeOptLight').classList.contains('active'), false, '其它檔不能殘留 active');
-assert.strictEqual(btn.title, '顏色主題: 深色', '按鈕提示要說明當前檔位');
+assert.strictEqual(h.documentElement.getAttribute('data-theme'), 'dark', '选深色后 data-theme 应为 dark');
+assert.strictEqual(h.documentElement.getAttribute('data-theme-pref'), 'dark', '偏好应记为 dark');
+assert.strictEqual(h.documentElement.style.colorScheme, 'dark', 'color-scheme 要同步，否则原生控件还是浅色');
+assert.strictEqual(h.store.get('wb-theme'), 'dark', '偏好必须持久化到 localStorage');
+assert.strictEqual(menu.classList.contains('open'), false, '选完应当收起菜单');
+assert.strictEqual(h.el('themeOptDark').classList.contains('active'), true, '深色那一档要标成当前项');
+assert.strictEqual(h.el('themeOptLight').classList.contains('active'), false, '其它档不能残留 active');
+assert.strictEqual(btn.title, '颜色主题: 深色', '按钮提示要说明当前档位');
 
-// ---- 4. 首次繪製前就定好主題；跟隨系統時讀 prefers-color-scheme ----
+// ---- 4. 首次绘制前就定好主题；跟随系统时读 prefers-color-scheme ----
 const darkOnLoad = makeHarness({ stored: 'dark' });
 assert.strictEqual(darkOnLoad.documentElement.getAttribute('data-theme'), 'dark',
-  '存過深色時，指令碼一跑完就該是深色（內聯在 body 之前就是為了防白閃）');
+  '存过深色时，脚本一跑完就该是深色（内联在 body 之前就是为了防白闪）');
 
 const sysDark = makeHarness({ stored: 'system', systemDark: true });
 assert.strictEqual(sysDark.documentElement.getAttribute('data-theme'), 'dark',
-  '跟隨系統時應當讀 prefers-color-scheme 而不是預設淺色');
+  '跟随系统时应当读 prefers-color-scheme 而不是默认浅色');
 assert.strictEqual(sysDark.documentElement.getAttribute('data-theme-pref'), 'system',
-  '偏好本身要記成 system，不能塌成具體檔位');
+  '偏好本身要记成 system，不能塌成具体档位');
 
-// 系統偏好變化時，跟隨系統的那一檔要即時跟上
+// 系统偏好变化时，跟随系统的那一档要实时跟上
 sysDark.win.initThemeSystem();
 sysDark.media.matches = false;
 sysDark.mediaListeners.forEach((fn) => fn({}));
 assert.strictEqual(sysDark.documentElement.getAttribute('data-theme'), 'light',
-  '系統切成淺色後看板要跟著切');
+  '系统切成浅色后看板要跟着切');
 assert.strictEqual(sysDark.documentElement.getAttribute('data-theme-pref'), 'system',
-  '跟著系統變不應把偏好改成 light');
+  '跟着系统变不应把偏好改成 light');
 
-// ---- 5. 點空白處 / 按 Esc 收起選單 ----
+// ---- 5. 点空白处 / 按 Esc 收起菜单 ----
 const outside = makeHarness({});
 outside.win.initThemeSystem();
 outside.win.toggleThemeMenu(evt());
 outside.fire('click', { target: makeElement('body') });
-assert.strictEqual(outside.el('themeDropdown').classList.contains('open'), false, '點選單外面應當收起');
+assert.strictEqual(outside.el('themeDropdown').classList.contains('open'), false, '点菜单外面应当收起');
 
 outside.win.toggleThemeMenu(evt());
 outside.fire('keydown', { key: 'Escape' });
-assert.strictEqual(outside.el('themeDropdown').classList.contains('open'), false, '按 Esc 應當收起');
+assert.strictEqual(outside.el('themeDropdown').classList.contains('open'), false, '按 Esc 应当收起');
 
-// 點在選單裡面（wrap 之內）不應被當成"點外面"
+// 点在菜单里面（wrap 之内）不应被当成"点外面"
 const inside = makeHarness({});
 inside.win.initThemeSystem();
 inside.el('themeDropdownWrap').contains = () => true;
 inside.win.toggleThemeMenu(evt());
 inside.fire('click', { target: inside.el('themeOptDark') });
 assert.strictEqual(inside.el('themeDropdown').classList.contains('open'), true,
-  '點選單自己身上不該收起選單');
+  '点菜单自己身上不该收起菜单');
 
 console.log('dashboard theme assertions passed '
   + `(${mustBeGlobal.length} exported handlers, ${handlers.size} inline handlers swept)`);

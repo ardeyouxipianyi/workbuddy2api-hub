@@ -179,7 +179,7 @@ class DashboardCoverageTests(unittest.TestCase):
         for marker in (
             "reqFilterAccount", "reqFilterStatus", "reqFilterOutcome",
             "reqFilterPath", "reqFilterRequestId", "reqFilterSince",
-            "reqFilterUntil", "錯誤 / 提示",
+            "reqFilterUntil", "错误 / 提示",
             "inFlight", "breakerFor", "degradeFor", "balanceCooledFor",
         ):
             self.assertIn(marker, self.html)

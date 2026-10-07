@@ -230,7 +230,7 @@ def login(page):
     page.wait_for_timeout(1200)
     if page.locator("#panelPwdInput").count():
         page.fill("#panelPwdInput", PASSWORD)
-        page.click("button:has-text('進入面板')")
+        page.click("button:has-text('进入面板')")
         page.wait_for_timeout(1500)
 
 
@@ -326,11 +326,11 @@ def run_checks(filter_name):
                   const tb = document.querySelector('#growthTable tbody');
                   if(tb && !tb.querySelector('tr')){
                     tb.innerHTML = '<tr>'
-                      + '<td data-label="任務"><b>示例任務</b></td>'
-                      + '<td data-label="說明">說明</td>'
-                      + '<td data-label="進度">1 / 1</td>'
-                      + '<td data-label="獎勵">+10 積分</td>'
-                      + '<td data-label="狀態">待領獎</td></tr>';
+                      + '<td data-label="任务"><b>示例任务</b></td>'
+                      + '<td data-label="说明">说明</td>'
+                      + '<td data-label="进度">1 / 1</td>'
+                      + '<td data-label="奖励">+10 积分</td>'
+                      + '<td data-label="状态">待领奖</td></tr>';
                   }
                 })()
                 """
