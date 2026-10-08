@@ -339,6 +339,9 @@ a:hover{text-decoration:underline}
    .page-nav-on 即可启用，区块不足两项的页面不加这个类，保持单栏。 */
 .main-page.page-nav-on.active{display:grid;grid-template-columns:196px minmax(0,1fr);gap:20px;align-items:start}
 .main-page.page-nav-on > *{grid-column:2;min-width:0}
+/* 内容包在 .page-nav-body 里，grid 就只有两项，1 / -1 才真的跨满整个内容区
+   （否则它只跨第 1 行，首行被撑成侧栏高度）；区块间距也仍只由 section 自己
+   的 margin 决定，不会被行间距再叠一次。 */
 .main-page.page-nav-on > .page-sidebar{grid-column:1;grid-row:1 / -1;position:sticky;
   top:var(--page-nav-top,84px);z-index:6;background:var(--panel);border:1px solid var(--line);
   border-radius:14px;padding:10px;box-shadow:var(--shadow);
@@ -351,6 +354,12 @@ a:hover{text-decoration:underline}
   cursor:pointer;transition:all .15s ease;overflow-wrap:anywhere}
 .page-nav-item:hover{color:var(--fg);background:var(--panel2)}
 .page-nav-item.active{color:var(--fg);background:var(--panel2);border-color:var(--line);font-weight:600}
+/* 回到顶部：排在区块清单上方，所以留出与清单的间距 */
+button.page-nav-top{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;
+  margin-bottom:8px;padding:7px 10px;border-radius:8px;font-size:12px;font-weight:600;
+  background:var(--panel2);border:1px solid var(--line);color:var(--fg);box-shadow:none;
+  transition:all .15s ease}
+button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);color:var(--accent)}
 .main-page.page-nav-on section{scroll-margin-top:var(--page-nav-top,84px)}
 /* 点击导航后短暂描边，明确「跳到这里了」 */
 .main-page.page-nav-on section.page-nav-flash{outline:2px solid var(--accent);outline-offset:2px}
@@ -358,12 +367,16 @@ a:hover{text-decoration:underline}
   .main-page.page-nav-on.active{grid-template-columns:minmax(0,1fr);gap:14px}
   .main-page.page-nav-on > *{grid-column:1}
   .main-page.page-nav-on > .page-sidebar{grid-row:auto;max-height:none;overflow:visible;padding:8px;
-    border-radius:12px;background:var(--header-bg);backdrop-filter:blur(10px)}
+    border-radius:12px;background:var(--header-bg);backdrop-filter:blur(10px);
+    display:flex;align-items:center;gap:8px}
   .page-sidebar-title{display:none}
-  .page-nav{flex-direction:row;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
+  .page-nav{flex:1 1 auto;min-width:0;flex-direction:row;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
     scrollbar-width:thin}
   .page-nav-item{white-space:nowrap;padding:7px 12px;border-radius:999px;
     background:var(--panel2);border-color:var(--line)}
+  /* 窄屏下导航是横向滚动的胶囊行，回到顶部钉在左端不跟着滚 */
+  button.page-nav-top{width:auto;flex:0 0 auto;margin-bottom:0;padding:7px 12px;border-radius:999px;
+    white-space:nowrap}
 }
 .range-btn{background:transparent;border:none;color:var(--dim);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s ease}
 .range-btn:hover{color:var(--fg)}
@@ -855,6 +868,7 @@ a:hover{text-decoration:underline}
     '启用价估算': 'Enable estimate',
     '启用自动切换': 'Enable auto-switch',
     '启用调度': 'Enable scheduler',
+    '回到顶部': 'Back to top',
     '回收失败': 'Recovery failed',
     '回收失败:': 'Recovery failed:',
     '回收失败：': 'Recovery failed:',
@@ -1111,6 +1125,8 @@ a:hover{text-decoration:underline}
     '本月 (This Month)': 'This month',
     '本机桌面客户端账号': 'Desktop client accounts on this machine',
     '本次请求实际使用的推理强度': 'The reasoning effort this request actually used',
+    '本页区块导航': 'Section navigation',
+    '本页导航': 'On this page',
     '机房': 'Datacenter',
     '权限不足时可以管理员身份运行网关再试一次。': 'If permissions are insufficient, run the gateway as administrator and try again.',
     '条': 'rows',
@@ -5243,6 +5259,20 @@ function scrollToPageSection(page, id, smooth){
   } catch(e){}
 }
 
+/* 回到顶部：和区块跳转一样在平滑滚动期间抑制滚动高亮，免得中途掠过其它区块
+   把高亮抢走；顺便清掉锚点，免得刷新后又落回刚才那个区块。滚完不会再触发滚动
+   事件，所以高亮得自己收尾到第一项。 */
+function scrollPageToTop(page){
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  pageNavLock = Date.now() + 700;
+  const first = page ? page.querySelector('.page-nav-item') : null;
+  if(first) setActivePageNav(page, first.dataset.target);
+  try {
+    const url = new URL(window.location.href);
+    history.replaceState(null, '', url.pathname + url.search);
+  } catch(e){}
+}
+
 function pageNavSpy(){
   if(Date.now() < pageNavLock) return;
   const page = document.querySelector('.main-page.active.page-nav-on');
@@ -5306,6 +5336,16 @@ function initPageNav(page){
   const prevActive = sidebar ? sidebar.querySelector('.page-nav-item.active') : null;
   const prevTarget = prevActive ? prevActive.dataset.target : null;
 
+  // 内容整体包一层：grid 里只剩「侧栏 + 内容」两项，侧栏才跨得满整个内容区，
+  // 区块之间的间距也不会被网格行间距再叠一次。
+  let body = page.querySelector('.page-nav-body');
+  if(!body){
+    body = document.createElement('div');
+    body.className = 'page-nav-body';
+    Array.from(page.children).forEach(function(el){ if(el !== sidebar) body.appendChild(el); });
+    page.appendChild(body);
+  }
+
   if(!sidebar){
     sidebar = document.createElement('aside');
     sidebar.className = 'page-sidebar';
@@ -5317,6 +5357,16 @@ function initPageNav(page){
   title.className = 'page-sidebar-title';
   title.textContent = '本页导航';
   sidebar.appendChild(title);
+
+  // 排在区块清单之外：它不是一个区块，不参与高亮与滚动侦测；窄屏下也就能
+  // 留在横向胶囊行的左端，不跟着一起滚走。
+  const toTop = document.createElement('button');
+  toTop.type = 'button';
+  toTop.className = 'page-nav-top';
+  toTop.textContent = '↑ 回到顶部';
+  toTop.title = '回到顶部';
+  toTop.addEventListener('click', function(){ scrollPageToTop(page); });
+  sidebar.appendChild(toTop);
 
   const nav = document.createElement('nav');
   nav.className = 'page-nav';
