@@ -56,6 +56,16 @@ jobs:
         # they overlap; each one's full output is kept on disk next to its
         # summary line.
         run: python tests/run_all.py --jobs 4 --logs suite-logs
+      - name: Check the suites left the checkout clean
+        # A passing run has to prove it stayed inside its temporary directories:
+        # a suite that writes into the checkout otherwise fails nothing and is
+        # only noticed by whoever finds the stray file later.
+        #
+        # `success()` is what a step does by default, but the ordering is the
+        # point here - a red suite step must stay the reported failure, so this
+        # one is skipped rather than stacked on top of it.
+        if: success()
+        run: python scripts/check_clean_checkout.py
       - name: Keep what the failing suites printed
         # The console shows one line per suite plus its first error; this keeps
         # the whole output of every suite, which is what a red run needs.
