@@ -363,6 +363,22 @@ button.page-nav-top{display:flex;align-items:center;justify-content:center;gap:6
   background:var(--panel2);border:1px solid var(--line);color:var(--fg);box-shadow:none;
   transition:all .15s ease}
 button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);color:var(--accent)}
+.page-sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.page-sidebar-toggle{appearance:none;flex:0 0 auto;width:22px;height:22px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;border-radius:6px;
+  border:1px solid var(--line);background:var(--panel2);color:var(--dim);
+  font:inherit;font-size:12px;line-height:1;cursor:pointer;transition:all .15s ease}
+.page-sidebar-toggle:hover{color:var(--fg);border-color:var(--line-hover)}
+/* 收起侧栏：整列压成一条细轨，只留展开按钮，把宽度让给内容区。窄屏下导航
+   本来就是一条横栏，没有可收的余地，所以这套样式只在宽屏生效。 */
+@media (min-width:861px){
+  .main-page.page-nav-on.page-nav-collapsed.active{grid-template-columns:44px minmax(0,1fr);gap:12px}
+  .main-page.page-nav-on.page-nav-collapsed > .page-sidebar{padding:6px 4px;overflow:hidden}
+  .main-page.page-nav-on.page-nav-collapsed .page-sidebar-title,
+  .main-page.page-nav-on.page-nav-collapsed .page-nav,
+  .main-page.page-nav-on.page-nav-collapsed button.page-nav-top{display:none}
+  .main-page.page-nav-on.page-nav-collapsed .page-sidebar-head{justify-content:center;padding:0}
+}
 .main-page.page-nav-on section{scroll-margin-top:var(--page-nav-top,84px)}
 /* 点击导航后短暂描边，明确「跳到这里了」 */
 .main-page.page-nav-on section.page-nav-flash{outline:2px solid var(--accent);outline-offset:2px}
@@ -373,6 +389,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     border-radius:12px;background:var(--header-bg);backdrop-filter:blur(10px);
     display:flex;align-items:center;gap:8px}
   .page-sidebar-title{display:none}
+  /* 窄屏导航是横向胶囊行，收不起来，连收起按钮一起藏掉 */
+  .page-sidebar-head{display:none}
   .page-nav{flex:1 1 auto;min-width:0;flex-direction:row;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
     scrollbar-width:thin}
   .page-nav-item{white-space:nowrap;padding:7px 12px;border-radius:999px;
@@ -5173,6 +5191,8 @@ async function startDashboard(){
    （忽略用于显示状态的 <em>），锚点 id 由标题内容哈希得到。对所有
    .main-page 生效，所以新增页面、增删区块或调整顺序都不需要改这里。 */
 const PAGE_NAV_TOP_VAR = '--page-nav-top';
+/* 侧栏收起状态跨页面、跨刷新共用一份 */
+const PAGE_NAV_COLLAPSE_KEY = 'wb-page-nav-collapsed';
 /* 只有一项的页面不给侧栏：白占一列宽度，也没什么可跳的 */
 const PAGE_NAV_MIN_SECTIONS = 2;
 let pageNavLock = 0;
@@ -5305,6 +5325,30 @@ function onPageNavScroll(){
   pageNavSpy();
 }
 
+function pageNavCollapsedPref(){
+  try { return localStorage.getItem(PAGE_NAV_COLLAPSE_KEY) === '1'; } catch(e){ return false; }
+}
+
+/* 收起与否只体现为页面上的一个类，样式和窄屏回退都由 CSS 决定；按钮的
+   文字/标题跟着状态走，收起后它就是唯一的入口。 */
+function applyPageNavCollapse(page, collapsed){
+  if(!page) return;
+  page.classList.toggle('page-nav-collapsed', !!collapsed);
+  const btn = page.querySelector('.page-sidebar-toggle');
+  if(!btn) return;
+  const label = collapsed ? '展开本页导航' : '收起本页导航';
+  btn.textContent = collapsed ? '»' : '«';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+
+function togglePageNavCollapse(page){
+  const collapsed = !page.classList.contains('page-nav-collapsed');
+  try { localStorage.setItem(PAGE_NAV_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch(e){}
+  applyPageNavCollapse(page, collapsed);
+}
+
 function initPageNav(page){
   if(!page) return;
   syncPageNavOffset();
@@ -5315,7 +5359,7 @@ function initPageNav(page){
   // 区块不足两项（例如日志页只有一个视图）就不给侧栏，页面保持单栏
   if(sections.length < PAGE_NAV_MIN_SECTIONS){
     if(sidebar) sidebar.remove();
-    page.classList.remove('page-nav-on');
+    page.classList.remove('page-nav-on', 'page-nav-collapsed');
     delete page.dataset.pageNavSignature;
     return;
   }
@@ -5356,10 +5400,19 @@ function initPageNav(page){
     page.insertBefore(sidebar, page.firstChild);
   }
   sidebar.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'page-sidebar-head';
   const title = document.createElement('div');
   title.className = 'page-sidebar-title';
   title.textContent = '本页导航';
-  sidebar.appendChild(title);
+  head.appendChild(title);
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'page-sidebar-toggle';
+  collapseBtn.addEventListener('click', function(){ togglePageNavCollapse(page); });
+  head.appendChild(collapseBtn);
+  sidebar.appendChild(head);
+  applyPageNavCollapse(page, pageNavCollapsedPref());
 
   // 排在区块清单之外：它不是一个区块，不参与高亮与滚动侦测；窄屏下也就能
   // 留在横向胶囊行的左端，不跟着一起滚走。
