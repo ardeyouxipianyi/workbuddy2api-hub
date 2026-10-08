@@ -5,22 +5,16 @@ stamping are pure transformations, so every case feeds a synthetic payload and
 asserts the shape that leaves for the upstream and the shape that returns to
 the client.
 """
-import atexit
 import json
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 # Its own directories, removed when this process exits. The suite used to point
 # both at tests/_acc and tests/_use, so two runs of it shared one directory and
 # every run left those directories behind in the checkout.
-_TMP = tempfile.TemporaryDirectory(prefix="wb-namespace-tools-")
-atexit.register(_TMP.cleanup)
-os.environ["ACCOUNTS_DIR"] = os.path.join(_TMP.name, "accounts")
-os.environ["WB_PROXY_USAGE_DIR"] = os.path.join(_TMP.name, "usage")
-os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
-os.makedirs(os.environ["WB_PROXY_USAGE_DIR"], exist_ok=True)
+_TMP = isolated_data_dirs("wb-namespace-tools-")
 
 import wb_proxy as P
 

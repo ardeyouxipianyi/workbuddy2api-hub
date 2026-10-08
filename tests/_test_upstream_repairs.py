@@ -8,23 +8,17 @@ shape that leaves for the upstream.
   2. deepseek thinking + effort  - thinking.type alone does not enable the trace
   3. tool-call pairing repair    - orphaned calls / split results kill a session
 """
-import atexit
 import copy
 import json
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 # Its own directories, removed when this process exits. The suite used to point
 # both at tests/_acc and tests/_use, which it shared with
 # _test_namespace_tools.py, and every run left those directories in the checkout.
-_TMP = tempfile.TemporaryDirectory(prefix="wb-upstream-repairs-")
-atexit.register(_TMP.cleanup)
-os.environ["ACCOUNTS_DIR"] = os.path.join(_TMP.name, "accounts")
-os.environ["WB_PROXY_USAGE_DIR"] = os.path.join(_TMP.name, "usage")
-os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
-os.makedirs(os.environ["WB_PROXY_USAGE_DIR"], exist_ok=True)
+_TMP = isolated_data_dirs("wb-upstream-repairs-")
 
 import wb_proxy as P
 

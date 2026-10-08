@@ -3,18 +3,14 @@
 No network: feeds synthetic chat-completion objects/chunks into the translation
 functions and asserts the Responses-API shapes that Codex depends on.
 """
-import atexit, json, os, sys, tempfile
+import json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 # Its own directories, removed when this process exits. This suite used to share
 # tests/_acc and tests/_use with _test_tool_choice_none.py, which made the two
 # unsafe to run at the same time and left directories in the repo after a run.
-_TMP = tempfile.TemporaryDirectory(prefix="wb-custom-tools-")
-atexit.register(_TMP.cleanup)
-os.environ["ACCOUNTS_DIR"] = os.path.join(_TMP.name, "accounts")
-os.environ["WB_PROXY_USAGE_DIR"] = os.path.join(_TMP.name, "usage")
-os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
-os.makedirs(os.environ["WB_PROXY_USAGE_DIR"], exist_ok=True)
+_TMP = isolated_data_dirs("wb-custom-tools-")
 
 import wb_proxy as P
 
