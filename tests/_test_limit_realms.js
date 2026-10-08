@@ -9,12 +9,10 @@
  * 出来。所以这里把两侧的名字和语义都钉住。Run with Node.
  */
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const {dashboardHtml, dashboardScript} = require('./_dashboard_source.js');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
-const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
-  .map(match => match[1]).join('\n');
+const html = dashboardHtml();
+const script = dashboardScript();
 
 // One shared fake DOM for every dashboard suite: tests/_dom_stub.js.
 const dom = require('./_dom_stub.js');

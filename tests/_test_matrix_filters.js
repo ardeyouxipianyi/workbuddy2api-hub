@@ -9,11 +9,8 @@
  *
  *   node _test_matrix_filters.js
  */
-const path = require('path');
-const fs = require('fs');
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
-const blocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
-const code = blocks.join('\n');
+const {dashboardScript} = require('./_dashboard_source.js');
+const code = dashboardScript();
 
 // One shared fake DOM for every dashboard suite: tests/_dom_stub.js.
 const dom = require('./_dom_stub.js');

@@ -7,12 +7,9 @@
    Run with Node.
 */
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const {dashboardScript} = require('./_dashboard_source.js');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
-const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
-  .map(match => match[1]).join('\n');
+const script = dashboardScript();
 
 // One shared fake DOM for every dashboard suite: tests/_dom_stub.js. Elements
 // are persistent per id, so the rendered table can be read back.
