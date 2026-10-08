@@ -29,6 +29,9 @@ ROOT = os.path.dirname(HERE)          # the gateway lives one level up
 PY = os.path.join(ROOT, "python", "python.exe")
 if not os.path.exists(PY):
     PY = sys.executable
+sys.path.insert(0, HERE)
+
+import _lifecycle as life            # noqa: E402  (spare port + managed process)
 
 PASS = 0
 FAIL = 0
@@ -44,15 +47,7 @@ def check(label, ok, detail=""):
         print("  [FAIL] %s %s" % (label, detail))
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-port = free_port()
+port = life.free_port()
 work = tempfile.mkdtemp(prefix="connreuse_")
 store = os.path.join(work, "accounts")
 os.makedirs(store)
@@ -60,15 +55,18 @@ with open(os.path.join(store, "settings.json"), "w", encoding="utf-8") as fh:
     json.dump({"api_keys": [{"id": "k1", "name": "t", "key": "GOODKEY",
                              "enabled": True}]}, fh)
 
-proc = subprocess.Popen(
+# Managed spawn: its own group/session, so the stop_managed() in the finally
+# below takes the whole tree - a gateway that leaves a helper behind also leaves
+# its port held.
+proc = life.spawn_managed(
     [PY, os.path.join(ROOT, "wb_proxy.py"), "--port", str(port), "--host", "127.0.0.1",
      "--accounts-dir", store],
     cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-    env=dict(os.environ, WB_PROXY_USAGE_DIR=os.path.join(work, "usage")),
-)
+    env=dict(os.environ, WB_PROXY_USAGE_DIR=os.path.join(work, "usage")))
 
 
 def wait_ready():
+    """Wait for /health to answer; a gateway that could not bind exits instead."""
     for _ in range(40):
         time.sleep(0.5)
         try:
@@ -169,11 +167,7 @@ try:
     check("the 414 body is our JSON error shape", b"application/json" in resp,
           resp[:120].decode("latin-1", "replace"))
 finally:
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except Exception:
-        proc.kill()
+    life.stop_managed(proc)
     shutil.rmtree(work, ignore_errors=True)
 
 print()

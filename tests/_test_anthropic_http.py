@@ -8,7 +8,6 @@ network access and no real accounts.
 import base64
 import json
 import os
-import socket
 import sys
 import tempfile
 import threading
@@ -20,6 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+sys.path.insert(0, HERE)
+
+import _lifecycle as life  # noqa: E402  (shared spare-port pick)
 
 WORK = tempfile.mkdtemp(prefix="anthropic-http-")
 ACCOUNTS = os.path.join(WORK, "accounts")
@@ -54,15 +56,7 @@ with open(os.path.join(ACCOUNTS, "acct1.json"), "w", encoding="utf-8") as fh:
     }, fh)
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-UPSTREAM_PORT = free_port()
+UPSTREAM_PORT = life.free_port()
 MOCK = {
     "stream": True,
     "chunks": [],
@@ -136,7 +130,7 @@ for key in list(_ENDPOINTS):
     _ENDPOINTS[key] = ("http://127.0.0.1:%d" % UPSTREAM_PORT, _ENDPOINTS[key][1])
 wb_identity._ENDPOINTS.update(_ENDPOINTS)
 
-GATEWAY_PORT = free_port()
+GATEWAY_PORT = life.free_port()
 
 
 class Args(object):

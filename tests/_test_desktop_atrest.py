@@ -18,8 +18,10 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wb_atrest as A  # noqa: E402
+import _lifecycle as life  # noqa: E402  (shared stop for the target process)
 
 #: 靶子进程：密钥放在模块全局（等价于客户端把它留在常驻内存里），再分配一大块
 #: 噪声内存，逼扫描真的动手找而不是碰运气。
@@ -223,15 +225,11 @@ class HuntTests(unittest.TestCase):
     def tearDown(self):
         self._patch.stop()
         for proc in self.children:
-            try:
-                proc.kill()
-                proc.wait(timeout=10)
-            except Exception:
-                pass
+            life.stop_managed(proc)
         A.forget_key()
 
     def _holder(self, mode, value, noise_mb=None):
-        proc = subprocess.Popen(
+        proc = life.spawn_managed(
             [sys.executable, "-c", HOLDER, mode, value,
              str(self.NOISE_MB if noise_mb is None else noise_mb), "120"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
