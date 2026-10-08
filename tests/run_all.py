@@ -58,6 +58,16 @@ def main(argv):
     # be utf-8 too - on the CI Windows runner the locale is cp1252 and a
     # Chinese label would otherwise abort the suite with UnicodeEncodeError.
     env["PYTHONIOENCODING"] = "utf-8"
+    # This script has the same problem, for the same reason: it echoes each
+    # suite's last line (and its whole tail on failure) on its own stdout. On
+    # the CI Windows runner that stdout is a cp1252 pipe, so the first Chinese
+    # label aborts the run with UnicodeEncodeError before the summary is even
+    # printed. A real console is already utf-8 on Windows, so this only changes
+    # the pipe case.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, OSError):
+        pass
     have_node = shutil.which("node") is not None
 
     selected = suites(pattern)
