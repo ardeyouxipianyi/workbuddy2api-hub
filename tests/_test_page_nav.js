@@ -168,7 +168,13 @@ global.MutationObserver = function(){ this.observe = () => {}; this.disconnect =
 global.setTimeout = fn => { timers.push(fn); return timers.length; };
 global.clearTimeout = () => {};
 global.setInterval = () => 0;
-global.localStorage = { getItem(){ return null; }, setItem(){}, removeItem(){} };
+/* 真的存得住：侧栏收起状态就是靠 localStorage 跨刷新保留的 */
+const store = new Map();
+global.localStorage = {
+  getItem: k => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => { store.set(k, String(v)); },
+  removeItem: k => { store.delete(k); },
+};
 global.sessionStorage = global.localStorage;
 global.navigator = { userAgent: 'node' };
 global.alert = () => {};
@@ -177,7 +183,9 @@ global.fetch = () => Promise.resolve({ ok: false, status: 500, json: async () =>
 
 const api = new Function(script + `
   return { initPageNav, pageNavSections, pageNavLabel, pageNavAnchorId, pageNavSignature,
-           pageNavSpy, restorePageNavHash, scrollToPageSection, switchMainTab };`)();
+           pageNavSpy, restorePageNavHash, scrollToPageSection, switchMainTab,
+           applyPageNavCollapse, togglePageNavCollapse, pageNavCollapsedPref,
+           PAGE_NAV_COLLAPSE_KEY };`)();
 
 /* ---- 造页面的小工具 ---- */
 function sectionEl(label, opts){
@@ -220,6 +228,16 @@ assert.ok(!/class="page-sidebar"/.test(html), '侧栏不应写死在标记里');
 assert.ok(/\.main-page\.page-nav-on\s*>\s*\.page-sidebar/.test(html), '缺少页面级两栏样式');
 assert.ok(/@media \(max-width:860px\)[\s\S]{0,400}?\.main-page\.page-nav-on > \*\{grid-column:1\}/.test(html),
   '窄屏应把页面收回单栏（否则 grid-column:2 会多出一列）');
+// 收起把整列压成一条细轨。这套规则必须限定在宽屏：窄屏的导航是一条横向
+// 胶囊行，收起规则若也命中，导航会被 display:none 整个藏掉且再也点不开。
+assert.ok(/@media \(min-width:861px\)[\s\S]{0,600}?\.page-nav-collapsed\.active\{grid-template-columns:44px/.test(html),
+  '收起后的窄列要限定在宽屏生效');
+assert.ok(/@media \(max-width:860px\)[\s\S]{0,900}?\.page-sidebar-head\{display:none\}/.test(html),
+  '窄屏没有可收的余地，收起按钮应一并藏掉');
+// header 与 main 的左右留白共用一个变量，两处各写一个值会慢慢漂开对不齐
+assert.ok(/--page-pad:clamp\(/.test(html), '缺少统一的页面左右留白变量');
+assert.ok(/header\{padding:16px var\(--page-pad\)/.test(html), 'header 应使用页面留白变量');
+assert.ok(/main\{padding:20px var\(--page-pad\)/.test(html), 'main 应使用页面留白变量');
 
 // 各页面区块数：导航就是照这些区块生成的，数量只增不减
 const regions = {};
@@ -380,5 +398,39 @@ assert.deepStrictEqual(labels(gateway), ['账号', '最近请求', '成长任务
   '给别的页面建栏不该动到 gateway 的侧栏');
 assert.notStrictEqual(pageSettings.querySelector('.page-sidebar'), gateway.querySelector('.page-sidebar'),
   '每个页面有各自的侧栏容器');
+
+/* ---- 10. 侧栏可收起 ---- */
+function toggleOf(page){ return page.querySelector('.page-sidebar-toggle'); }
+
+assert.ok(gateway.querySelector('.page-sidebar-head'), '侧栏头部要容纳标题与收起按钮');
+assert.ok(toggleOf(gateway), '侧栏要有收起按钮');
+assert.ok(!gateway.classList.contains('page-nav-collapsed'), '默认是展开的');
+assert.strictEqual(toggleOf(gateway).getAttribute('aria-expanded'), 'true', '展开时 aria-expanded 为 true');
+
+toggleOf(gateway).listeners.click[0]();
+assert.ok(gateway.classList.contains('page-nav-collapsed'), '点一次应收起');
+assert.strictEqual(localStorage.getItem(api.PAGE_NAV_COLLAPSE_KEY), '1', '收起状态要落盘');
+assert.strictEqual(toggleOf(gateway).textContent, '»', '收起后按钮指向「展开」');
+assert.strictEqual(toggleOf(gateway).getAttribute('aria-expanded'), 'false', '收起时 aria-expanded 为 false');
+// 收起只压列宽，导航项本身还在 DOM 里（由 CSS 隐藏），重新展开不该丢东西
+assert.deepStrictEqual(labels(gateway), ['账号', '最近请求', '成长任务', '高级设置'],
+  '收起不该重建或丢掉导航项');
+
+toggleOf(gateway).listeners.click[0]();
+assert.ok(!gateway.classList.contains('page-nav-collapsed'), '再点一次应展开');
+assert.strictEqual(localStorage.getItem(api.PAGE_NAV_COLLAPSE_KEY), '0', '展开状态也要落盘');
+
+// 落盘的状态要在下次建栏时生效，否则刷新就白收了
+localStorage.setItem(api.PAGE_NAV_COLLAPSE_KEY, '1');
+const freshPage = attach(pageEl('pageFresh', [sectionEl('甲'), sectionEl('乙')]));
+api.initPageNav(freshPage);
+assert.ok(freshPage.classList.contains('page-nav-collapsed'), '建栏时应读回上次的收起状态');
+assert.strictEqual(toggleOf(freshPage).getAttribute('aria-expanded'), 'false', '读回的状态要同步到按钮上');
+localStorage.setItem(api.PAGE_NAV_COLLAPSE_KEY, '0');
+
+// 区块不足两项的页面没有侧栏，收起类也不该赖在页面上
+const lonelyPage = attach(pageEl('pageLonely', [sectionEl('独苗')]));
+api.initPageNav(lonelyPage);
+assert.ok(!lonelyPage.classList.contains('page-nav-collapsed'), '没有侧栏的页面不该带收起类');
 
 console.log('page nav assertions passed');
