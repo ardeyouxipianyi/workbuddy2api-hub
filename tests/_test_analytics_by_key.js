@@ -133,11 +133,27 @@ check('the pre-upgrade bucket row shows no exit instead of guessing one',
 check('the no-key bucket row shows no exit either',
       noKeyRow !== null && cellOf(noKeyRow, '出口').includes('—'),
       show(noKeyRow, '出口'));
-check('the launcher key is attributed to the start-up argument', out.includes('启动参数'));
-check('panel keys are marked as panel keys', out.includes('面板 Key'));
-check('failures are surfaced next to the request count', out.includes('失败 1'));
-check('the credit column is fixed to two decimals', out.includes('3.50'));
-check('cache hit is rendered as a percentage', out.includes('12.5%'));
+// The five below used to be whole-table `includes()`, which only proved the
+// string existed somewhere in the table. Each one is a property of one key's
+// row, so each one is read out of that row's own cell: a value moved to another
+// key still leaves every string in the table, and only the row binding sees it.
+check('the launcher key is attributed to the start-up argument',
+      intlRow !== null && cellOf(intlRow, 'API Key').includes('启动参数'),
+      show(intlRow, 'API Key'));
+check('panel keys are marked as panel keys',
+      cnRow !== null && cellOf(cnRow, 'API Key').includes('面板 Key')
+      && intlRow !== null && !cellOf(intlRow, 'API Key').includes('面板 Key')
+      && noKeyRow !== null && !cellOf(noKeyRow, 'API Key').includes('面板 Key'),
+      show(cnRow, 'API Key'));
+check('failures are surfaced next to the request count',
+      cnRow !== null && cellOf(cnRow, '请求次数').includes('失败 1'),
+      show(cnRow, '请求次数'));
+check('the credit column is fixed to two decimals',
+      cnRow !== null && cellOf(cnRow, '消耗积分').includes('3.50'),
+      show(cnRow, '消耗积分'));
+check('cache hit is rendered as a percentage',
+      cnRow !== null && cellOf(cnRow, '缓存命中').includes('12.5%'),
+      show(cnRow, '缓存命中'));
 
 console.log();
 console.log('[2] the unattributed rows stay distinguishable');
