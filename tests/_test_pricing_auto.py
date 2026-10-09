@@ -20,6 +20,7 @@ catalogue is exercised separately, in the deployment check.
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -239,6 +240,40 @@ class UnionInputTests(PricingTestCase):
             self.assertNotIn(alias, overridden)
 
 
+# Run in a fresh interpreter: set up a gateway standing in for __main__, then
+# import wb_pricing and see what that left in sys.modules. __ROOT__ is the
+# directory wb_pricing itself was imported from, so a mutated copy beside this
+# test is the one the probe loads.
+_TWIN_IMPORT_PROBE = '''\
+import sys
+sys.path.insert(0, __ROOT__)
+
+
+class FakeGateway(object):
+    """Stands in for the running `python wb_proxy.py` instance."""
+
+    VIRTUAL_ALIAS_MODELS = ("default-model", "auto")
+
+    def curated_live_sources(self, realm):
+        return ([], True)
+
+
+sys.modules["__main__"] = FakeGateway()
+
+import wb_pricing  # noqa: E402
+
+problems = []
+if wb_pricing.gateway_module() is not sys.modules["__main__"]:
+    problems.append("gateway_module() did not resolve to the running __main__, "
+                    "so this probe is not measuring what it thinks it is")
+if "wb_proxy" in sys.modules:
+    problems.append("importing wb_pricing executed wb_proxy a second time")
+if problems:
+    print("\\n".join(problems))
+    raise SystemExit(1)
+'''
+
+
 class SingleGatewayInstanceTests(PricingTestCase):
     """Pricing must talk to the gateway module the server actually runs.
 
@@ -306,14 +341,31 @@ class SingleGatewayInstanceTests(PricingTestCase):
             self.assertIs(wb_pricing.gateway_module(), P)
 
     def test_nothing_imports_wb_proxy_behind_the_resolver(self):
-        """A stray plain import anywhere else would recreate the twin."""
-        path = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "wb_pricing.py")
-        with open(path, encoding="utf-8") as fh:
-            source = fh.read()
-        hits = [line.strip() for line in source.splitlines()
-                if line.strip().startswith("import wb_proxy")]
-        self.assertEqual(hits, ["import wb_proxy as module"])
+        """Importing wb_pricing must not bring a second wb_proxy with it.
+
+        The gateway runs as `python wb_proxy.py`, so the live instance is
+        __main__; any `import wb_proxy` that executes while wb_pricing is being
+        imported runs that file a second time and produces the twin with no
+        account pool and its own log buffer.
+
+        This used to scan wb_pricing.py for a line starting with
+        "import wb_proxy". A scan can only say the text is there, not when it
+        runs: moving the lazy fallback in gateway_module() to module level
+        leaves the line byte-identical, and `from wb_proxy import Handler` is
+        not that text at all - both recreate the twin while the scan stays
+        green. It also went red for a docstring that merely quoted the line.
+        Asking a real interpreter what it ended up importing has neither
+        problem.
+        """
+        probe = _TWIN_IMPORT_PROBE.replace(
+            "__ROOT__",
+            repr(os.path.dirname(os.path.abspath(wb_pricing.__file__))))
+        result = subprocess.run([sys.executable, "-c", probe],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(
+            result.returncode, 0,
+            "importing wb_pricing pulled in a second wb_proxy:\n"
+            + (result.stdout or "") + (result.stderr or ""))
 
 
 class OnDemandPricingTests(PricingTestCase):
