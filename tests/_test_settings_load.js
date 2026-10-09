@@ -87,20 +87,49 @@ global.__toasts = toasts;
   assert.deepStrictEqual(failed, [],
     'loadSettings 抛异常了：' + (failed[0] ? failed[0][0] : ''));
 
-  // 2. API Key 列表：三把 Key 各一张卡片，名字与出口徽章都要在。
+  // 2. API Key 列表：三把 Key 各一张卡片，名字与出口徽章都要在**它自己那张卡上**。
   const rows = api.getRows();
   assert.equal(rows.length, 3, 'API_KEY_ROWS 应有 3 行');
   const list = element('keyList').innerHTML;
   // 每张卡片里正好一个 key-card-main；不能拿 class="key-card 去数，
   // 那个前缀会同时命中 key-card-main。
   assert.equal(list.split('class="key-card-main"').length - 1, 3, 'keyList 应有 3 张卡片');
+
+  /* 卡片读取器：按 <div class="key-card…"> 把渲染结果切开，字段只在**单张卡片
+     内部**找。整表 includes(...) 只能证明某段字符串在列表里出现过，证明不了它
+     属于哪张卡 —— 徽章串到别的卡上时，那些断言照样全绿。
+     边界用前瞻收口：`key-card` 后面必须是空白、引号或 `>`，否则会连
+     `key-card-main` 一起切开。 */
+  const cards = list.split(/<div class="key-card(?=[\s">])/).slice(1);
+  const cardOf = name => cards.filter(c => c.includes('>' + name + '<'))[0] || '';
+  const onCard = (name, text) => cardOf(name).includes(text);
+  // 卡片自己的 class 里有没有 disabled（多一个属性、多一个 class 都不影响）。
+  const cardIsDisabled = name =>
+    /(^|["\s])disabled(["'\s]|$)/.test(cardOf(name).split('>')[0]);
+  const cardsWith = text => cards.filter(c => c.includes(text)).length;
+
   for(const name of ['Cursor', 'DSH', '本地测试']){
-    assert.ok(list.includes(name), '列表里缺少 ' + name);
+    assert.ok(cardOf(name), '缺少 ' + name + ' 的卡片');
   }
-  assert.ok(list.includes('固定国际版出口'), '固定国际版出口的徽章丢了');
-  assert.ok(list.includes('固定国内版出口'), '固定国内版出口的徽章丢了');
-  assert.ok(list.includes('限 deepseek*'), '模型白名单徽章丢了');
-  assert.ok(list.includes('wb-aaaa****1111'), '掩码后的 Key 没显示');
+  // Cursor：跟随面板切换的普通 Key，掩码在它自己那张卡上，且没有固定出口徽章。
+  assert.ok(onCard('Cursor', '跟随面板切换'), 'Cursor 卡应显示「跟随面板切换」');
+  assert.ok(onCard('Cursor', 'wb-aaaa****1111'), 'Cursor 卡上应显示掩码 Key');
+  assert.ok(!cardOf('Cursor').includes('固定国际版出口')
+         && !cardOf('Cursor').includes('固定国内版出口'), 'Cursor 卡不该有固定出口徽章');
+  // DSH：同一张卡上既是固定国际版出口，又带模型白名单。
+  assert.ok(onCard('DSH', '固定国际版出口'), 'DSH 卡上应有「固定国际版出口」');
+  assert.ok(onCard('DSH', '限 deepseek*'), 'DSH 卡上应有「限 deepseek*」');
+  assert.ok(!cardOf('DSH').includes('固定国内版出口'), 'DSH 卡不该有国内版徽章');
+  // 本地测试：同一张卡上既是固定国内版出口，又处于禁用状态。
+  assert.ok(onCard('本地测试', '固定国内版出口'), '本地测试 卡上应有「固定国内版出口」');
+  assert.ok(onCard('本地测试', '已禁用'), '本地测试 卡上应显示已禁用');
+  assert.ok(cardIsDisabled('本地测试'), '本地测试 卡应带 disabled 状态');
+  assert.ok(!cardOf('本地测试').includes('固定国际版出口'), '本地测试 卡不该有国际版徽章');
+  // 每枚徽章只出现在一张卡上：复制到每张卡也满足「在某张卡上」。
+  assert.equal(cardsWith('固定国际版出口'), 1, '固定国际版出口 只该出现在 DSH 卡上');
+  assert.equal(cardsWith('固定国内版出口'), 1, '固定国内版出口 只该出现在 本地测试 卡上');
+  assert.equal(cardsWith('限 deepseek*'), 1, '模型白名单徽章只该出现在 DSH 卡上');
+
   assert.equal(element('setKeyState').textContent, '(2 个生效)',
     '计数只算启用中的 Key');
 
