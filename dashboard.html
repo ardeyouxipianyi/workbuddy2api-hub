@@ -1197,6 +1197,20 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '本周消耗 Token': 'Tokens used this week',
     '本周请求数': 'Requests this week',
     '本地网络工具': 'Local web tools',
+    '更新': 'Update',
+    '立即检查更新': 'Check now',
+    '安装更新': 'Install update',
+    '本版只做检查，安装更新尚未提供': 'This build only checks; installing is not available yet',
+    '最新版本': 'Latest version',
+    '上次检查': 'Last check',
+    '每天自动检查更新': 'Check for updates daily',
+    '默认关闭。开启后最多每 24 小时检查一次，只检查、不安装。': 'Off by default. When on it checks at most once every 24 hours - checking only, never installing.',
+    '网关匿名查询 GitHub 的公开 Release 列表，与当前运行的版本比较。本版只检查：不下载、不安装、不重启，账号与用量数据不会被碰。': 'The gateway anonymously queries the public GitHub Release list and compares it with the running version. This build only checks: it does not download, install or restart, and never touches account or usage data.',
+    '已是最新': 'Up to date',
+    '发现新版本': 'Update available',
+    '检查失败': 'Check failed',
+    '尚未检查': 'Not checked yet',
+    '读取失败': 'Could not read',
     '本月': 'This month',
     '本月 (This Month)': 'This month',
     '本月消耗 Token': 'Tokens used this month',
@@ -3433,6 +3447,39 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
             </label>
             <button onclick="saveLocalWebTools(this)">保存</button>
           </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">更新 <em id="setUpdateState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              网关匿名查询 GitHub 的公开 Release 列表，与当前运行的版本比较。本版只检查：不下载、不安装、不重启，账号与用量数据不会被碰。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <button id="setUpdateCheckBtn" onclick="checkUpdateNow(this)">立即检查更新</button>
+            <button id="setUpdateInstallBtn" class="sec" disabled>安装更新</button>
+          </div>
+        </div>
+        <table>
+          <tbody>
+            <tr><td>当前版本</td><td class="mono" id="setUpdateCurrent">-</td></tr>
+            <tr><td>最新版本</td><td class="mono" id="setUpdateLatest">-</td></tr>
+            <tr><td>上次检查</td><td class="mono" id="setUpdateLastCheck">-</td></tr>
+          </tbody>
+        </table>
+        <div id="setUpdateError" style="font-size:12px;color:var(--warn);margin-top:8px"></div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:14px">
+          <input id="setUpdateCheckEnabled" type="checkbox" style="width:16px;height:16px">
+          每天自动检查更新
+        </label>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">
+          默认关闭。开启后最多每 24 小时检查一次，只检查、不安装。
+        </div>
+        <div style="margin-top:10px">
+          <button onclick="saveUpdateCheckEnabled(this)">保存</button>
         </div>
       </section>
 
@@ -6970,6 +7017,9 @@ async function loadSettings(showToast){
     set('setUsageDir', data.usage_dir);
     set('setFile', data.settings_file);
     set('setSettingsFile', data.settings_file);
+    // 更新状态来自 /updates 而不是 /settings，单独拉一次；它自带兜底，
+    // 失败只写在自己的状态行里，不会把上面这些区块一起带走。
+    loadUpdateStatus();
     if(showToast) toast('设置已刷新', 'ok');
   } catch(e) {
     if(showToast) toast('读取设置失败: ' + e.message, 'bad');
@@ -7434,6 +7484,84 @@ async function saveLocalWebTools(btn){
   try {
     await postJSON('/settings/save', {local_web_tools: value});
     toast(value ? '已启用：由网关代跑 web_search / web_fetch' : '已关闭：工具声明原样透传', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+/* ---- 更新检查 ----
+   面板只负责「问一句、把结论显示出来」：真正的查询由后端匿名拉取公开
+   Release 列表完成，浏览器不直接接触 GitHub，也不需要任何凭证。
+
+   这一版是**只检查**：没有下载、没有安装、没有重启，所以「安装更新」按钮
+   固定禁用并说明原因——与其给一个点了会假装成功的按钮，不如让它看起来
+   就是还没有。 */
+const UPDATE_INSTALL_AVAILABLE = false;
+
+function updateStateLabel(data){
+  if(!data) return '未知';
+  if(data.last_error) return '检查失败';
+  if(data.update_available) return '发现新版本';
+  if(data.latest_version) return '已是最新';
+  return '尚未检查';
+}
+
+function applyUpdateStatus(data){
+  data = data || {};
+  const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
+  set('setUpdateCurrent', data.current_version);
+  set('setUpdateLatest', data.latest_version);
+  set('setUpdateLastCheck', data.last_attempt);
+  const state = document.getElementById('setUpdateState');
+  if(state){
+    state.textContent = '(' + updateStateLabel(data) + ')';
+    state.style.color = data.last_error ? 'var(--warn)'
+      : data.update_available ? 'var(--accent2)' : 'var(--dim)';
+  }
+  const enabled = document.getElementById('setUpdateCheckEnabled');
+  if(enabled) enabled.checked = data.enabled === true;
+  const err = document.getElementById('setUpdateError');
+  if(err) err.textContent = data.last_error ? ('上次检查失败：' + data.last_error) : '';
+  const install = document.getElementById('setUpdateInstallBtn');
+  if(install){
+    install.disabled = !UPDATE_INSTALL_AVAILABLE;
+    install.title = UPDATE_INSTALL_AVAILABLE ? '' : '本版只做检查，安装更新尚未提供';
+  }
+}
+
+async function loadUpdateStatus(){
+  try {
+    applyUpdateStatus(await getJSON('/updates'));
+  } catch(e) {
+    // 读不到更新状态不该影响设置页的其它区块，也不该谎报「已是最新」。
+    const state = document.getElementById('setUpdateState');
+    if(state){ state.textContent = '(读取失败)'; state.style.color = 'var(--warn)'; }
+  }
+}
+
+async function checkUpdateNow(btn){
+  if(btn) btn.disabled = true;
+  try {
+    const data = await postJSON('/updates/check', {});
+    applyUpdateStatus(data);
+    toast(data.update_available ? ('发现新版本 ' + data.latest_version) : '已是最新版本', 'ok');
+  } catch(e) {
+    toast('检查更新失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveUpdateCheckEnabled(btn){
+  const el = document.getElementById('setUpdateCheckEnabled');
+  const value = !!(el && el.checked);
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {update_check_enabled: value});
+    toast(value ? '已启用：每天自动检查更新' : '已关闭：不再自动检查更新', 'ok');
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
