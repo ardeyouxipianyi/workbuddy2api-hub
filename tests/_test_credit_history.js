@@ -238,6 +238,15 @@ const accountOf = (html, iso) => rowFor(html, iso)[ACCOUNT_COL] || null;
 // 而不是整张表里某一段精确的 class 字符串。
 const notMono = cell => !!cell && !/\bclass="[^"]*\bmono\b/.test(cell.attrs + cell.text);
 
+// 值属于哪一行、哪一列：行按时间（首列）认出来，列按表头里的列名认出来 —— 与
+// 账号列同一套机器。读的是单元格的**可见文本**：单元格内部允许有无害标记
+// （<b>、class、title、换行缩进），只要这一行这一列显示的数字没变。
+const visibleText = cell => cell ? cell.text.replace(/<[^>]*>/g, '').trim() : null;
+const cellAt = (html, iso, col) => visibleText(rowFor(html, iso)[col]);
+const CREDIT_COL = headerNames.indexOf('积分');
+const TOKEN_COL = headerNames.indexOf('Token');
+const creditTokenOf = (html, iso) => [cellAt(html, iso, CREDIT_COL), cellAt(html, iso, TOKEN_COL)];
+
 let body = '';
 const checkAccount = (label, iso, text, title) => {
   const cell = accountOf(body, iso);
@@ -272,8 +281,34 @@ check('旧的昵称不会留在表里', !body.includes('老王'), body.slice(0, 
 check('账号单元格不再强制等宽字体（昵称是中文）',
       notMono(accountOf(body, '2026-10-08T15:30:42')),
       JSON.stringify(accountOf(body, '2026-10-08T15:30:42')));
-check('积分与 token 仍按原样渲染',
-      body.includes('>0.59<') && body.includes('>8,831<'), body.slice(0, 400));
+// ---- ③ 积分 / Token 绑定到记录行与列 --------------------------------------
+// 整表子串搜索（`body.includes('>0.59<')`）只能证明这两个数字在页面某处出现过：
+// 把两行的值互换、或者把它们挂到别的列上，它照样是绿的。下面按「时间行 + 表头
+// 定出的列」读，值属于哪条记录、哪一列由渲染结果自己回答。
+check('重传数据后第一行的积分与 Token 仍各归其位',
+      creditTokenOf(body, '2026-10-08T15:30:42').join(' / ') === '0.59 / 8,831',
+      JSON.stringify(creditTokenOf(body, '2026-10-08T15:30:42')));
+
+api.renderCreditHistory(DATA);            // 三行 fixture 全量重画
+body = TBODY.innerHTML;
+[
+  ['2026-10-08T15:30:42', '0.59', '8,831'],
+  ['2026-10-08T08:57:39', '0.03', '57'],
+  ['2026-10-08T08:00:00', '0.01', '12'],
+].forEach(([iso, credit, tokens]) => {
+  // 数值仍按原样渲染（两位小数、千位分隔符），只是现在必须落在它自己那一行。
+  check('记录行 ' + iso + ' 的积分与 Token 各归其位',
+        creditTokenOf(body, iso).join(' / ') === credit + ' / ' + tokens,
+        iso + ' -> ' + JSON.stringify(creditTokenOf(body, iso)));
+});
+// 可见文本的容错：单元格里多一层标记或缩进不该改变读到的数字。旧写法要求
+// `>0.59<` 精确相邻，遇到缩进/换行就会误报。
+check('单元格里的无害标记不影响取值',
+      cellAt('<tr><td>2026-10-08T15:30:42</td><td class="num">\n  0.59\n</td></tr>',
+             '2026-10-08T15:30:42', 1) === '0.59'
+      && cellAt('<tr><td>2026-10-08T15:30:42</td><td><b>0.59</b></td></tr>',
+                '2026-10-08T15:30:42', 1) === '0.59',
+      'decorated cell');
 
 // 空数据走占位行。
 api.renderCreditHistory({credits: []});
