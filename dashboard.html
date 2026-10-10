@@ -2788,6 +2788,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
          网关现在会从正在运行的桌面端进程内存里回收静态密钥来解密（只读、密钥
          只留在内存里，实现见 wb_atrest.py），所以这个入口重新放出来。 -->
     <button class="sec" id="btnScanDesktop" onclick="scanDesktop(this)">扫描桌面客户端</button>
+    <!-- 活动记录入口：只读 GET /activity/history，账号区自己的控件，不另开页面。 -->
+    <button class="sec" onclick="openActivityHistory()">签到记录</button>
     <button class="sec" onclick="openImport()">导入</button>
     <button class="sec" onclick="exportAccounts(this)">导出</button>
     <span class="toolbar-sep" aria-hidden="true"></span>
@@ -3662,6 +3664,44 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   </div>
 </div>
 
+<div class="modal-mask" id="activityHistoryModal" onclick="if(event.target===this) closeActivityHistory()">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column">
+    <div class="modal-hd">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2>签到与每日活跃记录</h2>
+        <em id="activityHistoryMeta" style="color:var(--dim);font-size:12px;font-style:normal"></em>
+      </div>
+      <button class="modal-x" onclick="closeActivityHistory()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd" style="overflow-y:auto;flex:1">
+      <!-- 筛选在服务端做完（GET /activity/history），面板只负责拼查询串。 -->
+      <div class="toolbar" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <select id="actRange" onchange="setActivityFilter('range', this.value)" title="时间范围">
+          <option value="today">今日</option>
+          <option value="7d" selected>近 7 天</option>
+          <option value="30d">近 30 天</option>
+        </select>
+        <select id="actUid" onchange="setActivityFilter('uid', this.value)" title="账号"></select>
+        <select id="actTask" onchange="setActivityFilter('task', this.value)" title="任务">
+          <option value="">全部任务</option>
+          <option value="checkin">国内签到</option>
+          <option value="daily_chat">国际活跃</option>
+        </select>
+        <select id="actResult" onchange="setActivityFilter('result', this.value)" title="结果">
+          <option value="">全部结果</option>
+          <option value="ok">成功</option>
+          <option value="failed">失败</option>
+        </select>
+        <button class="sec" onclick="loadActivityHistory()">刷新</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-cards"><thead><tr>
+          <th>时间</th><th>账号</th><th>任务</th><th>结果</th><th>说明</th>
+        </tr></thead><tbody id="activityHistoryRows"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal-mask" id="creditsDetailModal" onclick="if(event.target===this) closeCreditsDetail()">
   <div class="modal" role="dialog" aria-modal="true" style="width:min(960px,96vw);max-height:92vh;display:flex;flex-direction:column">
     <div class="modal-hd">
@@ -4851,6 +4891,183 @@ function modelLimitPills(a){
   ).join('') + '</div>';
 }
 
+// ---- 每日活动（国内签到 / 国际活跃）------------------------------------
+// GET /activity/history 是唯一事实来源。账号行上的状态只由「今天已记录的事件」
+// 推导：**没有记录不等于失败**，所以缺记录时给的是中性文案而不是红色。账号自带
+// 的 lastCheckin / lastDailyChat 只在「今天确实完成过、但这一版还没留下历史行」
+// 时补一个中性的「今日已完成」，不据此伪造事件、时间或说明。
+//
+// 关联键始终是 uid：切区域、刷新账号都只是重画同一份按 uid 建的表，另一个账号的
+// 事件不会画到这一行上。
+let ACTIVITY_TODAY = {byUid: {}, error: '', loaded: false};
+const ACT_FILTER = {range: '7d', uid: '', task: '', result: ''};
+
+const ACTIVITY_TASKS = {checkin: '国内签到', daily_chat: '国际活跃'};
+const ACTIVITY_TRIGGERS = {scheduler: '定时', manual: '手动',
+                           account_add: '添加账号', account_import: '导入账号'};
+
+function todayStamp(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+// 一个账号今天的活动状态。label 按区域取（国内版叫签到，国际版叫活跃），
+// state 是四种互斥的结局之一。
+function activityStatusOf(a){
+  const uid = String((a && a.uid) || '');
+  const isCn = (a && a.realm) === 'cn';
+  const label = isCn ? '今日签到' : '今日活跃';
+  const done = isCn ? (a && a.lastCheckin) : (a && a.lastDailyChat);
+  const event = ACTIVITY_TODAY.byUid[uid];
+  if(event){
+    return {kind: event.ok ? 'ok' : 'failed', label: label,
+            state: event.ok ? '成功' : '失败',
+            at: String(event.ts || '').replace('T', ' ').slice(0, 19),
+            message: String(event.message || '')};
+  }
+  if(done && String(done).startsWith(todayStamp())){
+    return {kind: 'done', label: label, state: '已完成', at: '', message: ''};
+  }
+  return {kind: 'none', label: label, state: '无记录', at: '', message: ''};
+}
+
+function activityStatusChip(a){
+  const status = activityStatusOf(a);
+  // uid 来自上游 JWT：内联到属性里之前先按安全字符集收紧，和账号行其它按钮一致。
+  const uidAttr = esc(String((a && a.uid) || '').replace(/[^\w.@-]/g, ''));
+  const cls = status.kind === 'ok' ? 'badge ok'
+            : status.kind === 'failed' ? 'badge bad'
+            : status.kind === 'done' ? 'badge' : 'badge off';
+  const tip = status.kind === 'none'
+    ? status.label + '：今天还没有记录（没有记录不等于失败）'
+    : (status.label + '：' + status.state
+       + (status.at ? ' · ' + status.at : '')
+       + (status.message ? ' · ' + status.message : ''));
+  return '<span class="' + cls + '" style="cursor:pointer" title="' + esc(tip) + '"'
+    + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
+    + esc(status.label + ' · ' + status.state) + '</span>';
+}
+
+// 今天的事件，按 uid 建表。rows 是最新在前，所以第一次见到的就是最近一次。
+// 读不到历史只是没有状态可显示：绝不能让它把账号区一起带坏。
+async function loadActivityToday(){
+  try{
+    const payload = await getJSON('/activity/history?range=today&limit=200');
+    const rows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+    const byUid = {};
+    rows.forEach(row => {
+      const uid = String((row && row.uid) || '');
+      if(uid && !byUid[uid]) byUid[uid] = row;
+    });
+    ACTIVITY_TODAY = {byUid: byUid, error: '', loaded: true};
+  }catch(e){
+    ACTIVITY_TODAY = {byUid: {}, error: (e && e.message) || '读取失败', loaded: true};
+  }
+}
+
+// 面板拼查询串，筛选在服务端做；写错的取值服务端会回 400，这里原样透出。
+function activityFilterQuery(){
+  const parts = ['range=' + encodeURIComponent(ACT_FILTER.range || '7d'), 'limit=200'];
+  if(ACT_FILTER.uid) parts.push('uid=' + encodeURIComponent(ACT_FILTER.uid));
+  if(ACT_FILTER.task) parts.push('task=' + encodeURIComponent(ACT_FILTER.task));
+  if(ACT_FILTER.result) parts.push('result=' + encodeURIComponent(ACT_FILTER.result));
+  return '/activity/history?' + parts.join('&');
+}
+
+function renderActivityFilters(){
+  const uidSel = document.getElementById('actUid');
+  if(uidSel){
+    const accounts = Array.isArray(window.ACCOUNTS) ? window.ACCOUNTS : [];
+    uidSel.innerHTML = '<option value="">全部账号</option>' + accounts.map(a =>
+      '<option value="' + esc(String(a.uid || '')) + '">'
+      + esc((a.nickname || a.uid || '') + (a.realm === 'cn' ? ' · 国内版' : ' · 国际版'))
+      + '</option>').join('');
+  }
+  const bind = (id, value) => {
+    const el = document.getElementById(id);
+    if(el) el.value = value;
+  };
+  bind('actRange', ACT_FILTER.range);
+  bind('actUid', ACT_FILTER.uid);
+  bind('actTask', ACT_FILTER.task);
+  bind('actResult', ACT_FILTER.result);
+}
+
+function activityHistoryRow(row){
+  const uid = String((row && row.uid) || '');
+  const nick = String((row && row.nickname) || '') || (uid ? uid.slice(0, 8) : '未知账号');
+  const task = ACTIVITY_TASKS[row && row.task] || '—';
+  const trigger = ACTIVITY_TRIGGERS[row && row.trigger] || '';
+  const message = String((row && row.message) || '');
+  return '<tr>'
+    + '<td class="mono" data-label="时间">'
+    +   esc(String((row && row.ts) || '').replace('T', ' ').slice(0, 19)) + '</td>'
+    + '<td data-label="账号">' + esc(nick)
+    +   (uid ? '<div class="mono" style="color:var(--dim);font-size:11px">' + esc(uid.slice(0, 8)) + '</div>' : '')
+    + '</td>'
+    + '<td data-label="任务">' + esc(task)
+    +   (trigger ? '<div style="color:var(--dim);font-size:11px">' + esc(trigger) + '</div>' : '')
+    + '</td>'
+    + '<td data-label="结果">'
+    +   (row && row.ok ? '<span class="badge ok">成功</span>' : '<span class="badge bad">失败</span>')
+    + '</td>'
+    // 上游原文可能很长：行内截断，完整内容留在 title 里，模态框不会被撑宽。
+    + '<td data-label="说明" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"'
+    +   ' title="' + esc(message) + '">' + esc(message || '—') + '</td>'
+    + '</tr>';
+}
+
+function renderActivityHistory(payload, error){
+  const box = document.getElementById('activityHistoryRows');
+  const meta = document.getElementById('activityHistoryMeta');
+  if(!box) return;
+  if(error){
+    box.innerHTML = '<tr><td colspan="5" class="empty">活动记录读取失败：'
+      + esc(error) + '</td></tr>';
+    if(meta) meta.textContent = '';
+    return;
+  }
+  const rows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+  const total = (payload && payload.total != null) ? payload.total : rows.length;
+  if(meta) meta.textContent = rows.length ? ('显示 ' + rows.length + ' / ' + total + ' 条') : '';
+  if(!rows.length){
+    box.innerHTML = '<tr><td colspan="5" class="empty">这段时间没有活动记录</td></tr>';
+    return;
+  }
+  box.innerHTML = rows.map(activityHistoryRow).join('');
+}
+
+function loadActivityHistory(){
+  const box = document.getElementById('activityHistoryRows');
+  if(box) box.innerHTML = '<tr><td colspan="5" class="empty">正在读取活动记录…</td></tr>';
+  return getJSON(activityFilterQuery()).then(payload => {
+    renderActivityHistory(payload, '');
+  }).catch(e => {
+    renderActivityHistory(null, (e && e.message) || '读取失败');
+  });
+}
+
+function setActivityFilter(name, value){
+  if(!Object.prototype.hasOwnProperty.call(ACT_FILTER, name)) return undefined;
+  ACT_FILTER[name] = String(value == null ? '' : value);
+  return loadActivityHistory();
+}
+
+// uid 为空表示「全部账号」；从账号行的状态徽章点进来时带上该账号，等于预筛选。
+function openActivityHistory(uid){
+  ACT_FILTER.uid = String(uid || '');
+  const mask = document.getElementById('activityHistoryModal');
+  if(mask) mask.style.display = 'flex';
+  renderActivityFilters();
+  return loadActivityHistory();
+}
+
+function closeActivityHistory(){
+  const mask = document.getElementById('activityHistoryModal');
+  if(mask) mask.style.display = 'none';
+}
+
 function accountRow(a){
   const realmBadge = a.realm === 'cn'
     ? '<span class="realm-badge-cn">国内版</span>'
@@ -4910,6 +5127,7 @@ function accountRow(a){
     + (a.machineId ? ('<div class="mono" style="color:var(--dim);font-size:10px;margin-top:2px" title="由账号UID稳定派生的专属设备码，防多号关联风控">设备码: ' + esc(a.machineId.slice(0,14)) + '...</div>') : '')
     + err + pills + limitPills + '</td>'
     + '<td style="text-align:center" data-label="状态">' + state + '</td>'
+    + '<td style="text-align:center" data-label="今日活动">' + activityStatusChip(a) + '</td>'
     + '<td style="text-align:center" data-label="出口">' + slotSelectHtml(a) + '</td>'
     + '<td style="text-align:left;white-space:nowrap" data-label="积分">' + credText + '</td>'
     + '<td style="text-align:right" data-label="请求">' + fmt(usage.requests) + '</td>'
@@ -5121,6 +5339,7 @@ function renderAccounts(){
     + '<th style="text-align:center;width:76px">版本</th>'
     + '<th style="text-align:left">账号</th>'
     + '<th style="text-align:center;width:84px">状态</th>'
+    + '<th style="text-align:center;width:118px">今日活动</th>'
     + '<th style="text-align:center;width:150px">出口</th>'
     + '<th style="text-align:left;width:120px">积分</th>'
     + '<th style="text-align:right;width:70px">请求</th>'
@@ -5134,7 +5353,12 @@ function renderAccounts(){
 
 async function loadAccounts(){
   try{
-    const [acct, byAcct] = await Promise.all([getJSON('/accounts?realm=all'), getJSON('/usage/by-account', POLL_READ)]);
+    const [acct, byAcct] = await Promise.all([
+      getJSON('/accounts?realm=all'),
+      getJSON('/usage/by-account', POLL_READ),
+      // 今日活动与账号列表并行取；它自己吞掉失败，读不到历史不该让账号区跟着坏。
+      loadActivityToday(),
+    ]);
     window.ACCOUNTS = acct.accounts || [];
     USAGE_BY_ACCOUNT = {};
     (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
