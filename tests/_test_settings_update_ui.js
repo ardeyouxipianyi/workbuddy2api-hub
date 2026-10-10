@@ -1,12 +1,14 @@
 /* 设置页「更新」卡片的契约：只显示结论、只检查，不安装。
  *
  * 这一片是纯前端消费：后端 GET /updates 与 POST /updates/check 已经落地，
- * 面板负责把结论画出来、把两个动作接上去。这里钉住四件事：
+ * 面板负责把结论画出来、把两个动作接上去。这里钉住五件事：
  *
  *   1. 三个字段（当前版本 / 最新版本 / 状态）真的被填上，且状态随结论变化；
  *   2. 「立即检查更新」打到 POST /updates/check；
- *   3. 「每天自动检查更新」走既有 /settings/save 契约，不用浏览器本地存储；
- *   4. **不下载、不安装、不重启**：安装按钮固定禁用，页面只访问自己网关的
+ *   3. **200 不等于成功**：响应体里 ok=false 或 last_error 非空时，卡片与提示
+ *      都必须报失败，不能对着一次失败的检查说「已是最新版本」；
+ *   4. 「每天自动检查更新」走既有 /settings/save 契约，不用浏览器本地存储；
+ *   5. **不下载、不安装、不重启**：安装按钮固定禁用，页面只访问自己网关的
  *      相对路径——浏览器从不直接接触 GitHub，所以也就不存在任何凭证依赖。
  *
  * Run with Node: node tests/_test_settings_update_ui.js
@@ -164,7 +166,60 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('自动检查关着也能手动检查（开关未被当作前置条件）',
         posts().filter(c => c.url === '/updates/check').length === 1, urls().join(', '));
 
-  // ---- 4. 开关走既有 settings save 契约 ----
+  // ---- 4. 200 不等于成功：ok=false / last_error 非空都算检查失败 ----
+  // 后端把「检查没跑起来」和「这一次查询失败」都放在 200 的响应体里回来。
+  // 按钮必须报失败——以前它对着一次失败的检查说「已是最新版本」。
+  toasts.length = 0;
+  updatesPayload = {
+    ok: true, current_version: '1.6.17', latest_version: null,
+    update_available: false, enabled: true, last_error: 'HTTP 403',
+    last_attempt: '2026-10-09 14:00:00',
+  };
+  const failBtn = {disabled: false};
+  await api.checkUpdateNow(failBtn);
+  await settled();
+  check('200 + last_error 显示「检查失败」',
+        element('setUpdateState').textContent === '(检查失败)',
+        element('setUpdateState').textContent);
+  check('200 + last_error 把原因写出来',
+        element('setUpdateError').textContent === '上次检查失败：HTTP 403',
+        element('setUpdateError').textContent);
+  check('200 + last_error 不报「已是最新」',
+        !toasts.some(([m]) => String(m).indexOf('已是最新') !== -1),
+        JSON.stringify(toasts));
+  check('200 + last_error 的提示是失败态',
+        toasts.length === 1 && toasts[0][1] === 'bad' &&
+        String(toasts[0][0]).indexOf('检查更新失败') === 0, JSON.stringify(toasts));
+  check('失败之后按钮仍然恢复可用', failBtn.disabled === false);
+
+  toasts.length = 0;
+  updatesPayload = {ok: false, msg: '更新检查未运行'};
+  await api.checkUpdateNow({disabled: false});
+  await settled();
+  check('200 + ok=false 显示「检查失败」',
+        element('setUpdateState').textContent === '(检查失败)',
+        element('setUpdateState').textContent);
+  check('200 + ok=false 用后端的 msg 说明原因',
+        element('setUpdateError').textContent === '上次检查失败：更新检查未运行',
+        element('setUpdateError').textContent);
+  check('200 + ok=false 不报「已是最新」',
+        !toasts.some(([m]) => String(m).indexOf('已是最新') !== -1),
+        JSON.stringify(toasts));
+  check('200 + ok=false 的提示是失败态',
+        toasts.length === 1 && toasts[0][1] === 'bad', JSON.stringify(toasts));
+
+  toasts.length = 0;
+  updatesPayload = {
+    ok: true, current_version: '1.6.17', latest_version: '1.6.17',
+    update_available: false, enabled: true, last_error: '',
+  };
+  await api.checkUpdateNow({disabled: false});
+  await settled();
+  check('真的没有新版本时才报「已是最新」',
+        toasts.length === 1 && toasts[0][1] === 'ok' &&
+        String(toasts[0][0]).indexOf('已是最新') !== -1, JSON.stringify(toasts));
+
+  // ---- 5. 开关走既有 settings save 契约 ----
   calls.length = 0;
   element('setUpdateCheckEnabled').checked = true;
   const saveBtn = {disabled: false};
@@ -178,7 +233,7 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('没有走浏览器本地存储（偏好由服务端保存）',
         !calls.some(c => c.url.indexOf('localStorage') !== -1), urls().join(', '));
 
-  // ---- 5. 不下载、不安装、不重启 ----
+  // ---- 6. 不下载、不安装、不重启 ----
   const installBtn = element('setUpdateInstallBtn');
   check('安装按钮固定禁用（本版没有安装路径）', installBtn.disabled === true);
   check('安装按钮说明为什么不可用',
@@ -190,7 +245,7 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('没有任何安装/下载/重启端点被调用',
         !calls.some(c => /install|download|restart|reload/i.test(c.url)), urls().join(', '));
 
-  // ---- 6. 读取失败不拖垮设置页的其它区块 ----
+  // ---- 7. 读取失败不拖垮设置页的其它区块 ----
   updatesStatus = 500;
   calls.length = 0;
   await api.loadSettings(true);

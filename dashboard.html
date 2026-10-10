@@ -7501,9 +7501,18 @@ async function saveLocalWebTools(btn){
    就是还没有。 */
 const UPDATE_INSTALL_AVAILABLE = false;
 
+/* 200 不等于成功：后端把「检查根本没跑起来」（ok=false）和「这一次查询失败」
+   （last_error 非空）都放在 200 的响应体里回来。两处都要看，否则按钮会对着
+   一次失败的检查报「已是最新版本」——这正是它以前做的事。 */
+function updateCheckFailure(data){
+  if(!data) return '响应为空';
+  if(data.ok === false) return data.msg || '更新检查未运行';
+  return data.last_error || '';
+}
+
 function updateStateLabel(data){
   if(!data) return '未知';
-  if(data.last_error) return '检查失败';
+  if(updateCheckFailure(data)) return '检查失败';
   if(data.update_available) return '发现新版本';
   if(data.latest_version) return '已是最新';
   return '尚未检查';
@@ -7511,6 +7520,7 @@ function updateStateLabel(data){
 
 function applyUpdateStatus(data){
   data = data || {};
+  const failure = updateCheckFailure(data);
   const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
   set('setUpdateCurrent', data.current_version);
   set('setUpdateLatest', data.latest_version);
@@ -7518,13 +7528,13 @@ function applyUpdateStatus(data){
   const state = document.getElementById('setUpdateState');
   if(state){
     state.textContent = '(' + updateStateLabel(data) + ')';
-    state.style.color = data.last_error ? 'var(--warn)'
+    state.style.color = failure ? 'var(--warn)'
       : data.update_available ? 'var(--accent2)' : 'var(--dim)';
   }
   const enabled = document.getElementById('setUpdateCheckEnabled');
   if(enabled) enabled.checked = data.enabled === true;
   const err = document.getElementById('setUpdateError');
-  if(err) err.textContent = data.last_error ? ('上次检查失败：' + data.last_error) : '';
+  if(err) err.textContent = failure ? ('上次检查失败：' + failure) : '';
   const install = document.getElementById('setUpdateInstallBtn');
   if(install){
     install.disabled = !UPDATE_INSTALL_AVAILABLE;
@@ -7547,6 +7557,8 @@ async function checkUpdateNow(btn){
   try {
     const data = await postJSON('/updates/check', {});
     applyUpdateStatus(data);
+    const failure = updateCheckFailure(data);
+    if(failure){ toast('检查更新失败: ' + failure, 'bad'); return; }
     toast(data.update_available ? ('发现新版本 ' + data.latest_version) : '已是最新版本', 'ok');
   } catch(e) {
     toast('检查更新失败: ' + e.message, 'bad');
