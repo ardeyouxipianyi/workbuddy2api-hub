@@ -12,8 +12,11 @@
 # 红 = 不允许合并。人工核对无碍后，由维护者给 PR 加标签 `revert-confirmed`
 # 放行（labeled 事件会触发重跑）；推荐的正路是把分支重放到最新 main。
 #
-# 本检查的逻辑内联在本文件里：workflow 定义取自 base 分支，PR 无法通过修改
-# 脚本来绕过它。纯标准库，不需要 checkout。
+# 本检查的逻辑内联在本文件里（不引用仓库里的脚本）。注意 GitHub 的机制：
+# 对 pull_request 事件，workflow 定义取自**合并 ref**（base + 本 PR）——所以
+# 任何对这道检查的改动都会直接出现在 PR diff 里、评审可见；把它设为 required
+# 后，删除/禁用会让检查缺失、合并被拒（改弱属于评审范围）。
+# 纯标准库，不需要 checkout。
 #
 # 已知盲区（重要）：与 base 冲突的 PR 根本不会触发 pull_request 工作流
 # （GitHub 建不出 merge ref）——那种情况请靠分支保护「Require a pull request」
