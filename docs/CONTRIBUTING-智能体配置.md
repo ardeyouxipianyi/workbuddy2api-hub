@@ -19,8 +19,8 @@
 
 ```
 wb-proxy/
-├── wb_agents.py               # 核心模块：文本编辑器、注册表、备份还原、公共 API
-├── wb_proxy.py                # 路由层：/agents, /agents/apply, /agents/restore
+├── wb_agents.py               # 核心模块：文本编辑器、注册表、备份还原、公共 API、CLI 入口
+├── wb_proxy.py                # 路由层：/agents, /agents/cli, /agents/apply, /agents/restore
 ├── dashboard.html             # 交互层：智能体配置看板、状态渲染与异步请求
 └── accounts/                  # 数据持久化目录（由网关管理）
     ├── integration-state.json # 智能体集成状态账本
@@ -128,7 +128,7 @@ python tests/_test_agents.py
 python tests/run_all.py
 ```
 
-完成上述三步后，网关后端 `overview()` 会自动将新客户端列入 `/agents` 返回的列表中，前端看板会自动渲染对应的配置卡片，无需修改任何核心调度逻辑！
+完成上述三步后，网关后端 `overview()` 会自动将新客户端列入 `/agents` 返回的列表中，前端看板会自动渲染对应的配置卡片，命令行配置器也会自动获得 `--client <id>` 的 apply / restore 能力——无需修改任何核心调度逻辑！
 
 ---
 
@@ -267,7 +267,47 @@ python tests/run_all.py
 
 ---
 
-## 8. 测试规范与验证指令
+## 8. 命令行配置器（CLI）
+
+`wb_agents.py` 同时是可执行的配置器，供**客户端不在网关机器上**的场景使用（网关跑在服务器 / NAS / 路由器 / 容器，客户端在另一台电脑）。它不走网关的 `/agents/apply`（那条路只认回环、并拒绝容器部署），而是在客户端机器本地完成全部写入，只通过 HTTP 从网关读取模型表。
+
+### 8.1 命令一览
+
+```bash
+python wb_agents.py list     [--home DIR] [--state-dir DIR] [--json]
+python wb_agents.py status   [--home DIR] [--state-dir DIR] [--json]
+python wb_agents.py apply    --client CLIENT --base-url URL [--key KEY] [--model MODEL]
+                             [--no-models] [--dry-run] [--home DIR] [--state-dir DIR] [--json]
+python wb_agents.py restore  --client CLIENT [--home DIR] [--state-dir DIR] [--json]
+```
+
+- **Key 解析顺序**：`--key` → 环境变量 `WB_PROXY_API_KEY` → 交互式 `getpass` 提示。提示仅在 stdin 与 stdout **都是终端**时出现：Windows 上 NUL 设备的 `isatty()` 也为真，而 `getpass` 会直接读 `CONIN$`——在被拉起、没有控制台的进程里会造成永久阻塞；非交互环境缺 Key 时直接报错退出（码 1）。
+- **模型表**：默认（等价于 `--models-from-gateway`）带 Key 请求 `GET /v1/models`，为 OpenCode / DSH / Crush 填入内嵌模型表，同时验证 Key。失败区分 401（Key 被拒）与其他错误；`--no-models` 完全跳过（也不校验 Key）。
+- **`--dry-run`**：调用 `plan()` 只构建「将要写入的内容」，不备份、不落盘、不写 state；打印的内容与真实写入逐字节一致（同一生成路径）。
+- **退出码**：`0` 成功；`1` 配置错误（`AgentConfigError`）；`2` 参数错误（argparse）。
+- `--home` / `--state-dir` / `--json` 写在子命令前或后都可以（共享父解析器 + `SUPPRESS` 默认值，避免子解析器覆盖顶层值）。
+
+### 8.2 与网关侧（看板）的关系
+
+| 维度 | 看板一键配置（服务端） | CLI（客户端） |
+|---|---|---|
+| 运行位置 | 网关进程所在机器 | 客户端所在机器 |
+| 可用条件 | 回环访问 + 非容器 / OpenWrt | 无限制（能 HTTP 到网关即可） |
+| 状态与备份 | `<ACCOUNTS_DIR>/integration-state.json`、`agent-backups/` | `~/.wb-agent-config/`（`--state-dir` 可覆盖），每台机器一份 |
+| 写入与还原逻辑 | `integrate()` / `restore()` / `overview()` / `plan()`（完全共用） | 同左 |
+
+`plan(client_id, base_url, api_key, model, models, home)` 是公开的纯函数：`integrate()` 先 `plan()` 得到全部目标文件内容，再执行「阶段一备份 + 阶段二两阶段写入」。CLI 的 dry-run 与真实写入因此不可能漂移。
+
+网关侧另提供 `GET /agents/cli`（免面板鉴权、无回环限制，内容为仓库内 `wb_agents.py` 原文，不含任何机密），方便远程机器一行 `curl` 取配置器。
+
+### 8.3 备份语义的两条边界
+
+- 首次 apply 时**已存在**的文件：保留**最早**一份备份，之后无论 apply 多少次、Key 换几次，`restore` 都回到首次接入前的字节；
+- 首次 apply 时**不存在**（由本模块创建）的文件：只要它仍逐字节等于我们最后一次写入的内容，就仍视为「我们的文件」，`restore` 直接删除（避免把含 API Key 的自产文件当成原件"还原"）；一旦被用户手改过，它就变回用户文件，再次 apply 会为其建立备份，`restore` 恢复用户版本而不是删除。
+
+---
+
+## 9. 测试规范与验证指令
 
 维护或扩展本模块时，必须确保以下测试命令通过：
 
@@ -278,9 +318,12 @@ python -m py_compile wb_agents.py wb_proxy.py
 # 2. 智能体专项单元测试与契约测试
 python tests/_test_agents.py
 
-# 3. 前端交互 Handler 契约验证
+# 3. 命令行配置器端到端测试（子进程驱动真实 CLI + 桩网关，无网络）
+python tests/_test_agents_cli.py
+
+# 4. 前端交互 Handler 契约验证
 node tests/_test_dashboard_handlers.js
 
-# 4. 全套套件综合回归
+# 5. 全套套件综合回归
 python tests/run_all.py
 ```

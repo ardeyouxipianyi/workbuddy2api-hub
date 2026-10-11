@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 119 个套件：86 个 Python + 33 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 120 个套件：87 个 Python + 33 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -227,6 +227,23 @@ Codex App 这类客户端会在 Responses 请求里声明 `web_search` / `web_fe
 - **还原**：byte-exact 回到首次接入前，网关新建的文件会被清理；若之后手动改过配置，看板会提示「检测到外部修改」，还原仍会覆盖回原件；
 - **密钥安全**：API Key 只写进客户端自己的本地配置目录（权限仅限当前系统用户），单文件超过 8MB 拒绝编辑。
 
+**在另一台机器上接入（远程 / 非本机）**：看板的一键配置运行在网关进程里，改的是**网关所在机器**的配置目录——所以它只在网关本机、且用 `127.0.0.1` 打开看板时可用（远程访问、容器 / OpenWrt 部署下按设计隐藏入口）。客户端装在别的电脑（网关跑在服务器 / NAS / 路由器上）时，改用自带的配置器 CLI：它在**客户端所在的机器**上运行，写本机配置、只通过 HTTP 从网关取模型表：
+
+```bash
+# 1. 取配置器（网关直接提供该文件；也可从仓库 / 绿色包复制 wb_agents.py）
+curl -fsSL http://<网关地址>:8788/agents/cli -o wb_agents.py
+
+# 2. 一条命令接入（需要 Python 3.9+，Key 在「设置」页生成）
+python wb_agents.py list                                   # 本机装了哪些客户端
+python wb_agents.py apply --client codex --base-url http://<网关地址>:8788/v1 --key sk-xxxx
+python wb_agents.py restore --client codex                 # 随时字节级还原
+```
+
+- 支持 `claude-code` / `codex` / `opencode` / `dsh` / `crush` 五个客户端，与看板共用同一套写入、备份与还原逻辑（`plan()` 同时驱动 `--dry-run` 与真实写入）；
+- 默认带 Key 请求一次 `GET /v1/models`：既为 OpenCode / DSH / Crush 填入模型表，也顺带验证 Key（401 = Key 被拒）；网关不可达或想完全离线时加 `--no-models`；
+- 状态与备份存在该机器自己的 `~/.wb-agent-config/`（可用 `--state-dir` 覆盖），每台机器一份，`restore` 只对执行过 `apply` 的机器有效；
+- `--dry-run` 只打印将要写入的内容、不落盘；Key 也可用环境变量 `WB_PROXY_API_KEY` 传入。
+
 模块内部设计与新增客户端的方法见 **[docs/CONTRIBUTING-智能体配置.md](docs/CONTRIBUTING-智能体配置.md)**。
 
 ### 9. 剩余用量估算（数据看板 → 剩余用量估算）
@@ -316,6 +333,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | POST | /pricing/refresh | 立即取一次价（需面板会话） |
 | POST | /pricing/mapping | 手填 / 清除「模型 → OpenRouter id」运行期映射，随后自动取价（需面板会话） |
 | GET | /agents | 客户端探测概览、支持的模型清单及网关连接地址 |
+| GET | /agents/cli | 智能体配置器源码（供远程机器直接 `curl` 取用，免面板鉴权；与仓库内 `wb_agents.py` 逐字节一致） |
 | POST | /agents/apply | 一键写入客户端配置并备份原件（需面板会话） |
 | POST | /agents/restore | 一键还原客户端至首次配置前的状态（需面板会话） |
 | GET | /tasks | 国内版成长任务、连续打卡与猫猫日常状态 |

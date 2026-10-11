@@ -11914,6 +11914,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+        # The standalone configurator, for clients on machines that do not run
+        # the gateway. Served before the panel gate and deliberately without a
+        # session: the machines that need it are exactly the ones that cannot
+        # pass the loopback check, and the body is public source code (the
+        # same wb_agents.py shipped in the repository, no secrets inside).
+        if path == "/agents/cli":
+            return self._get_agents_cli()
         if self._is_panel_route(path) and not self._panel_ok():
             return self._error(401, "panel password required", "invalid_request_error")
         if path in ("/", "/dashboard", "/ui"):
@@ -13071,6 +13078,32 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return models
+
+    def _get_agents_cli(self):
+        """Serve wb_agents.py so a remote machine can fetch the configurator.
+
+        No panel session and no loopback check on purpose: the callers are
+        other machines, which is the whole point of the CLI (it writes the
+        config files on the machine it runs on). The file carries no secrets
+        - it is byte-identical to the copy in the repository.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "wb_agents.py")
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+        except OSError as exc:
+            return self._error(500, "wb_agents.py unavailable: %s" % exc)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Disposition",
+                         'inline; filename="wb_agents.py"')
+        self.send_header("Content-Length", str(len(body)))
+        if cors_origin_allowed(self.path):
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+        return
 
     def _get_agents(self):
         if not self._agents_client_allowed():
