@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 121 个套件：88 个 Python + 33 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 122 个套件：89 个 Python + 33 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -354,6 +354,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 ### Unreleased
+
+- **修复：`remaining` 的 checkpoint 从来没能被采纳（写者/校验者口径矛盾）**：折叠侧按日志顺序追加，而 `at` 取的是请求**完成**时刻——多线程下会回退几毫秒（本机日志有一对 4.96ms，路由器自己写出的 checkpoint 里有一对 0.47ms），加载侧却要求每个 (账号 × 模型) 的 `at` 严格单调，一处乱序就整份拒绝：每次重启 `/usage/remaining` 都退回从零冷扫（真机实测 3.05~4.5s）。现在折叠侧按 `at` 有序插入（只在乱序时才付 O(n) 挪动，pair 通常几十~几百条；顺序追加仍是 O(1)），加载侧对旧版（日志顺序）缓冲做一次稳定排序并重建累计和/`base`（(at, 增量) 配对不变、已裁剪的死前缀物理丢弃、`base` 记绝对值），形状校验不再要求有序。同一处乱序在窗口求和上的连带错误一并修掉：`_range_sum`/`_range_sum_open` 的二分前提恢复后，乱序日志下的窗口和等于「按排序后重算」的值（旧版会少算、甚至算成 0）。新增 `tests/_test_remaining_checkpoint_order.py`（12 项：乱序日志的折叠与窗口和、乱序/旧版 checkpoint 的重启采纳与逐字节对拍、截断与同尺寸重写仍然作废、两个独立进程的冷折 vs 采纳对拍）。
 
 - **修复「网页通道打卡」在认证代理下必然 407**：账号绑定带 user/pwd 的代理槽时，网页通道那一步固定失败并回 `OSError: Tunnel connection failed: 407 Proxy Authentication Required`，而桌面通道与面板「出口 IP 测试」都正常。原因是 `wb_webagent.AcpChannel._connect()` 用裸 `http.client` + `set_tunnel()` 直连代理，只传了 `host/port`：`urllib.request.ProxyHandler` 会替 urlopen 那条路径把 URL 里的凭据转成 `Proxy-Authorization: Basic ...`，而 `set_tunnel()` 不带这个头——于是同一个代理 URL 在两条通道上行为不一致。
   - 现在 `_connect()` 走 `_proxy_parts()` 解析代理 URL，把 `Proxy-Authorization` 显式塞进 CONNECT（取值口径与 `ProxyHandler.proxy_open` 一致：先 `unquote` 再 base64），两种写法都认：`http://user:pass@host:port` 与无 scheme 的 `user:pass@host:port`（后者此前连 host/port 都会被 `urlparse` 误判成 scheme，一并修正）；没填凭据时不发该头，免认证代理行为不变。

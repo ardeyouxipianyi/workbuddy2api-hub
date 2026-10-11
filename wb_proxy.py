@@ -1454,10 +1454,89 @@ def _pair_buffer(state, key):
 
 
 def _pair_append(buf, at, tokens):
+    """Append one (at, tokens) sample, keeping the buffer sorted by `at`.
+
+    The rows arrive in log order, but `at` is the request *completion* clock:
+    two request threads finishing milliseconds apart can append out of order
+    (the real log has a pair 4.96ms apart; the router's own checkpoint one
+    0.47ms). `_range_sum` bisects these lists, so a single inversion would
+    make the window sums skip or double-count whole stretches - the sorted
+    insert (O(n) memmove on a pair that holds tens to hundreds of samples)
+    is what keeps the bisection premise true. The common in-order append
+    stays O(1) exactly as before.
+    """
     # coerce: a log row is free text, and these buffers only ever hold numbers
     tokens = int(tokens)
-    buf["at"].append(float(at))
-    buf["cum"].append((buf["cum"][-1] if buf["cum"] else 0) + tokens)
+    at = float(at)
+    ats = buf["at"]
+    if not ats or at >= ats[-1]:
+        ats.append(at)
+        buf["cum"].append((buf["cum"][-1] if buf["cum"] else 0) + tokens)
+        return
+    cum = buf["cum"]
+    head = buf["head"]
+    index = bisect.bisect_right(ats, at)
+    if index < head:
+        # The sample belongs before the dead prefix: compact it away first
+        # (same absolute-base rule as _pair_trim), because the freshly folded
+        # row is live by definition and must not land behind `head`.
+        buf["base"] = cum[head - 1]
+        del ats[:head]
+        del cum[:head]
+        buf["head"] = 0
+        index = bisect.bisect_right(ats, at)
+    ats.insert(index, at)
+    # cum holds absolute prefix sums; every entry after the insert point
+    # moves up by this sample's tokens.
+    cum.insert(index, (cum[index - 1] if index else buf["base"]) + tokens)
+    for i in range(index + 1, len(cum)):
+        cum[i] += tokens
+
+
+def _pair_repair(buf):
+    """Canonicalize a (possibly out-of-order) pair buffer; False = unrepairable.
+
+    A checkpoint written before this fix carries the buffers in log order,
+    where `at` can regress by milliseconds (the router's own 674KB file does
+    exactly that and was rejected whole). The loading side no longer demands
+    an ordered list: this function stable-sorts the live region by `at` and
+    rebuilds cum/head/base, so every (at, amount) pairing survives and each
+    window sum equals the value recomputed on the sorted sequence. The dead
+    prefix is physically dropped here (base keeps the absolute rule of
+    _pair_trim's compaction), which leaves the state with exactly the live
+    entries a cold fold would have. A negative amount (cum going backwards)
+    is corrupt data: False makes the caller reject the entry and fall back
+    to the cold fold.
+    """
+    at = buf["at"]
+    cum = buf["cum"]
+    head = buf["head"]
+    if len(at) != len(cum) or not 0 <= head <= len(at):
+        return False
+    if head >= len(at):
+        return False
+    origin = cum[head - 1] if head else buf["base"]
+    pairs = []
+    prev = origin
+    for i in range(head, len(cum)):
+        amount = cum[i] - prev
+        if amount < 0:
+            return False
+        pairs.append((at[i], amount))
+        prev = cum[i]
+    pairs.sort(key=lambda item: item[0])
+    rebuilt_at = []
+    rebuilt_cum = []
+    total = origin
+    for value, amount in pairs:
+        rebuilt_at.append(value)
+        total += amount
+        rebuilt_cum.append(total)
+    buf["at"] = rebuilt_at
+    buf["cum"] = rebuilt_cum
+    buf["head"] = 0
+    buf["base"] = origin
+    return True
 
 
 def _pair_trim(buf, cutoff):
@@ -5718,9 +5797,13 @@ def _usage_cache_buckets_ok(buckets):
 def _usage_cache_remaining_ok(entry):
     """剩余用量折叠：事件表 + 每个 (账号, 模型) 的 at/cum 两个平行列表。
 
-    at 必须单调（窗口求和靠二分找左端）、cum 必须单调且与 at 等长——这两条
-    是加载后一切查询的前提，坏一条就会静默算出错数字，所以逐元素走一遍：
-    一次重启付 1~3ms，换掉一次全量冷扫。
+    cum 必须单调（回退=负增量=坏数据）且与 at 等长、base 不可能超过 cum[0]
+    ——这些是加载后一切查询的前提，坏一条就会静默算出错数字，所以逐元素走
+    一遍：一次重启付 1~3ms，换掉一次全量冷扫。
+    `at` **不要求有序**：写入侧的 at 是请求完成时刻，多线程下会回退几毫秒
+    （真机日志与路由器自己写出的 checkpoint 都踩过），旧版在这里整份拒绝、
+    每次重启都退回冷扫。加载端改为由 _pair_repair 做一次稳定排序（配对不变、
+    前缀和重算），所以有序性校验搬到了那里，形状检查留在这里。
     """
     if not isinstance(entry, dict):
         return False
@@ -5767,13 +5850,9 @@ def _usage_cache_remaining_ok(entry):
             return False
         if pair["head"] < 0 or pair["head"] > len(at) or pair["base"] < 0:
             return False
-        last_at = None
         for value in at:
             if not _usage_cache_number(value):
                 return False
-            if last_at is not None and value < last_at:
-                return False
-            last_at = value
         last_cum = None
         for value in cum:
             if not _usage_cache_int(value):
@@ -5997,6 +6076,9 @@ def _usage_cache_adopt_remaining(state, log_key):
 
     事件日志的位置在这里单独校验：它很小，位置对不上就整份放弃——冷读一遍
     两个文件比「先采用一半、再发现对不上」简单得多。
+    每个 pair 还要过一遍 _pair_repair：旧版写出的缓冲按日志顺序排列，`at`
+    可能回退几毫秒，这里统一整理成按 `at` 稳定排序的规范形态（有序的文件
+    上它就是一次 O(n) 的核对）。整理不了的（负增量=坏数据）整份放弃。
     """
     entry = _usage_cache_take("remaining")
     if entry is None or not _usage_cache_remaining_ok(entry):
@@ -6017,8 +6099,11 @@ def _usage_cache_adopt_remaining(state, log_key):
     usage = {}
     for pair_key, pair in entry["usage"].items():
         uid, _, model = pair_key.partition("\x1f")
-        usage[(uid, model)] = {"at": list(pair["at"]), "cum": list(pair["cum"]),
-                               "head": pair["head"], "base": pair["base"]}
+        buf = {"at": list(pair["at"]), "cum": list(pair["cum"]),
+               "head": pair["head"], "base": pair["base"]}
+        if not _pair_repair(buf):
+            return False
+        usage[(uid, model)] = buf
     state["log"] = {"offset": offset, "key": tuple(entry["key"]), "tail": tail}
     state["file"] = file_state
     state["usage"] = usage
