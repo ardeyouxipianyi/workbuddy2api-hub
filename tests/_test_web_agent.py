@@ -4,6 +4,7 @@ POST /console/as/conversations/ 只是排队；agent 要等客户端接上沙箱
 HTTP + SSE）并请求这一轮才会跑。这里钉住那个调用顺序，以及两种结果怎么上报：
 跑完（completed）和没跑完。
 """
+import base64
 import io
 import json
 import os
@@ -140,6 +141,80 @@ class SseParsingTests(unittest.TestCase):
         self.assertFalse(W.CLIENT_CAPABILITIES["fs"]["readTextFile"])
         self.assertFalse(W.CLIENT_CAPABILITIES["fs"]["writeTextFile"])
         self.assertEqual(W.PROTOCOL_VERSION, 1)
+
+
+class ProxyTunnelTests(unittest.TestCase):
+    """账号绑了「要认证的代理」时，CONNECT 必须带 Proxy-Authorization。
+
+    urllib 的 ProxyHandler 会替 urlopen 那条路径加这个头，裸 http.client +
+    set_tunnel 不会：少了它，认证代理一律回 407，而桌面通道却正常——表现就是
+    「每日活跃对话成功完成（网页通道失败：OSError: Tunnel connection failed:
+    407 Proxy Authentication Required）」。
+    """
+
+    def test_credentials_are_parsed_from_both_url_shapes(self):
+        for url in ("http://bob:secret@proxy.example:8080",
+                    "bob:secret@proxy.example:8080"):
+            host, port, headers = W._proxy_parts(url)
+            self.assertEqual(host, "proxy.example", url)
+            self.assertEqual(port, 8080, url)
+            self.assertEqual(headers["Proxy-Authorization"],
+                             "Basic " + base64.b64encode(b"bob:secret").decode(), url)
+
+    def test_escaped_credentials_match_urllib(self):
+        # 与 urllib.request.ProxyHandler.proxy_open 同一口径：先 unquote 再 base64。
+        _host, _port, headers = W._proxy_parts("http://us%40er:pa%3Ass@proxy.example:8080")
+        self.assertEqual(headers["Proxy-Authorization"],
+                         "Basic " + base64.b64encode(b"us@er:pa:ss").decode())
+
+    def test_a_proxy_without_credentials_sends_no_header(self):
+        _host, _port, headers = W._proxy_parts("http://proxy.example:8080")
+        self.assertEqual(headers, {})
+
+    def test_the_tunnel_carries_the_header(self):
+        captured = {}
+
+        class FakeConn(object):
+            def __init__(self, host, port, timeout=None):
+                captured["host"] = host
+                captured["port"] = port
+
+            def set_tunnel(self, host, port, headers=None):
+                captured["tunnel"] = (host, port, headers)
+
+        real = W.http.client.HTTPSConnection
+        W.http.client.HTTPSConnection = FakeConn
+        try:
+            channel = W.AcpChannel("https://box.example/acp", "tok", "ua",
+                                   proxy="http://bob:secret@proxy.example:8080")
+            channel._connect()
+        finally:
+            W.http.client.HTTPSConnection = real
+        self.assertEqual(captured["host"], "proxy.example")
+        self.assertEqual(captured["port"], 8080)
+        self.assertEqual(captured["tunnel"][0], "box.example")
+        self.assertEqual(captured["tunnel"][1], 443)
+        self.assertEqual(captured["tunnel"][2]["Proxy-Authorization"],
+                         "Basic " + base64.b64encode(b"bob:secret").decode())
+
+    def test_a_direct_connection_never_tunnels(self):
+        captured = {}
+
+        class FakeConn(object):
+            def __init__(self, host, port, timeout=None):
+                captured["host"] = host
+
+            def set_tunnel(self, host, port, headers=None):
+                captured["tunnel"] = True
+
+        real = W.http.client.HTTPSConnection
+        W.http.client.HTTPSConnection = FakeConn
+        try:
+            W.AcpChannel("https://box.example/acp", "tok", "ua")._connect()
+        finally:
+            W.http.client.HTTPSConnection = real
+        self.assertEqual(captured["host"], "box.example")
+        self.assertNotIn("tunnel", captured)
 
 
 if __name__ == "__main__":

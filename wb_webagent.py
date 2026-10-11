@@ -15,6 +15,7 @@ issue #90：POST /console/as/conversations/ 只是**排队**了一条会话。ag
 这个。这里只实现打卡需要的那点协议：不带工具、不接终端、不回调文件系统。
 """
 
+import base64
 import http.client
 import json
 import queue
@@ -29,6 +30,40 @@ CLIENT_CAPABILITIES = {
     "fs": {"readTextFile": False, "writeTextFile": False},
     "terminal": False,
 }
+
+
+def _proxy_parts(proxy_url):
+    """解析代理 URL → (host, port, CONNECT 头)。
+
+    两种写法都要认：`http://user:pass@host:port`，以及无 scheme 的
+    `user:pass@host:port`（面板两种都有人填，urllib 那条路径也两种都收）。
+    凭据的取值口径与 urllib.request.ProxyHandler.proxy_open 一致（先 unquote
+    再 base64），这样同一个代理 URL 在桌面通道与网页通道上生成同一份凭据。
+    """
+    raw = str(proxy_url or "").strip()
+    parsed = urllib.parse.urlparse(raw)
+    host, port = parsed.hostname, parsed.port
+    user, password = parsed.username, parsed.password
+    if not host:
+        # 无 scheme 的写法 urlparse 认不出来（`user:pass@h:p` 会被当成 scheme），
+        # 手动切 authority。
+        authority = raw.split("://")[-1].split("/")[0]
+        userinfo, _, hostport = authority.rpartition("@")
+        host, _, port_text = hostport.rpartition(":")
+        if not host:                       # 没有端口
+            host, port_text = hostport, ""
+        try:
+            port = int(port_text) if port_text else None
+        except ValueError:
+            port = None
+        if userinfo:
+            user, _, password = userinfo.partition(":")
+    headers = {}
+    if user and password:
+        creds = "%s:%s" % (urllib.parse.unquote(user), urllib.parse.unquote(password))
+        headers["Proxy-Authorization"] = "Basic " + base64.b64encode(
+            creds.encode("utf-8")).decode("ascii")
+    return host, port, headers
 
 
 class AcpError(Exception):
@@ -67,9 +102,12 @@ class AcpChannel(object):
         conn = cls(parsed.hostname, port, timeout=self.timeout)
         if self.proxy:
             # 账号配了代理时走 CONNECT，和 urlopen 那条路径保持一致。
-            proxy = urllib.parse.urlparse(self.proxy)
-            conn = cls(proxy.hostname, proxy.port or 8080, timeout=self.timeout)
-            conn.set_tunnel(parsed.hostname, port)
+            # 凭据必须显式塞进 CONNECT：urllib 的 ProxyHandler 会替我们加
+            # Proxy-Authorization，裸 http.client + set_tunnel 不会，缺了它
+            # 认证代理一律回 407（桌面通道正常、网页通道 407 就是这个原因）。
+            host, proxy_port, tunnel_headers = _proxy_parts(self.proxy)
+            conn = cls(host, proxy_port or 8080, timeout=self.timeout)
+            conn.set_tunnel(parsed.hostname, port, headers=tunnel_headers)
         return conn
 
     def open(self):
