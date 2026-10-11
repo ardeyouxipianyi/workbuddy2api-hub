@@ -1,0 +1,374 @@
+# 回滚检查（revert guard）
+#
+# 目的：挡住「PR 合并后把 main 上已有的代码弄丢」这一类事故。
+# 参照 issue #270：解冲突时取了单侧，dashboard.html 751 行消失、CI 6 红；
+# 共同形状 = 分支基于旧 main + 与 main 近期改过的同一文件有重叠。
+#
+# 判定口径：核对 GitHub 预计算的合并结果（PR 的 merge_commit_sha）。
+#   * base 自 merge-base 以来新增的代码行，在合并结果里必须还在；
+#   * 本 PR 自己删掉的行（PR diff 的 '-' 侧）不计——合法改写不算回退；
+#   * 单文件「无法解释的缺失」≥ 5 行 → 红。
+#
+# 红 = 不允许合并。人工核对无碍后，由维护者给 PR 加标签 `revert-confirmed`
+# 放行（labeled 事件会触发重跑）；推荐的正路是把分支重放到最新 main。
+#
+# 本检查的逻辑内联在本文件里：workflow 定义取自 base 分支，PR 无法通过修改
+# 脚本来绕过它。纯标准库，不需要 checkout。
+#
+# 已知盲区（重要）：与 base 冲突的 PR 根本不会触发 pull_request 工作流
+# （GitHub 建不出 merge ref）——那种情况请靠分支保护「Require a pull request」
+# 拦住本地解冲突后的直推（#270 正是这样进 main 的）。
+
+name: revert guard
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+concurrency:
+  group: revert-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    name: revert guard (回滚检查)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 核对合并结果是否回退 main 的代码
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - --repo "$REPO" --pr "$PR" --ack-label revert-confirmed <<'PY'
+          #!/usr/bin/env python3
+          # -*- coding: utf-8 -*-
+          """revert_guard — 检测一个 PR 合并后是否会「回退 main 上已有的代码」。
+
+          背景（为什么存在）：上游 main 出过「静默回退」事故（issue #270：解冲突时取了单侧，
+          dashboard.html 751 行消失、CI 6 红）。共同形状：**分支基于旧 main + 与 main 近期改过
+          的同一文件有重叠**，合并时把 main 的新改动弄丢。
+
+          为什么核对「合并预览」而不是「分支本身」：分支落后于 main 时，它的文件里本来就不会
+          有 main 的新增（这很正常，干净合并会把两边都保留）。真正有信息量的是**合并结果**：
+          GitHub 对每个可合并的 PR 都会预计算一个测试合并提交（`merge_commit_sha`），我们就
+          核对它。
+
+          判定口径（逐文件、行计数差，容忍移动/被更新的行）：
+            1. PR 带确认标签（默认 `revert-confirmed`）→ 直接放行（人工已核对）；
+            2. merge-base（mb）== base → 分支已含 base 全部提交，放行；
+            3. base 自 mb 以来新增的行（按行计数），减去
+                 - 合并结果里仍在的行，再减去
+                 - 本 PR 自己删掉的行（PR 的 diff 里 '-' 侧；合法改写不算回退）；
+               剩余 ≥ 阈值（默认 5 行/文件）→ 红：疑似回退，必须人工确认。
+
+          「人工确认」通道：维护者核对后给 PR 加标签（`revert-confirmed`），本检查随即转绿
+          （labeled 事件会触发重跑）。推荐的正路是把分支重放到最新 main / 在分支上正确解冲突，
+          让检查自然转绿。
+
+          用法：
+            python revert_guard.py --repo OWNER/REPO --pr 267
+            python revert_guard.py --repo OWNER/REPO --base-sha <sha> --head-sha <sha> \
+                                   --merge-sha <sha>          # 回放/调试
+          环境变量：GITHUB_TOKEN（CI 用 secrets.GITHUB_TOKEN；本机用 .gh_pat）
+
+          退出码：0 通过（或已人工确认）；1 检测到疑似回退；2 运行错误（网络等）。
+          纯标准库；Python 3.9 兼容。
+          """
+
+          import argparse
+          import difflib
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+          from collections import Counter
+
+          ACK_LABEL_DEFAULT = "revert-confirmed"
+          MIN_MISSING_DEFAULT = 5      # 单文件"无法解释的缺失行数"阈值
+          MAX_FILES = 300              # compare API 单次返回上限
+          MAX_FILE_BYTES = 3 * 1024 * 1024
+          API = "https://api.github.com"
+
+
+          def api_get(path, token, retries=4):
+              last = None
+              for attempt in range(retries):
+                  try:
+                      req = urllib.request.Request(
+                          API + path,
+                          headers={"Authorization": "Bearer " + token,
+                                   "Accept": "application/vnd.github+json",
+                                   "User-Agent": "revert-guard"})
+                      with urllib.request.urlopen(req, timeout=90) as r:
+                          buf = b""
+                          while True:
+                              chunk = r.read(65536)
+                              if not chunk:
+                                  break
+                              buf += chunk
+                      return json.loads(buf)
+                  except urllib.error.HTTPError as exc:
+                      if exc.code == 404:
+                          return None
+                      last = exc
+                      time.sleep(2 * (attempt + 1))
+                  except Exception as exc:
+                      last = exc
+                      time.sleep(2 * (attempt + 1))
+              raise last
+
+
+          def api_get_text(path, token, retries=4):
+              """返回文本；404/二进制/超限 → None。"""
+              last = None
+              for attempt in range(retries):
+                  try:
+                      req = urllib.request.Request(
+                          API + path,
+                          headers={"Authorization": "Bearer " + token,
+                                   "Accept": "application/vnd.github.raw",
+                                   "User-Agent": "revert-guard"})
+                      with urllib.request.urlopen(req, timeout=90) as r:
+                          buf = b""
+                          while True:
+                              chunk = r.read(65536)
+                              if not chunk:
+                                  break
+                              buf += chunk
+                      if len(buf) > MAX_FILE_BYTES:
+                          return None
+                      return buf.decode("utf-8")
+                  except urllib.error.HTTPError as exc:
+                      if exc.code == 404:
+                          return None
+                      last = exc
+                      time.sleep(2 * (attempt + 1))
+                  except UnicodeDecodeError:
+                      return None          # 二进制，跳过
+                  except Exception as exc:
+                      last = exc
+                      time.sleep(2 * (attempt + 1))
+              raise last
+
+
+          def norm_line(l):
+              return l.rstrip()
+
+
+          def added_lines_from_patch(patch):
+              """unified diff 的 '+' 行（跳过 +++/--- 头），归一后返回行列表。"""
+              out = []
+              for line in (patch or "").splitlines():
+                  if line.startswith("+++") or line.startswith("---"):
+                      continue
+                  if line.startswith("+"):
+                      out.append(norm_line(line[1:]))
+              return out
+
+
+          def deleted_lines_from_patch(patch):
+              """unified diff 的 '-' 行（跳过 ---/+++ 头）——即「本 PR 自己删掉的行」。"""
+              out = []
+              for line in (patch or "").splitlines():
+                  if line.startswith("---") or line.startswith("+++"):
+                      continue
+                  if line.startswith("-"):
+                      out.append(norm_line(line[1:]))
+              return out
+
+
+          def diff_added_lines(old_text, new_text):
+              """没有 patch 时的兜底：difflib 求 new 相对 old 新增的行。"""
+              a = (old_text or "").splitlines()
+              b = (new_text or "").splitlines()
+              sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+              out = []
+              for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                  if tag in ("insert", "replace") and j2 > j1:
+                      out.extend(norm_line(x) for x in b[j1:j2])
+              return out
+
+
+          def diff_deleted_lines(old_text, new_text):
+              """difflib 求 old 相对 new 被删的行。"""
+              a = (old_text or "").splitlines()
+              b = (new_text or "").splitlines()
+              sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+              out = []
+              for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                  if tag in ("delete", "replace") and i2 > i1:
+                      out.extend(norm_line(x) for x in a[i1:i2])
+              return out
+
+
+          def check_file(repo, token, path, mb, base_sha, head_sha, merge_sha,
+                         base_file, head_file):
+              """返回 (unexplained, added_total, note)。unexplained = 无法解释的缺失行数。"""
+              if base_file.get("status") == "added":
+                  # base 新增的文件：PR 侧没有也不冲突（合并保留 base 侧），跳过
+                  return 0, 0, None
+
+              added = added_lines_from_patch(base_file.get("patch"))
+              if not added:
+                  old_text = api_get_text("/repos/%s/contents/%s?ref=%s" % (repo, path, mb), token)
+                  new_text = api_get_text("/repos/%s/contents/%s?ref=%s" % (repo, path, base_sha), token)
+                  if old_text is None or new_text is None:
+                      return 0, 0, "%s：取不到内容，跳过" % path
+                  added = diff_added_lines(old_text, new_text)
+              added = [l for l in added if l.strip()]
+              if not added:
+                  return 0, 0, None
+
+              own_deleted = deleted_lines_from_patch(head_file.get("patch"))
+              if not own_deleted:
+                  mb_text = api_get_text("/repos/%s/contents/%s?ref=%s" % (repo, path, mb), token)
+                  head_text = api_get_text("/repos/%s/contents/%s?ref=%s" % (repo, path, head_sha), token)
+                  if mb_text is not None and head_text is not None:
+                      own_deleted = diff_deleted_lines(mb_text, head_text)
+              own_deleted_c = Counter(l for l in own_deleted if l.strip())
+
+              merge_text = api_get_text("/repos/%s/contents/%s?ref=%s" % (repo, path, merge_sha), token)
+              if merge_text is None:
+                  return len(added), len(added), \
+                      "%s：合并结果里不存在该文件（base 同期改过它），需人工确认" % path
+              merge_c = Counter(norm_line(l) for l in merge_text.splitlines())
+
+              unexplained = 0
+              for line, n in Counter(added).items():
+                  gone = max(0, n - merge_c.get(line, 0))
+                  explained = min(gone, own_deleted_c.get(line, 0))
+                  unexplained += gone - explained
+              return unexplained, len(added), None
+
+
+          def main():
+              ap = argparse.ArgumentParser()
+              ap.add_argument("--repo", required=True, help="OWNER/REPO（上游仓库）")
+              ap.add_argument("--pr", type=int, help="PR 号（CI 模式）")
+              ap.add_argument("--base-sha", help="显式 base（回放/调试）")
+              ap.add_argument("--head-sha", help="显式 head（回放/调试）")
+              ap.add_argument("--merge-sha", help="显式合并结果（回放/调试）")
+              ap.add_argument("--ack-label", default=ACK_LABEL_DEFAULT)
+              ap.add_argument("--min-missing", type=int, default=MIN_MISSING_DEFAULT)
+              ap.add_argument("--token-env", default="GITHUB_TOKEN")
+              args = ap.parse_args()
+
+              token = os.environ.get(args.token_env) or os.environ.get("GITHUB_TOKEN")
+              if not token:
+                  print("缺少 token（环境变量 %s）" % args.token_env)
+                  return 2
+
+              if args.pr:
+                  pr = api_get("/repos/%s/pulls/%d" % (args.repo, args.pr), token)
+                  if pr is None:
+                      print("取不到 PR #%d" % args.pr)
+                      return 2
+                  labels = [l["name"] for l in pr.get("labels", [])]
+                  if args.ack_label in labels:
+                      print("✅ 已人工确认（标签 `%s` 在场）：跳过回滚检查。" % args.ack_label)
+                      return 0
+                  base_sha = pr["base"]["sha"]
+                  head_sha = pr["head"]["sha"]
+                  merge_sha = pr.get("merge_commit_sha")
+                  # 合并预览偶尔要等 GitHub 算几秒（尤其刚 push 完）；冲突时 mergeable=False，
+                  # 不用等。最多轮询 ~60 秒。
+                  waited = 0
+                  while (not merge_sha and pr.get("state") == "open"
+                         and pr.get("mergeable") is not False and waited < 60):
+                      time.sleep(10)
+                      waited += 10
+                      pr = api_get("/repos/%s/pulls/%d" % (args.repo, args.pr), token) or pr
+                      merge_sha = pr.get("merge_commit_sha")
+                  print("PR #%d  base=%s  head=%s  merge=%s%s"
+                        % (args.pr, base_sha[:10], head_sha[:10], (merge_sha or "None")[:10],
+                           ("（等待 %ds）" % waited) if waited else ""))
+                  if not merge_sha:
+                      print("")
+                      print("❌ 拿不到合并预览（merge_commit_sha 为空）：分支与 base 冲突，"
+                            "或 GitHub 还没算好。")
+                      print("   请先在分支上解决冲突（让 PR 变为可合并）后重跑；")
+                      print("   若已人工核对无碍，由维护者加标签 `%s` 放行。" % args.ack_label)
+                      return 1
+              else:
+                  base_sha, head_sha, merge_sha = args.base_sha, args.head_sha, args.merge_sha
+                  if not (base_sha and head_sha and merge_sha):
+                      print("需要 --pr 或 --base-sha/--head-sha/--merge-sha")
+                      return 2
+                  print("base=%s  head=%s  merge=%s"
+                        % (base_sha[:10], head_sha[:10], merge_sha[:10]))
+
+              cmp_ = api_get("/repos/%s/compare/%s...%s" % (args.repo, base_sha, head_sha), token)
+              if cmp_ is None:
+                  print("compare 取不到（%s...%s）" % (base_sha[:10], head_sha[:10]))
+                  return 2
+              mb = cmp_["merge_base_commit"]["sha"]
+              print("merge-base = %s" % mb[:10])
+
+              if mb == base_sha:
+                  print("✅ 分支已包含 base 的全部提交（merge-base == base），无可回退。")
+                  return 0
+
+              base_cmp = api_get("/repos/%s/compare/%s...%s" % (args.repo, mb, base_sha), token)
+              if base_cmp is None:
+                  print("取 base 的变更失败")
+                  return 2
+              base_files = {f["filename"]: f for f in base_cmp.get("files", [])}
+              head_files = {f["filename"]: f for f in cmp_.get("files", [])}
+
+              candidates = [p for p in sorted(base_files) if p in head_files]
+              print("base 自 merge-base 以来改了 %d 个文件；PR 也改了其中 %d 个 → 在合并预览里逐行核对"
+                    % (len(base_files), len(candidates)))
+
+              bad = []
+              checked = 0
+              for path in candidates[:MAX_FILES]:
+                  try:
+                      unexplained, added_total, note = check_file(
+                          args.repo, token, path, mb, base_sha, head_sha, merge_sha,
+                          base_files[path], head_files[path])
+                  except Exception as exc:
+                      print("  ⚠️ %s：检查出错（%r）——按需人工确认" % (path, exc))
+                      continue
+                  checked += 1
+                  if note:
+                      print("  ⚠️ %s" % note)
+                  if unexplained >= args.min_missing:
+                      bad.append((path, unexplained, added_total))
+                  elif unexplained:
+                      print("  · %s：base 新增 %d 行，无法解释的缺失 %d 行（低于阈值 %d，放行）"
+                            % (path, added_total, unexplained, args.min_missing))
+
+              if not bad:
+                  print("✅ 回滚检查通过（核对 %d 个文件）：base 自 merge-base 以来的新增代码，"
+                        "在合并结果里都在。" % checked)
+                  return 0
+
+              total = sum(x[1] for x in bad)
+              print("")
+              print("❌ 回滚检查未通过：合并后会把 main 上已有的代码弄丢（%d 个文件、共 %d 行）。"
+                    % (len(bad), total))
+              print("   危险形状 = 分支落后于 main 且改过同一批文件，解冲突时丢了一侧"
+                    "（issue #270 就是这么发生的）。")
+              for path, n, added_total in bad[:10]:
+                  print("   - %s：base 新增 %d 行，其中 %d 行在合并结果里消失、且不是本 PR 删的"
+                        % (path, added_total, n))
+              print("")
+              print("   处理方式（二选一）：")
+              print("     1) 推荐：把分支重放到最新 main / 在分支上正确解冲突，检查会自动转绿；")
+              print("     2) 人工核对确认不会丢代码后，由维护者加标签 `%s`，本检查随即放行。" % args.ack_label)
+              return 1
+
+
+          if __name__ == "__main__":
+              try:
+                  sys.exit(main())
+              except KeyboardInterrupt:
+                  sys.exit(2)
+          PY
