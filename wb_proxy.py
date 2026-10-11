@@ -13174,8 +13174,8 @@ class Handler(BaseHTTPRequestHandler):
         models = payload.get("models")
         if not models:
             # Fall back to the gateway's discovered catalog so clients that embed
-            # model definitions (OpenCode, DSH, Crush) receive the full model list
-            # even when the front-end omitted the field.
+            # model definitions (OpenCode, DSH, Crush, ZCode) receive the full
+            # model list even when the front-end omitted the field.
             models = self._agents_models()
         if not isinstance(models, list):
             return self._error(400, "models must be a list",

@@ -1,6 +1,6 @@
 """One-click agent integration for local AI clients.
 
-Detects installed AI clients (Claude Code, Codex, OpenCode, DSH, Crush),
+Detects installed AI clients (Claude Code, Codex, OpenCode, DSH, Crush, ZCode),
 rewrites their configuration to point at this gateway, keeps a byte-exact
 backup of every file it touches, and can restore the original state with one
 call. Inspired by EasyCLIProxyAPI's agents mechanism.
@@ -640,6 +640,78 @@ def _apply_crush(paths, ctx):
     return {path: _dump_json(data)}
 
 
+def _apply_zcode(paths, ctx):
+    """Add or update a wb-proxy provider rule in ZCode's provider config.
+
+    The rule is addressed by a stable providerId, so re-applying updates that
+    one entry instead of stacking new ones, and everything else in the
+    document - other providers, their order, the model rules - is merged
+    around untouched. Note the file belongs to the ZCode app and is rewritten
+    by it while running; configure with ZCode closed (the panel card and the
+    CLI both say so) or the app's next save can drop the new entry.
+    """
+    path = paths["config"]
+    data = _load_json(path, "zcode provider config")
+    if not data:
+        # No ZCode profile on this machine yet: start from the wrapper shape a
+        # live 3.x profile writes (schemaVersion + config + the two rule
+        # holders), so a fresh install can be configured without running the
+        # app first.
+        data = {"schemaVersion": 1,
+                "config": {"providerOrder": [],
+                           "providerConfigRules": {"providerRules": []}}}
+    config = data.get("config")
+    if not isinstance(config, dict):
+        raise AgentConfigError(
+            "zcode provider config has no config object: %s" % path)
+    holder = config.get("providerConfigRules")
+    if not isinstance(holder, dict):
+        raise AgentConfigError(
+            "zcode provider config has no providerConfigRules: %s" % path)
+    rules = holder.get("providerRules")
+    if not isinstance(rules, list):
+        raise AgentConfigError(
+            "zcode providerConfigRules has no providerRules list: %s" % path)
+
+    model_ids = []
+    for entry in ctx.get("models") or []:
+        mid = entry.get("id") if isinstance(entry, dict) else entry
+        mid = str(mid or "").strip()
+        if mid and mid not in model_ids:
+            model_ids.append(mid)
+
+    rule = {
+        "providerId": PROVIDER_ID,
+        "providerName": PROVIDER_NAME,
+        "config": {
+            "group": "standard-personal",
+            "access": {"type": "api-key", "apiKey": ctx["api_key"]},
+            "api": {"type": "openai-chat-completions",
+                    "baseUrl": ctx["base_url_v1"]},
+        },
+    }
+    if model_ids:
+        rule["config"]["personalModelIds"] = model_ids
+        rule["config"]["modelOrder"] = list(model_ids)
+
+    replaced = False
+    for index, existing in enumerate(rules):
+        if isinstance(existing, dict) and existing.get("providerId") == PROVIDER_ID:
+            rules[index] = deep_merge(existing, rule)
+            replaced = True
+            break
+    if not replaced:
+        rules.append(rule)
+
+    order = config.get("providerOrder")
+    if not isinstance(order, list):
+        order = []
+        config["providerOrder"] = order
+    if PROVIDER_ID not in order:
+        order.append(PROVIDER_ID)
+    return {path: _dump_json(data)}
+
+
 CLIENTS = {
     "claude-code": {
         "id": "claude-code",
@@ -717,6 +789,22 @@ CLIENTS = {
             or bool(shutil.which("crush"))
         ),
         "apply": _apply_crush,
+    },
+    "zcode": {
+        "id": "zcode",
+        "label": "ZCode",
+        "desc": "ZCode; adds a wb-proxy provider to its provider config. "
+                "Quit ZCode first - it rewrites that file while running.",
+        "protocol": "openai",
+        "files": lambda home: {
+            "config": os.path.join(home, ".zcode", "v2", "provider_config.json"),
+        },
+        "probe": lambda home: (
+            os.path.isdir(os.path.join(home, ".zcode"))
+            or os.path.isfile(os.path.join(home, ".zcode", "v2",
+                                           "provider_config.json"))
+        ),
+        "apply": _apply_zcode,
     },
 }
 

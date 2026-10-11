@@ -29,7 +29,8 @@ wb-proxy/
         ├── codex/
         ├── opencode/
         ├── dsh/
-        └── crush/
+        ├── crush/
+        └── zcode/
 ```
 
 ---
@@ -282,7 +283,7 @@ python wb_agents.py restore  --client CLIENT [--home DIR] [--state-dir DIR] [--j
 ```
 
 - **Key 解析顺序**：`--key` → 环境变量 `WB_PROXY_API_KEY` → 交互式 `getpass` 提示。提示仅在 stdin 与 stdout **都是终端**时出现：Windows 上 NUL 设备的 `isatty()` 也为真，而 `getpass` 会直接读 `CONIN$`——在被拉起、没有控制台的进程里会造成永久阻塞；非交互环境缺 Key 时直接报错退出（码 1）。
-- **模型表**：默认（等价于 `--models-from-gateway`）带 Key 请求 `GET /v1/models`，为 OpenCode / DSH / Crush 填入内嵌模型表，同时验证 Key。失败区分 401（Key 被拒）与其他错误；`--no-models` 完全跳过（也不校验 Key）。
+- **模型表**：默认（等价于 `--models-from-gateway`）带 Key 请求 `GET /v1/models`，为 OpenCode / DSH / Crush / ZCode 填入内嵌模型表，同时验证 Key。失败区分 401（Key 被拒）与其他错误；`--no-models` 完全跳过（也不校验 Key）。
 - **`--dry-run`**：调用 `plan()` 只构建「将要写入的内容」，不备份、不落盘、不写 state；打印的内容与真实写入逐字节一致（同一生成路径）。
 - **退出码**：`0` 成功；`1` 配置错误（`AgentConfigError`）；`2` 参数错误（argparse）。
 - `--home` / `--state-dir` / `--json` 写在子命令前或后都可以（共享父解析器 + `SUPPRESS` 默认值，避免子解析器覆盖顶层值）。

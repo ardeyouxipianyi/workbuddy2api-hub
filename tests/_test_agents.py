@@ -231,8 +231,9 @@ check("inputs are not mutated", base["env"]["A"] == 1, base)
 print()
 print("[13] client registry integrity")
 
-check("all five expected clients registered",
-      sorted(A.CLIENTS) == ["claude-code", "codex", "crush", "dsh", "opencode"],
+check("all six expected clients registered",
+      sorted(A.CLIENTS) == ["claude-code", "codex", "crush", "dsh", "opencode",
+                            "zcode"],
       sorted(A.CLIENTS))
 ids = [c["id"] for c in A.CLIENTS.values()]
 check("registry ids are unique", len(set(ids)) == len(ids), ids)
@@ -407,12 +408,12 @@ for cid in sorted(A.CLIENTS):
     except Exception as exc:  # noqa: BLE001 - report every client
         all_ok = False
         notes[cid] = "raised: %r" % exc
-check("all five clients applied and restored cleanly", all_ok, notes)
+check("all six clients applied and restored cleanly", all_ok, notes)
 check("state is empty after restoring everything",
       A._load_state(acct5) == {}, A._load_state(acct5))
 
 print()
-print("[20] codex + dsh written contents are shaped correctly")
+print("[20] written client configs are shaped correctly")
 
 home6 = tempfile.mkdtemp(prefix="wb-agents-home6-")
 acct6 = tempfile.mkdtemp(prefix="wb-agents-acct6-")
@@ -473,10 +474,84 @@ check("crush model entries carry context_window",
       cr["providers"]["wb-proxy"]["models"][0]["context_window"] == 128000,
       cr["providers"]["wb-proxy"]["models"])
 
+A.integrate(acct6, "zcode", "http://gw:1", "k-zc", model="m-big",
+            models=models, home=home6)
+zc_path = os.path.join(home6, ".zcode", "v2", "provider_config.json")
+with open(zc_path, encoding="utf-8") as fh:
+    zc = json.load(fh)
+zc_rules = zc["config"]["providerConfigRules"]["providerRules"]
+check("zcode rule carries the gateway URL and the key",
+      zc_rules[0]["providerId"] == "wb-proxy"
+      and zc_rules[0]["config"]["api"]["baseUrl"] == "http://gw:1/v1"
+      and zc_rules[0]["config"]["access"]["apiKey"] == "k-zc", zc_rules)
+check("zcode model ids carried into personalModelIds/modelOrder",
+      zc_rules[0]["config"]["personalModelIds"] == ["m-big", "m-small"]
+      and zc_rules[0]["config"]["modelOrder"] == ["m-big", "m-small"],
+      zc_rules[0])
+check("zcode providerOrder lists the provider",
+      zc["config"]["providerOrder"] == ["wb-proxy"], zc["config"])
+check("zcode schemaVersion kept", zc.get("schemaVersion") == 1, zc)
+
 for path in (codex_cfg, os.path.join(home6, ".codex", "auth.json"),
              dsh_settings, os.path.join(home6, ".dsh", ".credentials.yaml"),
-             oc_path, crush_path):
+             oc_path, crush_path, zc_path):
     pass
+
+print()
+print("[20b] zcode: other providers, their order and model rules survive re-apply")
+
+home15 = tempfile.mkdtemp(prefix="wb-agents-home15-")
+acct15 = tempfile.mkdtemp(prefix="wb-agents-acct15-")
+zc_dir = os.path.join(home15, ".zcode", "v2")
+os.makedirs(zc_dir)
+zc_other_rule = {
+    "providerId": "other-provider",
+    "providerName": "Other",
+    "config": {"group": "standard-personal",
+               "access": {"type": "api-key", "apiKey": "k-other"},
+               "api": {"type": "anthropic-messages",
+                       "baseUrl": "https://other.example/v1"}},
+}
+zc_original = {
+    "schemaVersion": 1,
+    "config": {
+        "providerOrder": ["other-provider"],
+        "providerConfigRules": {"providerRules": [zc_other_rule]},
+        "modelConfigRules": {"keep": {"me": True}},
+    },
+}
+zc_original_bytes = json.dumps(zc_original).encode("utf-8")
+with open(os.path.join(zc_dir, "provider_config.json"), "wb") as fh:
+    fh.write(zc_original_bytes)
+
+A.integrate(acct15, "zcode", "http://gw:1", "k-first", model="m-big",
+            models=models, home=home15)
+A.integrate(acct15, "zcode", "http://gw:2", "k-second", model="m-small",
+            models=[{"id": "m-small"}], home=home15)
+with open(os.path.join(zc_dir, "provider_config.json"), encoding="utf-8") as fh:
+    zc2 = json.load(fh)
+rules2 = zc2["config"]["providerConfigRules"]["providerRules"]
+check("re-apply updates the one wb-proxy rule instead of stacking new ones",
+      len(rules2) == 2
+      and [r["providerId"] for r in rules2] == ["other-provider", "wb-proxy"],
+      rules2)
+check("re-apply refreshes key, base URL and model list",
+      rules2[1]["config"]["access"]["apiKey"] == "k-second"
+      and rules2[1]["config"]["api"]["baseUrl"] == "http://gw:2/v1"
+      and rules2[1]["config"]["personalModelIds"] == ["m-small"], rules2[1])
+check("the other provider rule survives verbatim",
+      rules2[0] == zc_other_rule, rules2[0])
+check("providerOrder appends ours without touching the existing entry",
+      zc2["config"]["providerOrder"] == ["other-provider", "wb-proxy"],
+      zc2["config"])
+check("unrelated config keys survive",
+      zc2["config"]["modelConfigRules"] == {"keep": {"me": True}},
+      zc2["config"])
+
+A.restore(acct15, "zcode", home=home15)
+with open(os.path.join(zc_dir, "provider_config.json"), "rb") as fh:
+    check("restore returns the pre-integration bytes",
+          fh.read() == zc_original_bytes)
 
 print()
 print("[21] oversized config file is refused")
@@ -758,7 +833,7 @@ check("wb_agents is imported lazily inside agents_module()",
 for d in (home, accounts, home2, acct2, home3, acct3, home4, acct4,
           home5, acct5, home6, acct6, home7, acct7, home8, acct8,
           home9, acct9, home10, acct10, home11, acct11, home12, acct12,
-          home13, acct13, home14, acct14, home_paths):
+          home13, acct13, home14, acct14, home15, acct15, home_paths):
     shutil.rmtree(d, ignore_errors=True)
 
 print()

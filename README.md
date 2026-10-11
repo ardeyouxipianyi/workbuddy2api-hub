@@ -219,6 +219,7 @@ Codex App 这类客户端会在 Responses 请求里声明 `web_search` / `web_fe
 | OpenCode | `~/.config/opencode/opencode.json` | OpenAI 兼容（`@ai-sdk/openai-compatible`） |
 | DSH (DeepSeek Harness) | `~/.dsh/settings.yaml`、`~/.dsh/.credentials.yaml` | OpenAI 兼容 |
 | Crush (Charm Crush) | `~/.config/crush/crush.json` | OpenAI 兼容 |
+| ZCode | `~/.zcode/v2/provider_config.json` | OpenAI 兼容（`openai-chat-completions`；**配置前先退出 ZCode**，运行中它会重写该文件） |
 
 用法：打开看板 →「智能体配置」→ 选 API Key（支持全局默认或绑定特定出口的多 Key）、默认模型与网关地址 → 在检测到的客户端卡片上点「一键配置」；随时可点「一键还原」。
 
@@ -239,8 +240,8 @@ python wb_agents.py apply --client codex --base-url http://<网关地址>:8788/v
 python wb_agents.py restore --client codex                 # 随时字节级还原
 ```
 
-- 支持 `claude-code` / `codex` / `opencode` / `dsh` / `crush` 五个客户端，与看板共用同一套写入、备份与还原逻辑（`plan()` 同时驱动 `--dry-run` 与真实写入）；
-- 默认带 Key 请求一次 `GET /v1/models`：既为 OpenCode / DSH / Crush 填入模型表，也顺带验证 Key（401 = Key 被拒）；网关不可达或想完全离线时加 `--no-models`；
+- 支持 `claude-code` / `codex` / `opencode` / `dsh` / `crush` / `zcode` 六个客户端，与看板共用同一套写入、备份与还原逻辑（`plan()` 同时驱动 `--dry-run` 与真实写入）；
+- 默认带 Key 请求一次 `GET /v1/models`：既为 OpenCode / DSH / Crush / ZCode 填入模型表，也顺带验证 Key（401 = Key 被拒）；网关不可达或想完全离线时加 `--no-models`；
 - 状态与备份存在该机器自己的 `~/.wb-agent-config/`（可用 `--state-dir` 覆盖），每台机器一份，`restore` 只对执行过 `apply` 的机器有效；
 - `--dry-run` 只打印将要写入的内容、不落盘；Key 也可用环境变量 `WB_PROXY_API_KEY` 传入。
 
@@ -366,6 +367,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
   - `release/portable_runtime.py` 的 `REQUIRED_FILES` 补 `Lib/getpass.py`（新增 import 后裁剪运行时缺该模块）；README 套件计数 119 → 120。
 
 - **补一道「冲突标记」门禁**：仓库里已经三次把解冲突的残留提交进 main（#131 专门清过一次 dashboard 的，README 又在 #243/#245 那批合并里带进 12~15 行），此前没有任何测试盯它——Python 文件会直接 `SyntaxError`，HTML/JS 则是静默坏掉，回滚检查还会把「合并时顺手整理掉这些行」算成弄丢 main 的改动（#245 那次报红就是这个）。`tests/_test_release_engineering.py` 新增 `RepoHygieneTests`：扫全树（跳过运行时数据与打包产物目录），任一行以 `<<<<<<<` / `>>>>>>>` / `|||||||` 开头即失败。
+
+- **智能体一键配置新增 ZCode 客户端**：把网关作为 `wb-proxy` provider 写进 ZCode 的活配置 `~/.zcode/v2/provider_config.json`（`providerConfigRules.providerRules` + `providerOrder`）。规则按稳定 `providerId` 定位，重复 apply 更新同一条而非堆叠；其余 provider、它们的顺序与 `modelConfigRules` 逐字节保留。模型表来自 `GET /v1/models`，写成 `personalModelIds` + `modelOrder`。该文件由 ZCode 应用自己持有、运行中会被重写——卡片文案与文档都提示「配置前先退出 ZCode」。
+  - `tests/_test_agents.py` 扩到 126 项：zcode 形状断言 + 「重复 apply 不堆叠 / 其他 provider 与 modelConfigRules 逐字节保留 / 还原字节级」。
 
 已发布版本的完整记录（v1.4.5 ~ v1.6.20，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 ## 七、致谢与引用声明 (Credits & References)
