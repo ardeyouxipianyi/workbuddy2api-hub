@@ -1125,7 +1125,13 @@ class RemainingUsageTests(unittest.TestCase):
         # 回来了），已用在第一次撞线处截断。恢复时刻直接取 epoch 并反构 6004
         # 文本（cap_detail）：reset_epoch(strftime(localtime(…))) 的墙钟往返
         # 只在 UTC+8 主机上才是同一个时刻，UTC 上会整整偏 8 小时。
-        now = time.time()
+        #
+        # 锚在固定本地日上（原来用 time.time()）：这一条写下的行会留在进程内的
+        # pair/事件状态里，而下一个用例（test_crossing_midnight_archives_…）的
+        # 夹具锚在 2026-10-14/15。用真实时钟时两者的距离随墙钟变化，26h 裁剪
+        # 跨过边界就把下一个用例的样本改掉（本用例 + 它同一进程跑必红，
+        # 单跑下一个用例则通过）。固定锚点让两条用例互不影响。
+        now = local_epoch(2026, 10, 10, 12, 0, 0)
         r1 = int(now) + HOUR
         r2 = int(now) + 30 * HOUR
         write_log([
