@@ -35,6 +35,48 @@ libpython。ELF 实测（musl x86_64）：
 | `libwb_agg.so`（`-static-libgcc`，默认） | 无 | **`libc.so`** —— 只要系统 libc（OpenWrt 的 musl、桌面 glibc 都自带） |
 | `libwb_agg.so`（不带该标志） | 无 | `libgcc_s.so.1`, `libc.so` —— 所以 `build.py` 默认加上 `-static-libgcc` |
 
+## 多平台（`native/build_matrix.py`）
+
+一份源码编所有目标：引擎是 C99，跨平台差异都收在一个垫片 `native/wbc_port.h` 里
+（单调时钟、进程 CPU/峰值 RSS、`localtime_r`、文件 mtime 的纳秒字段名、stdout
+二进制模式、DLL 导出标注）。`build_matrix.py` 只负责知道该调哪个编译器、产物叫什么、
+怎么冒烟：
+
+```sh
+python native/build_matrix.py --list                      # 目标表
+python native/build_matrix.py --all --out native/dist     # 编所有能找到工具链的目标
+python native/build_matrix.py --verify native/dist \
+    --log fixture/usage/usage.jsonl --accounts fixture/accounts \
+    --pricing native/pricing/pricing.json                 # 跨平台逐字节对拍
+```
+
+| 目标 | 编译器 | 产物 | 谁需要它 |
+|---|---|---|---|
+| `linux-x86_64` | `cc` | `wb-agg` + `libwb_agg.so` | 普通 x86_64 Linux（也是 `--verify` 的参考构建） |
+| `linux-i686` | `i686-linux-gnu-gcc` | 同上 | 32 位 x86 Linux |
+| `linux-armv7` | `arm-linux-gnueabihf-gcc` | 同上 | ARMv7 发行版（树莓派 32 位等） |
+| `linux-aarch64` | `aarch64-linux-gnu-gcc` | 同上 | arm64 发行版 |
+| `linux-x86_64-musl` | `x86_64-linux-musl-gcc` | 同上 | OpenWrt x86_64（本项目路由器就是它） |
+| `linux-armv7-musl` | `armv7l-linux-musleabihf-gcc` | 同上 | OpenWrt ARMv7 路由 |
+| `linux-aarch64-musl` | `aarch64-linux-musl-gcc` | 同上 | OpenWrt arm64 路由 |
+| `windows-x86_64` | `x86_64-w64-mingw32-gcc` | `wb-agg.exe` + `wb_agg.dll` | Windows 桌面（64 位） |
+| `windows-i686` | `i686-w64-mingw32-gcc` | 同上 | 32 位 Windows |
+| `darwin-x86_64` / `darwin-arm64` | `clang -arch …`（**在 Mac 上跑**） | `wb-agg` + `libwb_agg.dylib` | macOS（Intel / Apple Silicon） |
+
+- **CLI 一律静态链接**：Linux/Windows 上拷过去就能跑，目标机不需要装任何东西。
+  `.so`/`.dll`/`.dylib` 只依赖系统 libc —— 按目标的 libc 选工具链（musl 目标用 musl
+  工具链，glibc 目标用 glibc 工具链），编出来的两种不能互换。
+- **macOS 没有合法的交叉工具链**：在 Mac 上 `python native/build.py` 即可（系统自带
+  clang）；包装器本来就找 `libwb_agg.dylib`。矩阵里的这两个条目只是把命令写清楚。
+- **验证口径**：`--verify` 让每个编出来的 CLI 跑同一份日志（只取不依赖墙钟的段、
+  窗口固定、meta 段剥掉），与 `linux-x86_64` 参考构建**逐字节比对**；异架构的用
+  `qemu-user` 跑（`qemu-arm` / `qemu-aarch64` / `qemu-i386`）。Windows 产物在
+  Windows 上验：直接跑 exe、用 ctypes 加载 dll（就是包装器那条路）。
+- ⚠️ **musl.cc 的 armv7 工具链本身是 32 位 x86 宿主程序**：内核没开 IA32 兼容
+  （本项目的 OpenWrt x86_64 路由器就是）时连它自己都起不来，得把工具链里的可执行
+  文件逐个包一层 `qemu-i386` 再用；宿主是 x86_64 的 OpenWrt SDK 工具链没有这个问题。
+
+
 两个 `.so` 变体都跑过夹具对拍，八段与 CLI 逐字节相等。
 
 ## 用法

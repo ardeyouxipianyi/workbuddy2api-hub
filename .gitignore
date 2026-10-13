@@ -31,6 +31,8 @@ native/tests_pricing
 native/tests_pricing.exe
 native/probe_round
 native/probe_round.exe
+# 多平台构建的输出根（python native/build_matrix.py --out native/dist）
+native/dist/
 
 # 发布打包产物（release 工作流与 wrt/ 脚本的输出，只该出现在 Release 资产里）
 dist/

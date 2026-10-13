@@ -16,7 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
+#include "wbc_port.h"
 #include <sys/stat.h>
 #include <time.h>
 
@@ -406,8 +406,7 @@ static void file_stamp(const char *path, long long *mtime_ns, long long *size)
     *mtime_ns = 0;
     *size = -1;
     if (path && stat(path, &st) == 0) {
-        *mtime_ns = (long long)st.st_mtim.tv_sec * 1000000000LL +
-                    (long long)st.st_mtim.tv_nsec;
+        *mtime_ns = WBC_STAT_MTIME_NS(st);
         *size = (long long)st.st_size;
     }
 }
@@ -467,7 +466,8 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
     JW *out = NULL;
     char *text = NULL;
     size_t text_len = 0;
-    struct timespec t0, t1, t_load, t_parse;
+    /* 单调时钟的读数（秒）；跨平台取法见 wbc_port.h。只喂 meta 的计时字段。 */
+    double t0 = 0.0, t1 = 0.0, t_load = 0.0, t_parse = 0.0;
     double seconds = 0.0, load_s = 0.0, parse_s = 0.0, fold_s = 0.0;
     unsigned sec;
     char *partial_line = NULL;
@@ -495,7 +495,7 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
     if (!opts->policies) policies_path = sibling_path(log, "pricing-policies.jsonl");
     if (!opts->timeline) timeline_path = sibling_path(log, "pricing-timeline.jsonl");
 
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    t0 = wbc_now_seconds();
     map_init(&accounts);
     map_init(&rm_accounts);
     if (opts->accounts) load_accounts(opts->accounts, &accounts, &rm_accounts,
@@ -509,7 +509,7 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
                                opts->timeline ? opts->timeline : timeline_path,
                                opts->pricing);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t_load);
+    t_load = wbc_now_seconds();
 
     if ((sec & WBC_SEC_PERF) && opts->perf_sample > 0) {
         perf_cap = (size_t)opts->perf_sample;
@@ -538,7 +538,7 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
         }
         if ((sec & WBC_SEC_PERF) && partial_line) perf_line_push(partial_line, partial_len);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t_parse);
+    t_parse = wbc_now_seconds();
 
     if (sec & WBC_SEC_REMAINING) {
         const char *events_path = opts->events ? opts->events
@@ -642,10 +642,10 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
         jw_key(out, "remaining");
         remaining_payload(rm_state, now_ts, &rm_accounts, daily_doc, out);
     }
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    seconds = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
-    load_s = (double)(t_load.tv_sec - t0.tv_sec) + (double)(t_load.tv_nsec - t0.tv_nsec) / 1e9;
-    parse_s = (double)(t_parse.tv_sec - t_load.tv_sec) + (double)(t_parse.tv_nsec - t_load.tv_nsec) / 1e9;
+    t1 = wbc_now_seconds();
+    seconds = t1 - t0;
+    load_s = t_load - t0;
+    parse_s = t_parse - t_load;
     fold_s = seconds - load_s - parse_s;
     jw_key(out, "meta");
     jw_obj_begin(out);
@@ -659,14 +659,11 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
     jw_key(out, "parse_seconds"); jw_double(out, parse_s);
     jw_key(out, "fold_seconds"); jw_double(out, fold_s);
     {
-        struct rusage usage;
-        if (getrusage(RUSAGE_SELF, &usage) == 0) {
-            double cpu = (double)usage.ru_utime.tv_sec +
-                         (double)usage.ru_utime.tv_usec / 1e6 +
-                         (double)usage.ru_stime.tv_sec +
-                         (double)usage.ru_stime.tv_usec / 1e6;
+        double cpu = 0.0;
+        long long peak_rss_kib = 0;
+        if (wbc_process_usage(&cpu, &peak_rss_kib)) {
             jw_key(out, "cpu_seconds"); jw_double(out, cpu);
-            jw_key(out, "peak_rss_kib"); jw_int(out, (long long)usage.ru_maxrss);
+            jw_key(out, "peak_rss_kib"); jw_int(out, peak_rss_kib);
         }
     }
     jw_obj_end(out);
@@ -727,6 +724,9 @@ int main(int argc, char **argv)
     Buf out;
     int rc;
 
+    /* Windows 上 stdout 默认是文本模式，会把 \n 翻成 \r\n —— 结果 JSON 就不再
+     * 逐字节可比（Linux/macOS 上这个调用是空操作）。 */
+    wbc_stdout_binary();
     memset(&opts, 0, sizeof(opts));
     memset(&stats, 0, sizeof(stats));
     opts.default_realm = "intl";

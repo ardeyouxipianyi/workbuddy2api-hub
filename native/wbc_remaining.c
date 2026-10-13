@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "wbc_port.h"
 
 #include "wbc_json.h"
 #include "wbc_util.h"
@@ -656,9 +657,9 @@ static double rm_local_midnight(double ts, int days_back)
 {
     time_t t = rm_to_time_t(ts);
     struct tm lt, copy;
-    if (localtime_r(&t, &lt) == NULL) {
+    if (wbc_localtime_r(&t, &lt) == NULL) {
         t = 0;
-        if (localtime_r(&t, &lt) == NULL) return 0.0;
+        if (wbc_localtime_r(&t, &lt) == NULL) return 0.0;
     }
     copy = lt;
     copy.tm_mday -= days_back;          /* mktime normalises out-of-range days */
@@ -673,9 +674,9 @@ static void rm_day_key(double ts, char *out, size_t cap)
 {
     time_t t = rm_to_time_t(ts);
     struct tm lt;
-    if (localtime_r(&t, &lt) == NULL) {
+    if (wbc_localtime_r(&t, &lt) == NULL) {
         t = 0;
-        if (localtime_r(&t, &lt) == NULL) {
+        if (wbc_localtime_r(&t, &lt) == NULL) {
             out[0] = '\0';
             return;
         }
@@ -689,7 +690,7 @@ static void rm_iso(double ts, char *out, size_t cap)
 {
     time_t t = rm_to_time_t(ts);
     struct tm lt;
-    if (localtime_r(&t, &lt) == NULL) {
+    if (wbc_localtime_r(&t, &lt) == NULL) {
         out[0] = '\0';
         return;
     }

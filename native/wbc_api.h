@@ -16,17 +16,29 @@
 
 #include "wbc_util.h"   /* Buf */
 
+/* Windows 的 DLL 只导出标注过的符号（其余平台默认全部可见）；构建共享库时
+ * 定义 WBC_BUILD_DLL 即可（native/build_matrix.py 就是这么做的）。 */
+#ifdef _WIN32
+#  ifdef WBC_BUILD_DLL
+#    define WBC_API __declspec(dllexport)
+#  else
+#    define WBC_API
+#  endif
+#else
+#  define WBC_API __attribute__((visibility("default")))
+#endif
+
 /* ---- the JSON facade (wbc_api.c) ---- */
 
-const char *wb_agg_version(void);            /* "1" */
+WBC_API const char *wb_agg_version(void);    /* "1" */
 
 /* Run one aggregation.  Returns a malloc'd NUL-terminated JSON document
  * (release with wb_agg_release) or NULL on failure (text in wb_agg_error).
  * Repeated calls in one process are supported; apart from the pricing
  * cache no state crosses calls. */
-char *wb_agg_run_json(const char *request, size_t len);
-void wb_agg_release(char *result);
-const char *wb_agg_error(void);
+WBC_API char *wb_agg_run_json(const char *request, size_t len);
+WBC_API void wb_agg_release(char *result);
+WBC_API const char *wb_agg_error(void);
 
 /* ---- engine options / entry (main.c) ---- */
 

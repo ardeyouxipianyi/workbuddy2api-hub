@@ -60,11 +60,18 @@ SELF_TESTS = {
     "probe_round": ["probe_round.c", "wbc_util.c"],
 }
 FLAGS = ["-O2", "-std=c99", "-Wall", "-Wextra"]
+# -lm 放在对象之后（静态链接时库的顺序有意义）
+LIBS = ["-lm"]
 # -static-libgcc on the shared object: without it a musl build records
 # DT_NEEDED = libgcc_s.so.1, libc.so; with it the .so needs the system libc
 # and nothing else (verified with an ELF parse of both builds - the CLI is
 # fully static either way: no PT_INTERP, no DT_NEEDED at all).
-LIB_FLAGS = ["-fPIC", "-shared"] + ([] if sys.platform == "darwin" else ["-static-libgcc"])
+# Windows 的 DLL 只导出标注过的符号，所以要带 WBC_BUILD_DLL（见 wbc_api.h）。
+LIB_FLAGS = ["-fPIC", "-shared"]
+if sys.platform != "darwin":
+    LIB_FLAGS.append("-static-libgcc")
+if os.name == "nt":
+    LIB_FLAGS.append("-DWBC_BUILD_DLL")
 
 
 def lib_name():
@@ -84,10 +91,10 @@ def build(cc, static=False, test=False):
     src = [os.path.join(HERE, name) for name in SOURCES]
 
     cli = os.path.join(HERE, "wb-agg.exe" if os.name == "nt" else "wb-agg")
-    run(cc + FLAGS + (["-static"] if static else []) + ["-o", cli] + src)
+    run(cc + FLAGS + (["-static"] if static else []) + ["-o", cli] + src + LIBS)
 
     lib = os.path.join(HERE, lib_name())
-    run(cc + FLAGS + LIB_FLAGS + ["-o", lib] + src)
+    run(cc + FLAGS + LIB_FLAGS + ["-o", lib] + src + LIBS)
 
     for name, parts in sorted(SELF_TESTS.items()):
         exe = os.path.join(HERE, name + (".exe" if os.name == "nt" else ""))
