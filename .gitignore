@@ -19,6 +19,19 @@ suite-logs/
 python/
 *.zip
 
+# native/ 构建产物（python native/build.py 的产出；引擎源码在仓库里，二进制不入库）
+native/wb-agg
+native/wb-agg.exe
+native/libwb_agg.so
+native/libwb_agg.dylib
+native/wb_agg.dll
+native/tests_json
+native/tests_json.exe
+native/tests_pricing
+native/tests_pricing.exe
+native/probe_round
+native/probe_round.exe
+
 # 发布打包产物（release 工作流与 wrt/ 脚本的输出，只该出现在 Release 资产里）
 dist/
 .sdk-cache/
