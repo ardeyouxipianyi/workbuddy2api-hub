@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -123,6 +124,44 @@ class SectionMaxHeightTests(unittest.TestCase):
     def test_a_float_truncates_to_whole_pixels(self):
         self._write({"section_max_height": 500.9})
         self.assertEqual(S.section_max_height(self.dir), 500)
+
+    def test_a_transient_stat_failure_is_not_served_from_the_cache(self):
+        # 这一条钉的是 CI 上那条偶发红（Windows 腿，142 passed / 1 failed）：
+        # 先读一次「文件不存在」的状态——缓存里就留下那条空条目（import 期正是
+        # 这个状态）——接着直接写盘（模拟人工编辑，绕过 save() 的主动失效），
+        # 然后让**这一次** stat 失败（杀毒/索引器短暂持有刚写的文件）。读到的
+        # 必须是文件里的值：把「stat 失败」当成「文件不存在」就会命中那条空缓存，
+        # 返回默认值（现场症状：期望 500，读回 640）。
+        self.assertFalse(os.path.exists(S.settings_path(self.dir)))
+        self.assertEqual(S.section_max_height(self.dir), S.DEFAULT_SECTION_MAX_HEIGHT)
+        self._write({"section_max_height": 500.9})
+        real_stat = os.stat
+
+        def flaky(path, *args, **kwargs):
+            if str(path).endswith("settings.json"):
+                raise PermissionError("transient lock (simulated)")
+            return real_stat(path, *args, **kwargs)
+
+        os.stat = flaky
+        try:
+            self.assertEqual(S.section_max_height(self.dir), 500)
+        finally:
+            os.stat = real_stat
+
+    def test_a_transient_read_failure_is_not_cached(self):
+        # 读盘被瞬时占用时不能把「空」写进缓存：文件本身是好的，下一次读要拿到
+        # 真值（否则一次瞬时失败会一直读到默认值，直到文件再变）。
+        self._write({"section_max_height": 700})
+        real_open = open
+
+        def flaky_open(path, *args, **kwargs):
+            if str(path).endswith("settings.json"):
+                raise PermissionError("transient lock (simulated)")
+            return real_open(path, *args, **kwargs)
+
+        with unittest.mock.patch.object(S, "open", flaky_open, create=True):
+            self.assertEqual(S.section_max_height(self.dir), S.DEFAULT_SECTION_MAX_HEIGHT)
+        self.assertEqual(S.section_max_height(self.dir), 700)
 
     def test_negative_reads_as_the_default(self):
         # Not as 0: a negative is a broken file, and 0 would silently switch

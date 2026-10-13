@@ -141,19 +141,30 @@ _load_cache = {"key": None, "value": {}}
 def load(accounts_dir):
     """Return the persisted settings, or an empty dict on a fresh install.
 
-    Cached on (path, mtime, size); the returned dict is a fresh top-level copy
-    so callers keep the previous "mutate freely" semantics.
+    Cached on (path, mtime_ns, size); the returned dict is a fresh top-level
+    copy so callers keep the previous "mutate freely" semantics.
+
+    拿不到盘上的事实时（stat 被瞬时占用而失败、文件读不了）**不查也不写缓存**：
+    缓存的键描述的是「文件长什么样」，描述拿不到就不能参与判断——否则一次瞬时
+    失败会命中「文件不存在」那条空条目，把默认值当成现值。CI 的 Windows 腿上
+    真发生过：手改的 500.9 读回默认 640（`_test_section_max_height.py` 的
+    `test_a_float_truncates_to_whole_pixels` 偶发红）。
     """
     path = settings_path(accounts_dir)
+    key = None
     try:
         info = os.stat(path)
-        key = (path, info.st_mtime, info.st_size)
-    except OSError:
+        key = (path, info.st_mtime_ns, info.st_size)
+    except FileNotFoundError:
         key = (path, None, None)
-    with _lock:
-        if _load_cache["key"] == key:
-            return dict(_load_cache["value"])
+    except OSError:
+        key = None                      # 瞬时失败：这一趟不碰缓存
+    if key is not None:
+        with _lock:
+            if _load_cache["key"] == key:
+                return dict(_load_cache["value"])
     data = {}
+    stable = True
     try:
         with open(path, encoding="utf-8") as fh:
             parsed = json.load(fh)
@@ -161,10 +172,17 @@ def load(accounts_dir):
             data = parsed
     except FileNotFoundError:
         pass
+    except ValueError:
+        # 坏内容（半写坏 / 不是 JSON / 不是 UTF-8）：按空处理。读数由内容决定，
+        # 同一个 (mtime, size) 再读还是这个结果，可以缓存。
+        pass
+    except OSError:
+        stable = False                  # 读不了（被占用）：这一趟不缓存
     except Exception:
         pass
-    with _lock:
-        _load_cache.update({"key": key, "value": data})
+    if key is not None and stable:
+        with _lock:
+            _load_cache.update({"key": key, "value": data})
     return dict(data)
 
 
