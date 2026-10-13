@@ -8,10 +8,11 @@ daily / perf / remaining）用 C 写了一遍，编成两个产物：
 - **`libwb_agg.so`** —— 同一份代码编成共享库，走一个极小的 C ABI，由
   [`wb_native_agg.py`](../wb_native_agg.py) 用 ctypes 在进程内调用。
 
-**它是可选的，而且当前未接线。** 网关照旧用纯 Python 折叠；`wb_proxy.py` 不 import
-本模块（`tests/_test_native_agg.py` 钉住这条线）。库缺失、加载失败、ABI 版本不符或任何
+**它是可选的，默认关。** 网关经 `wb_agg_engine` 接缝的两条兜底路径（冷窗口快照、
+序列整段扫描）接入，`WB_AGG_ENGINE=1` 才打开；`wb_proxy.py` 不直接 import 本模块
+（`tests/_test_native_agg.py` 钉住这条线）。库缺失、加载失败、ABI 版本不符或任何
 一次调用出错，`wb_native_agg` 一律静默返回 `None`，调用方回退纯 Python —— 引擎没有把
-网关带崩的路径。接线的收益与依据见下文「实测」一节，那是独立的一次改动。
+网关带崩的路径。为什么只接那两条路、接线的实测数字见下文「实测」一节。
 
 ## 构建
 
@@ -59,6 +60,28 @@ if payload is None:
     payload = python_folds()      # 引擎不在场：照旧
 ```
 
+### 接入网关（`wb_agg_engine.py`，默认关）
+
+网关只在**两条每次请求都要全量重扫**的兜底路径上用引擎，开关 `WB_AGG_ENGINE=1`
+（默认关；老安装行为逐字节不变）：
+
+| 接缝 | 位置 | 为什么是它 |
+|---|---|---|
+| 窗口快照的兜底扫描 | `wb_proxy._scan_usage_snapshot_window` | 日/小时桶切片不成立时（自定义区间 / 状态冷 / 桶切不出那一刻）每次全扫 |
+| 序列的整段扫描 | `wb_proxy._usage_timeseries_scan` | 桶切片不成立时的兜底，同样每次全扫 |
+
+**刻意不接**增量聚合（all-time 快照、按账号、计数、按天）：它们带 offset/tail 状态与
+checkpoint，Python 的增量比 C 的全量更快——拿引擎顶上去反而慢。
+
+接缝在调用前核对**归属先决条件**：账号目录里每个 `*.json` 都要有非空 `uid` 与 `realm`，
+且 uid 集合与账号池一致；对不上就回退 Python。原因是引擎只认文件里的 `realm` 字段，
+而 `wb_proxy.row_realm()` 还会在没有 `realm` 时从 token 推导、并跳过没有 uid 的文件——
+两者对「某账号属于哪个 realm」必须逐账号一致，否则 realm 过滤/分组会分叉。
+
+形状对齐：快照段按 `_empty_stats()` 打底再覆盖（引擎只有 13 个累计键，Python 那边还有
+ttft/wall 累积器），序列段补 `ok`/`realm` 两个键。任何一步不成立、库不在场、调用失败，
+接缝都返回 `None`，调用方走原来的 Python 路径。
+
 C ABI 四个符号（`wbc_api.h`）：
 
 ```c
@@ -91,7 +114,14 @@ C 侧是 Python 原始折叠函数的逐条移植（`_fold_usage_snapshot` / `_f
   半行不折 —— 与扫描器同规。
 - **时区**：本地午夜由调用方算好传进来（`daily_midnight`），C 侧不猜 TZ；对拍统一
   `TZ=UTC`。
-- 输出键序可能与 Python 不同，**对拍按 dict 语义比较**（与键序无关）。
+- **realm 归属的回落值**：没有 realm 的行一律回落到字面量 `"intl"`（`wb_proxy.row_realm()`
+  的最后一档），**与过滤时传的 realm 无关**。接缝接线时真机 A/B 抓到过相反的实现（用过滤器
+  取值当回落）：48k 真实日志上 `cn` 视图会把 404 条遗留错误行算成 cn（Python 是 8 条）。
+  同理，读侧的默认 realm 固定是 `"intl"`，`--default-realm` 只有 analytics 那段用它。
+- **snapshot 段支持窗口**：`--since`/`--until` 与 `_fold_usage_snapshot` 同口径（`0` = 不设
+  该边界、上界含端点），所以窗口视图也能走引擎。
+- 输出键序可能与 Python 不同，**对拍按 dict 语义比较**（与键序无关）；序列段的
+  `at`/`since`/`until` 引擎打成整数文本、Python 是 float，接缝逐字段转 float 后再比字节。
 
 ## 验证
 

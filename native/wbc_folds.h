@@ -24,11 +24,13 @@
  *  "by_model_realm":{m:{realm:{...同 by_model 桶...}}},
  *  "by_model_acct":{m:{realm:{acct:{...同 by_model 桶...}}}}}
  * 规则见 CONTRACT.md。第 5 个参数是 realm 过滤器：NULL/""/"all" = 全部；
- * 过滤时行归属回退默认用过滤器本身，否则用 "intl"（wb_proxy.CURRENT_REALM
- * 的缺省值）。
+ * 没有 realm 的行一律回落到 "intl"（wb_proxy.row_realm 的最后一档，与过滤器
+ * 取值无关）。since/until 是窗口边界，取值口径同 _fold_usage_snapshot：
+ * 0 = 不设该边界，上界含端点。
  */
 void fold_snapshot(const Row *rows, size_t n, const Pricing *pr,
-                   const Map *accounts, const char *realm_filter, JW *out);
+                   const Map *accounts, const char *realm_filter,
+                   double since, double until, JW *out);
 
 /* ---- analytics (wb_proxy._fold_usage_analytics / _feed_analytics /
  * _bump_analytics_models) ----

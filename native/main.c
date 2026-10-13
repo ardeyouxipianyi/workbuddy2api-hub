@@ -584,9 +584,11 @@ int engine_run(const EngineOptions *opts, Buf *out_text)
     if (sec & WBC_SEC_SNAPSHOT) {
         /* the 5th argument of fold_snapshot is the realm FILTER (NULL/""/all
          * = every realm), matching usage_snapshot(realm="all") on the Python
-         * side of the parity harness. */
+         * side of the parity harness; --since/--until are the window bounds
+         * (0 = no bound), the same values the windowed Python fold gets. */
         jw_key(out, "snapshot");
-        fold_snapshot(rows, n_rows, pricing, &accounts, opts->realm, out);
+        fold_snapshot(rows, n_rows, pricing, &accounts, opts->realm,
+                      opts->since, opts->until, out);
     }
     if (sec & WBC_SEC_ANALYTICS) {
         jw_key(out, "analytics");

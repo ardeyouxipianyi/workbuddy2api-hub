@@ -289,11 +289,11 @@ class WrapperLogicTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
-    def test_the_gateway_does_not_wire_the_engine(self):
-        # Behaviour neutrality is the whole basis for shipping this now: the
-        # module is opt-in and the gateway folds in pure Python until a
-        # separate change wires the seam. Whoever wires it in should delete
-        # this assertion and add the seam's own tests instead.
+    def test_the_gateway_does_not_import_the_engine_directly(self):
+        # The gateway reaches the engine only through the wb_agg_engine seam
+        # (two cold paths, switch off by default), never by importing this
+        # module: that keeps "engine unavailable == pure Python" decided in
+        # exactly one place, and the seam's own suite covers it.
         import ast
         with open(os.path.join(ROOT, "wb_proxy.py"), encoding="utf-8") as fh:
             tree = ast.parse(fh.read())

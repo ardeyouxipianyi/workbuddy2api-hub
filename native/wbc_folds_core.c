@@ -189,13 +189,16 @@ static int realm_filter_active(const char *realm)
     return realm && realm[0] && strcmp(realm, "all") != 0;
 }
 
-/* Fallback for rows with no realm of their own: the filter value doubles as
- * the default realm here (main.c passes --default-realm, default "intl",
- * which is also wb_proxy.CURRENT_REALM); "all" is a scope word, not a realm,
- * so it falls back to "intl" like the Python module default. */
+/* Fallback for rows with no realm of their own. wb_proxy.row_realm() ends on
+ * the literal "intl" - NOT on the realm being filtered for - so a row the log
+ * never attributed shows up in the intl view and nowhere else. Using the
+ * filter value here (the first version did) put every legacy row into every
+ * realm view: on the 48k real log the cn view counted 404 error rows instead
+ * of 8. The filter value is not the fallback; "intl" is. */
 static const char *realm_fallback(const char *realm)
 {
-    return realm_filter_active(realm) ? realm : "intl";
+    (void)realm;
+    return "intl";
 }
 
 /* wb_proxy._fold_cost: known -> cost_cny += cny; otherwise (and not
@@ -378,13 +381,22 @@ static void bucket_add_present(SBucket *t, const Row *r)
 
 static void snapshot_fold_row(const Row *r, const Pricing *pr,
                               const Map *accounts, const char *filter,
-                              const char *fallback, SBucket *b)
+                              const char *fallback, double since, double until,
+                              SBucket *b)
 {
     const char *outcome;
+    double at;
     Cost cost;
 
     if (filter && strcmp(row_realm_of(r, accounts, fallback), filter) != 0)
         return;
+    /* _fold_usage_snapshot's window tests, value-based like Python's:
+     * `at = row.get("at") or 0`, `if since and at < since`, `if until and
+     * at > until`.  A bound of 0 means "no bound" (the CLI default), and the
+     * upper bound is inclusive. */
+    at = r->has_at ? r->at : 0.0;
+    if (since != 0.0 && at < since) return;
+    if (until != 0.0 && at > until) return;
     outcome = row_outcome_of(r);
     /* Every folded row is priced first - a client abort is priced too, its
      * cost is simply never accumulated (and _fold_cost is not called). */
@@ -437,7 +449,8 @@ static void snapshot_fold_row(const Row *r, const Pricing *pr,
 }
 
 void fold_snapshot(const Row *rows, size_t n, const Pricing *pr,
-                   const Map *accounts, const char *default_realm, JW *out)
+                   const Map *accounts, const char *default_realm,
+                   double since, double until, JW *out)
 {
     const char *filter = realm_filter_active(default_realm) ? default_realm : NULL;
     const char *fallback = realm_fallback(default_realm);
@@ -445,7 +458,7 @@ void fold_snapshot(const Row *rows, size_t n, const Pricing *pr,
     size_t i;
 
     for (i = 0; i < n; i++)
-        snapshot_fold_row(&rows[i], pr, accounts, filter, fallback, b);
+        snapshot_fold_row(&rows[i], pr, accounts, filter, fallback, since, until, b);
     snapshot_write(out, b);
     bucket_free(b);
 }
