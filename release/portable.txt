@@ -50,6 +50,7 @@ wb_fingerprint.py
 wb_identity.py
 wb_ipintel.py
 wb_modelsdev.py
+wb_native_agg.py
 wb_pricing.py
 wb_probes.py
 wb_prompt.py
