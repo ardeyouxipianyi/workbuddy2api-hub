@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 143 个套件：106 个 Python + 37 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 145 个套件：108 个 Python + 37 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -357,6 +357,11 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 ### Unreleased
 
+- **新增：C 引擎接缝 `wb_agg_engine.py`（`WB_AGG_ENGINE=1` 打开，默认关）——冷窗口快照与序列兜底扫描可走 C 引擎，缺库 / 开关关 / 归属输入对不上 / 调用失败一律回退纯 Python**：只接「每次请求都要全量重扫」的两条兜底路径（窗口快照的兜底扫描 `_scan_usage_snapshot_window`、序列的整段扫描 `_usage_timeseries_scan`）；**增量聚合刻意不接**（all-time 快照、按账号、计数、按天都带 offset/tail 状态与 checkpoint，那边 Python 的增量比 C 的全量更快）。真机 48k 行：这两条 Python 全扫约 13 s / 17 s，引擎 1.0–1.2 s。接缝先核对归属先决条件（账号文件必须有非空 `uid` 与 `realm`、uid 集合与账号池一致），对不上就不加速——引擎只认文件里的 `realm`，Python 还会从 token 推导。形状对齐：快照段按 `_empty_stats()` 打底覆盖、序列段补 `ok`/`realm` 两个键。默认关，老安装行为逐字节不变。
+- 回归测试：新增 `tests/_test_agg_engine.py`（27 项：开关语义、归属先决条件、请求形状、数值形态归一、并发一致、桩库下的回退与两条接缝的开 / 关行为），README 套件计数 144 → 145。
+- **修复：C 引擎的 snapshot 段不认窗口、realm 回落值用错**（接缝接线时真机 A/B 抓到）：`fold_snapshot` 原来只吃 realm 过滤器、不吃 `--since/--until`，窗口快照会被当成全量（48k 真实日志 `24h` 视图多算约 20 倍的行）；没有 realm 的行原实现回落到「过滤器取值」，于是遗留行会出现在**每个** realm 视图里（`cn` 视图 errors 404 vs Python 8）——现在一律回落到字面量 `"intl"`（`wb_proxy.row_realm()` 的最后一档），窗口边界也与 `_fold_usage_snapshot` 同口径（`0` = 不设该边界、上界含端点）。对拍：夹具 948 叶子、冻结 48k 2,191 叶子仍 0 差异，24 组窗口/realm 组合与 Python 逐字节相同。
+- **新增：可选独立聚合引擎 `native/` + `wb_native_agg.py`（C 折叠八段，Python 侧 ctypes 调用、缺库静默回退）**：`native/` 下是完整引擎——`wb-agg` 静态 CLI 与 `libwb_agg.so` 共享库共用同一条链路（C99 + 标准库，无第三方依赖、不链接 libpython；CLI 全静态，`.so` 加 `-static-libgcc` 后只依赖系统 libc），`wb_native_agg.py` 用 ctypes 绑定四个符号（ABI 版本 `"1"`）。**库缺失、坏库、ABI 不符、返回 NULL、请求不可序列化或调用抛错，一律返回 `None`，调用方回退纯 Python** —— 引擎没有把网关带崩的路径。口径是 Python 折叠函数的逐条移植（整数精确累加、银行家舍入用 C99 `printf` 的精确十进制实现、坏行跳过、半行不折、真值语义照抄）。验证：字段级对拍夹具 **948 叶子**与真实日志 48,294 行 **2,191 叶子**均 0 差异；库与 CLI 的八段 canonical JSON **逐字节相等 8/8**；C 自测 207 + 53 + 17 项全过。真机（x86_64 软路由，2 核 / 1.9 GB）八段一次全出：48k 行 193.3 s → **9.1 s**（≈21×），150k 行 1579.6 s → **18.7 s**（≈84×）；热查询仍归 Python（38 ms），所以取舍是热路径留 Python、冷折才轮到 C。**接线只走接缝**：`wb_proxy.py` 不直接 import 本模块（由测试钉住），引擎经 `wb_agg_engine` 的两条兜底路径接入、默认关（见上一条）。构建：`python native/build.py`（只需 C99 编译器；CI 不需要它，`native/` 不进便携包）。
+- 回归测试：新增 `tests/_test_native_agg.py`（17 项：回退契约在子进程里真跑——无库 / 坏库 / 坏 `WB_AGG_LIB`；包装逻辑用桩库驱动——版本校验、NULL 结果、释放一次、坏请求不进 C、并发一致），README 套件计数 143 → 144。
 - **修复：命名空间内的自由格式（`type: "custom"`）工具回程被判成 `function_call`，调用发出去却没有返回**（#308 跟进）：`custom_tool_names()` 此前只扫工具清单顶层，于是嵌在 `type: "namespace"` 里的 `exec`（Codex Desktop 的 `functions` 命名空间里它就是 `custom`）从未进入 `custom_names`；`chat_to_response()` 与流式分支用该集合决定回程条目类型，判错后发成 `function_call`，而客户端按 `(name, namespace, kind)` 三元组匹配执行器——类型对不上就找不到执行器，调用既不执行也不返回，模型只能无限重试（现场实测同类会话堆积 42 次调用、0 条结果，agent 反复报「工具被中断」）。现在 `custom_tool_names()` 递归进 namespace 的 `tools` / `children` / `functions` 栏位（深度上限沿用 `NAMESPACE_MAX_DEPTH`）。
 - **修复：工具整份下发在 `input` 的 `additional_tools` 条目里时，回程侧看到的工具清单是空的**（#308 跟进）：出站已合并该条目（v1.7.2 / #308），但 `_handle_responses()` 里 `custom_tool_names()` 与回显的 `request_meta["tools"]` 仍只读顶层 `tools` 字段——新版 Codex Desktop 顶层是空的，于是出站与回程看到两份不同的工具清单。现在两处都走新提取的公共函数 `additional_tools_from_input()`，与 `responses_to_chat()` 用同一份合并清单；请求日志相应扩成 `tools=上游数/合并后数`，便于一眼看出两边是否对齐。`local_web_tools_enabled()` 开启时的 `client_wants_web()` 也改用合并后的清单（该开关默认关，老安装行为不变）。
 - 回归测试：`tests/_test_custom_tools.py` 新增 `[13]`/`[14]`/`[15]` 三节（15 项，套件总数不变）：钉住嵌套 custom 的收集（含 `children` / `functions` 栏位）、嵌套 custom 往返成 `custom_tool_call` 且 `namespace` 正确、同命名空间内的普通 function 仍走 `function_call` 作反面对照，以及工具整份来自 `additional_tools` 时出站合并与回程取值一致。

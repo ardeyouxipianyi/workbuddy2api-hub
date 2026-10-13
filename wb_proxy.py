@@ -72,6 +72,7 @@ import wb_prompt
 import wb_modelsdev
 import wb_probes
 import wb_updates
+import wb_agg_engine
 IS_WINDOWS = os.name == "nt"
 
 # ---- 一键配置客户端（wb_agents）的可用性判定（issue #246）----
@@ -4142,7 +4143,18 @@ def _scan_usage_snapshot_window(r, since, until, pricing_on=None):
 
     价表在这里取一次（与 all-time 折叠同一条口径：一次扫描一份价表快照），
     传给折叠当行级记忆的代次；这次扫描里的行因此可以和别的视图共享定价结果。
+
+    可选加速件（WB_AGG_ENGINE=1，见 wb_agg_engine）：这条路每次请求都要全量
+    重扫，正是 C 引擎擅长的那种活；引擎不在场时逐字走下面的 Python 扫描。
+    引擎的 snapshot 段只有累计键，这里按 _empty_stats() 打底覆盖，形状不变。
     """
+    engine = wb_agg_engine.snapshot_window(
+        log, USAGE_LOG, ACCOUNTS_DIR, r, since, until, pool=POOL,
+        pricing_on=pricing_on)
+    if engine is not None:
+        snap = _empty_stats()
+        snap.update(engine)
+        return snap
     pricing = _pricing_inputs(pricing_on)
     snap = _empty_stats()
     _, error = _scan_usage_from(
@@ -4634,7 +4646,15 @@ def _usage_timeseries_scan(realm, lo, hi, step):
 
     这是窗口序列的兜底路径：日/小时桶切片不成立（见 _series_slice）时用它，
     口径一字未改。
+
+    可选加速件（WB_AGG_ENGINE=1，见 wb_agg_engine）：与窗口快照同理，这条路
+    每次请求都要全量重扫；引擎不在场时逐字走下面的 Python 扫描。序列桶里没有
+    成本字段，所以这条路不依赖价表总开关。
     """
+    engine = wb_agg_engine.series(log, USAGE_LOG, ACCOUNTS_DIR, realm, lo, hi,
+                                  step, pool=POOL)
+    if engine is not None:
+        return engine
     buckets = {}
     # 窗口内 credit 前 50 条：大小 50 的最小堆，堆顶是当前的第 50 名。旧实现
     # 把整窗的计费行全 append 进列表、扫完再 sort 整份切前 50——排序的是上万
