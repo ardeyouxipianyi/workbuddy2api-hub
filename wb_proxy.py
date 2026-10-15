@@ -139,6 +139,28 @@ def agents_client_allowed(client_address):
     return addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
+def enrich_agent_models(models, specs):
+    """把只有 id 的模型条目补上网关自己的目录规格。
+
+    看板送过来的是一串模型 id，而 DSH / Crush 这类客户端要把规格写进自己的
+    配置（上下文窗口、输出上限、思考档位）才会生成对应控件——只写 id 时它们
+    只能吃自己的内置默认值，档位选择器根本不会出现。`specs` 是
+    {"模型 id": 规格}；条目里显式带来的字段优先（空值不算显式）。
+    """
+    if not specs:
+        return models
+    out = []
+    for item in models or []:
+        spec = specs.get(str((item or {}).get("id")))
+        if not spec:
+            out.append(item)
+            continue
+        merged = dict(spec)
+        merged.update({k: v for k, v in item.items() if v not in (None, "")})
+        out.append(merged)
+    return out
+
+
 def launcher_hint(port):
     """Platform-appropriate launcher command for starting on another port."""
     if IS_WINDOWS:
@@ -17632,19 +17654,28 @@ class Handler(BaseHTTPRequestHandler):
                 seen.add(mid)
                 meta = meta if isinstance(meta, dict) else {}
                 entry = {"id": mid}
-                ctx = meta.get("maxInputTokens")
-                window = meta.get("contextWindow")
-                if isinstance(window, dict) and window.get("defaultLength"):
-                    ctx = window.get("defaultLength")
-                if not ctx and isinstance(window, dict):
-                    lengths = window.get("supportedLengths") or []
-                    ctx = lengths[-1] if lengths else None
+                # 与 /v1/models 走同一条查找链（上游值 > 内建知识表 > 本地缓存 >
+                # 默认）：否则一键配置写进客户端的窗口会和网关自己宣告的对不上
+                # （目录里的 contextWindow.defaultLength 只是桌面端的默认档，
+                # deepseek-v4.1-flash 是 300k，而网关宣告的是 1M）。
+                try:
+                    ctx, out, _src = wb_modelsdev.lookup(
+                        mid, meta.get("maxInputTokens"),
+                        meta.get("maxOutputTokens"), directory=ACCOUNTS_DIR)
+                except Exception:
+                    ctx = meta.get("maxInputTokens")
+                    out = meta.get("maxOutputTokens")
+                if not ctx:
+                    window = meta.get("contextWindow")
+                    if isinstance(window, dict):
+                        lengths = window.get("supportedLengths") or []
+                        ctx = window.get("defaultLength") or (
+                            lengths[-1] if lengths else None)
                 if ctx:
                     try:
                         entry["context_window"] = int(ctx)
                     except (TypeError, ValueError):
                         pass
-                out = meta.get("maxOutputTokens")
                 if out:
                     try:
                         entry["max_output"] = int(out)
@@ -17653,6 +17684,16 @@ class Handler(BaseHTTPRequestHandler):
                 name = meta.get("name")
                 if name:
                     entry["name"] = name
+                # 可选的思考档位交给客户端（DSH 用它生成会话里的档位选择器）。
+                # 只宣告目录明确列出档位的模型：固定档位的模型（只有
+                # reasoning.effort、没有 supportedEfforts）不列，选了也不会改变
+                # 上游实际跑的档位。
+                efforts = (meta.get("reasoning") or {}).get("supportedEfforts")
+                if isinstance(efforts, (list, tuple)):
+                    levels = [str(e).strip() for e in efforts
+                              if str(e or "").strip()]
+                    if levels:
+                        entry["reasoning_efforts"] = levels
                 models.append(entry)
         except Exception:
             pass
@@ -17768,6 +17809,18 @@ class Handler(BaseHTTPRequestHandler):
                 cleaned_models.append(item)
             elif isinstance(item, str) and item.strip():
                 cleaned_models.append({"id": item.strip()})
+        # 看板只送模型 id，而 DSH / Crush 这类客户端要求把规格写进自己的配置
+        # （上下文窗口、输出上限、思考档位）。这里按 id 把网关自己的目录规格
+        # 补上（见 enrich_agent_models），显式带来的字段优先——否则一键配置
+        # 写出来的模型列表只有 id，客户端就只能吃自己的内置默认值。
+        try:
+            specs = {}
+            for spec in self._agents_models():
+                if isinstance(spec, dict) and spec.get("id"):
+                    specs[str(spec["id"])] = spec
+        except Exception:
+            specs = {}
+        cleaned_models = enrich_agent_models(cleaned_models, specs)
         warnings = []
         try:
             api_key = self._agents_resolve_key(payload, warnings)

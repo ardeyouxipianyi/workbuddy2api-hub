@@ -133,7 +133,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 152 个套件：112 个 Python + 40 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 153 个套件：113 个 Python + 40 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -231,6 +231,30 @@ Codex App 这类客户端会在 Responses 请求里声明 `web_search` / `web_fe
 - **可回滚**：写入前自动备份到 `accounts/agent-backups/<客户端ID>/`（每文件保留最新 10 份），首次接入的原件永久保留；多文件客户端（DSH、Codex）两阶段写入，任一文件失败立即回退；
 - **还原**：byte-exact 回到首次接入前，网关新建的文件会被清理；若之后手动改过配置，看板会提示「检测到外部修改」，还原仍会覆盖回原件；
 - **密钥安全**：API Key 只写进客户端自己的本地配置目录（权限仅限当前系统用户），单文件超过 8MB 拒绝编辑。
+
+**DSH：思考档位与上下文窗口写在哪**（`~/.dsh/settings.yaml`）
+
+一键配置给 DSH 写的每个模型条目都带上网关宣告的规格，DSH 会据此生成它自己的选择器：
+
+```yaml
+    wb-proxy:
+      api: openai-completions
+      baseURL: http://127.0.0.1:8788/v1
+      compat: {thinkingFormat: openai, supportsReasoningEffort: true}
+      models:
+        - id: deepseek-v4.1-flash
+          contextWindow: 1000000     # 客户端认为的上下文容量（压缩 / 截断按它算）
+          maxTokens: 128000          # 单次输出上限
+          reasoningEfforts:          # 会话里可选的思考档位：键=档位，值=发给网关的拼写
+            low: low
+            high: high
+            max: max
+```
+
+- **思考程度在 DSH 里怎么选**：不在「设置 → 模型」页（DSH 有意不把 per-model 的档位放进 provider 级表单），而在**输入框旁的模型菜单**：菜单里有两行 `模型` 与 `推理等级`，点「推理等级」选档位；`/model` 弹窗只列模型、不列档位。选项完全来自上面的 `reasoningEfforts` —— 不声明就没有这一行（`/v1/models` 里的 `reasoning_efforts` DSH 不读，它只读 `id` / `name` / `contextWindow` / `maxTokens`）。
+- **上下文长度怎么改**：`contextWindow` 就是 DSH 用的容量。改客户端侧就编辑这一行（或在 DSH 的模型编辑界面里填），改网关侧就改 `/v1/models` 宣告的 `context_length`；两条链路现在共用 `wb_modelsdev.lookup` 的同一套取值（上游值 > 内建知识表 > 本地缓存 > 1M 默认），不会再出现「网关宣告 1M、一键配置写 300k」这种对不上的情况。
+- **上游钉死档位的模型**（目录里只有 `reasoning.effort`、没有 `supportedEfforts`）不写 `reasoningEfforts`：给了选择器也不会改变上游实际跑的档位。
+- **注意 profile 覆盖层**：若 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里有 `- id: llm-pi-ai` 条目，它会**整体替换**该插件的配置（不是逐键合并）——此时 `settings.yaml` 里那份是被盖住的，模型清单与档位以 patch 那份为准，一键配置写进去不会生效。
 
 **在另一台机器上接入（远程 / 非本机）**：看板的一键配置运行在网关进程里，改的是**网关所在机器**的配置目录——所以它只在网关本机、且用 `127.0.0.1` 打开看板时可用（远程访问、容器 / OpenWrt 部署下按设计隐藏入口）。客户端装在别的电脑（网关跑在服务器 / NAS / 路由器上）时，改用自带的配置器 CLI：它在**客户端所在的机器**上运行，写本机配置、只通过 HTTP 从网关取模型表：
 

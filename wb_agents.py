@@ -628,6 +628,60 @@ def _apply_opencode(paths, ctx):
     return {path: _dump_json(data)}
 
 
+def dsh_reasoning_levels(raw):
+    """{档位: 线上拼写} for DSH, from the gateway's `reasoning_efforts` list.
+
+    DSH 的模型条目用 `reasoningEfforts` 声明可选思考档位（键=选择器里的档位，
+    值=请求里实际发的拼写）。本路由不在它的内置目录里，所以不声明就没有选择
+    器——`/v1/models` 里的 `reasoning_efforts` 它不读，它只读 id / name /
+    contextWindow / maxTokens。网关宣告的档位名就是上游认的拼写，一一照抄即可；
+    固定档位的模型（网关只给 reasoning_fixed_effort）没有列表，就不声明：给了
+    选择器也不会改变上游实际跑的档位。
+    """
+    if isinstance(raw, dict):
+        pairs = list(raw.items())
+    elif isinstance(raw, (list, tuple)):
+        pairs = [(lvl, lvl) for lvl in raw]
+    else:
+        return None
+    levels = {}
+    for level, wire in pairs:
+        name = str(level or "").strip()
+        if not name:
+            continue
+        levels[name] = str(wire or "").strip() or name
+    return levels or None
+
+
+def dsh_default_model(text, provider, model):
+    """The `agent-default-model` entry to write, keeping keys we do not own.
+
+    yaml_upsert_inline() replaces that leaf wholesale, so writing a bare
+    {provider, model} silently drops whatever the user set beside it - a
+    reasoningEffort, for instance, which is how a default thinking level gets
+    lost on a re-apply. Read the current inline mapping and merge the route
+    over it; a block-style or unparsable value falls back to the bare pair
+    rather than guessing.
+    """
+    out = {"provider": provider, "model": model}
+    for line in str(text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("agent-default-model:"):
+            continue
+        raw = stripped.split(":", 1)[1].strip()
+        if raw.startswith("{"):
+            try:
+                current = json.loads(raw)
+            except ValueError:
+                current = None
+            if isinstance(current, dict):
+                out = dict(current)
+        break
+    out["provider"] = provider
+    out["model"] = model
+    return out
+
+
 def _apply_dsh(paths, ctx):
     settings_path = paths["settings"]
     text = _read_text(settings_path)
@@ -639,12 +693,24 @@ def _apply_dsh(paths, ctx):
         item = {"id": mid}
         if entry.get("context_window"):
             item["contextWindow"] = entry["context_window"]
+        if entry.get("max_output"):
+            try:
+                item["maxTokens"] = int(entry["max_output"])
+            except (TypeError, ValueError):
+                pass
+        levels = dsh_reasoning_levels(entry.get("reasoning_efforts"))
+        if levels:
+            item["reasoningEfforts"] = levels
         models.append(item)
     provider = {
         "displayName": PROVIDER_NAME,
         "apiKeyEnv": CREDENTIAL_REF,
         "api": "openai-completions",
         "baseURL": ctx["base_url_v1"],
+        # wb-proxy 不在 DSH 的内置目录里，推理字段的线上形状必须自己说明：
+        # 走标准 reasoning_effort，不发 thinking 块——DeepSeek 系需要的那份
+        # thinking / reasoning_content 由网关补（wb_proxy.build_upstream_body）。
+        "compat": {"thinkingFormat": "openai", "supportsReasoningEffort": True},
     }
     if models:
         provider["models"] = models
@@ -653,7 +719,7 @@ def _apply_dsh(paths, ctx):
     if ctx.get("model"):
         text = yaml_upsert_inline(
             text, "agent-default-model",
-            {"provider": PROVIDER_ID, "model": ctx["model"]})
+            dsh_default_model(text, PROVIDER_ID, ctx["model"]))
     credentials_path = paths["credentials"]
     cred_text = _read_text(credentials_path)
     cred_text = yaml_refs_upsert(cred_text, CREDENTIAL_REF, ctx["api_key"])
@@ -1164,6 +1230,11 @@ def fetch_models_from_gateway(base_url, api_key, timeout=10):
                 entry["max_output"] = int(out_tokens)
             except (TypeError, ValueError):
                 pass
+        efforts = item.get("reasoning_efforts")
+        if isinstance(efforts, (list, tuple)):
+            levels = [str(e).strip() for e in efforts if str(e or "").strip()]
+            if levels:
+                entry["reasoning_efforts"] = levels
         name = item.get("name")
         if name:
             entry["name"] = str(name)
