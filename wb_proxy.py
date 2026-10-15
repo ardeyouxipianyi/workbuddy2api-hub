@@ -18830,6 +18830,19 @@ class Handler(BaseHTTPRequestHandler):
                     401, "missing or invalid API key", "authentication_error")
         elif not self._authorized():
             return
+        # Fail closed until the Anthropic-to-Chat bridge has verified prompt-cache
+        # parity. Reject before forwarding or recording any paid usage.
+        if is_messages_route and os.environ.get(
+                "WB_ENABLE_ANTHROPIC_MESSAGES", "").strip().lower() not in (
+                "1", "true", "yes", "on"):
+            return self._anthropic_error(
+                400,
+                "Anthropic Messages is disabled by default: this gateway "
+                "translates requests to Chat Completions and ignores "
+                "cache_control. This can cause excessive credit consumption. "
+                "Set WB_ENABLE_ANTHROPIC_MESSAGES=1 to opt in at your own risk "
+                "(see issue #367).",
+                "invalid_request_error")
         payload = self._payload_or_error(allow_list=(path == "/accounts/import"))
         if payload is None:
             return

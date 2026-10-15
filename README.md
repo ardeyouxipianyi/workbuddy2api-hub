@@ -9,11 +9,11 @@
   <img src="https://img.shields.io/badge/Vibe_Coding-100%25-ff69b4?style=flat-square" alt="Vibe Coding">
 </p>
 
-把腾讯 **[www.workbuddy.ai](https://www.workbuddy.ai)**（国际版）与 **[codebuddy.cn](https://www.codebuddy.cn)**（国内版）的原生服务封装成标准 OpenAI 兼容接口（Chat Completions / Responses）与原生 Anthropic Messages 接口，并补齐多账号调度与运维能力：
+把腾讯 **[www.workbuddy.ai](https://www.workbuddy.ai)**（国际版）与 **[codebuddy.cn](https://www.codebuddy.cn)**（国内版）的原生服务封装成标准 OpenAI 兼容接口（Chat Completions / Responses），并提供默认关闭的实验性 Anthropic Messages 适配；同时补齐多账号调度与运维能力：
 
 - **开箱即用**：绿色包自带精简 Python（Windows），双击脚本即启；
 - **双区域独立路由**：国际版 / 国内版各自配置与调度，看板一键切换，状态落盘；
-- **三协议**：Chat Completions、Responses API（Codex）、原生 Anthropic Messages（Claude Code / Anthropic SDK）；
+- **协议与风险**：默认支持 Chat Completions、Responses API（Codex）；Anthropic Messages（Claude Code / Anthropic SDK）经协议转换且缓存兼容性尚未验证，默认禁用，仅可显式选择启用；
 - **模型目录对齐官方桌面端**：剔除补全通道与专线变体，能力与规格按桌面端宣告，上游新模型无需发版即进 `/v1/models`；
 - **设备指纹隔离 (`derive_id`)**：以账号 UID 稳定派生机器码与会话标识，同一账号不漂移、不同账号互不关联；
 - **账号接入**：看板点链接走浏览器 OAuth；Windows 上还能直接从运行中的桌面客户端导入（加密 token 就地解密），macOS / Linux 可手动粘贴解码密钥后导入；
@@ -309,16 +309,20 @@ export OPENAI_BASE_URL="http://127.0.0.1:8788/v1"
 export OPENAI_API_KEY="你在看板设置中添加并绑定的API_Key"
 ```
 
-**Claude Code / Anthropic SDK（原生 Anthropic Messages API）**
+**Claude Code / Anthropic SDK（实验性 Anthropic Messages 适配，默认禁用）**
+
+> ⚠️ **积分风险：默认拒绝调用。** 网关对外接受 Anthropic Messages，但对内将请求转换为 WorkBuddy 的 `/v2/chat/completions`；`cache_control` 被忽略。已有 [#367](https://github.com/ardeyouxipianyi/workbuddy2api-hub/issues/367) 报告长会话缓存命中率仅约 11%，单次消耗超过 100 积分。该问题的因果机制仍待定位，故暂时默认禁用整个 Anthropic Messages 入口，而不假装完全兼容。禁用时 `/v1/messages`、`/messages` 及对应 `count_tokens` 入口返回 Anthropic 格式的 HTTP 400（`invalid_request_error`），请求不会转发至上游。
+
+只有确认理解风险后，才在**网关服务端**显式设置 `WB_ENABLE_ANTHROPIC_MESSAGES=1` 并重启。Docker Compose 可在 `wb-proxy.environment` 中加入 `- WB_ENABLE_ANTHROPIC_MESSAGES=1`；其他环境则在启动网关前设置此环境变量。客户端配置示例：
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8788"
 export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 ```
 
-网关原生实现 `/v1/messages`（流式与非流式）：`system`（字符串或文本块数组）、`text` / `image` / `document` / `tool_use` / `tool_result` 内容块双向转换，`tools` + `tool_choice`、`stop_sequences`、`metadata.user_id`、`thinking` / `output_config.effort` 全部映射到上游；流式输出是原生事件序列（`message_start` → `content_block_start` / `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`）；鉴权接受 `x-api-key` 或 `Authorization: Bearer`，错误一律用 Anthropic 的错误信封。
+实验性适配包含 `system`、`text`、`image`、`document`、`tool_use`、`tool_result`、`tools` 与 `tool_choice` 等字段转换，并将响应包装为 Anthropic 的流式事件序列或非流式消息。这不是向上游的原生 Anthropic 透传。
 
-边界：服务端工具（`web_search` 等）上游不支持，会被丢弃并在 system 里注明，不会伪造调用；`thinking` / `redacted_thinking` 块不回放（上游不提供可验证签名）；`top_k`、`cache_control`、`context_management` 与 `betas` 忽略；`/v1/messages/count_tokens` 返回的是网关的 CJK 感知估算值（与用量统计同一套估算器），**不是**官方分词器的精确值。
+已知边界：服务端工具（`web_search` 等）上游不支持，会被丢弃并在 system 里注明；`thinking` / `redacted_thinking` 历史块不回放；`top_k`、`cache_control`、`context_management` 与 `betas` 被忽略；`/v1/messages/count_tokens` 在显式启用后只提供网关的 CJK 感知估算值，**不是**官方分词器的精确值。
 
 ---
 
@@ -335,8 +339,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | GET | / | Web 用量与任务监控看板 |
 | POST | /v1/chat/completions | 标准 Chat Completions 接口 |
 | POST | /v1/responses | Responses API 协议接口 |
-| POST | /v1/messages | 原生 Anthropic Messages 协议接口（流式 / 非流式，`x-api-key` 或 `Authorization` 鉴权） |
-| POST | /v1/messages/count_tokens | Anthropic 计数接口（CJK 感知估算值，非官方分词器） |
+| POST | /v1/messages | 实验性 Anthropic Messages 适配，默认禁用（HTTP 400）；需显式启用并承担缓存风险 |
+| POST | /v1/messages/count_tokens | 实验性 Anthropic 计数估算接口，随 Messages 入口默认禁用 |
 | GET | /v1/models | 官方对齐模型列表（含能力与规格宣告） |
 | GET | /pricing | 定价状态：当前生效策略、上次/下次取价时间、未定价清单（分类 + 候选） |
 | POST | /pricing/refresh | 立即取一次价（需面板会话） |
