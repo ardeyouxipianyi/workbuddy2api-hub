@@ -239,6 +239,46 @@ UPSTREAM = "https://www.workbuddy.ai"
 CHAT_PATH = "/v2/chat/completions"
 MODELS_PATH = "/v2/enterprises/personal/models"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+
+# ---------------------------------------------------------------------------
+# Background-model redirection (desktop clients).
+#
+# A desktop client's model picker only governs the MAIN chat thread. Its
+# built-in "model routing config" (codex-apps/protocol/src/model-routing-config.ts)
+# sends background work - memory generation, ambient suggestions, ephemeral
+# generation, automations - to its own hard-coded models. Those requests hit
+# this gateway on the same key as normal traffic, so they keep burning paid
+# credits even when a free model is selected in the UI.
+#
+# Rewrite them to a free target so the client features keep working without
+# spending credits. Override without editing code:
+#   WB_BACKGROUND_MODEL_NAMES="gpt-5.6-terra,gpt-5.6-luna,gpt-5.3-codex"
+#   WB_BACKGROUND_MODEL_TARGET="deepseek-v4.1-flash"
+# ---------------------------------------------------------------------------
+BACKGROUND_MODEL_TARGET = os.environ.get("WB_BACKGROUND_MODEL_TARGET", "deepseek-v4.1-flash")
+BACKGROUND_MODEL_NAMES = tuple(
+    m.strip().lower()
+    for m in os.environ.get(
+        "WB_BACKGROUND_MODEL_NAMES",
+        "gpt-5.6-terra,gpt-5.6-luna,gpt-5.3-codex",
+    ).split(",")
+    if m.strip()
+)
+
+
+def _apply_background_model_alias(payload):
+    """Rewrite known client background-task models to a free target model."""
+    if not isinstance(payload, dict):
+        return
+    name = payload.get("model")
+    if not isinstance(name, str):
+        return
+    if name.strip().lower() not in BACKGROUND_MODEL_NAMES:
+        return
+    payload["model"] = BACKGROUND_MODEL_TARGET
+    log("alias: background model %s -> %s" % (name, BACKGROUND_MODEL_TARGET))
+
+
 # The WorkBuddy AI desktop app caches its account product config here on every
 # launch. That file carries the real model catalog the app shows in its picker
 # (21 models, incl. deepseek-v4.1-flash / gpt-6-astra) - the CLI-facing
@@ -18835,6 +18875,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if is_account_route:
             return self._handle_accounts(path, payload)
+        _apply_background_model_alias(payload)
         if is_messages_route:
             if path.endswith("/count_tokens"):
                 return self._handle_messages_count_tokens(payload)
