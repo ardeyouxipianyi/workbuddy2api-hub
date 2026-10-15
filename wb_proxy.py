@@ -402,6 +402,8 @@ _models_cache = {"intl": {"at": 0.0, "data": None}, "cn": {"at": 0.0, "data": No
 #: file_mtime 是桌面缓存文件自己的写入时刻（仅配置文件来源，可能远早于
 #: fetched_at——那正是「清单是不是新鲜」的证据）。与 _models_cache 同批更新。
 _catalog_meta = {}
+#: 上游目录成功响应的落盘存档目录（纯留档，网关不读；运行时产生，已 gitignore）。
+CATALOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "catalog")
 # Usage accounting: every upstream response carries a usage block, and the
 # proxy also records one JSONL line per request. Defaults to a folder next to
 # this script; override with --usage-dir or WB_PROXY_USAGE_DIR.
@@ -10646,6 +10648,14 @@ def fetch_remote_product_config(realm):
             continue
         parsed = parse_remote_catalog(payload)
         if parsed:
+            # 成功响应原样落盘留档（catalog/，纯存档，写失败不影响取数）。
+            try:
+                os.makedirs(CATALOG_DIR, exist_ok=True)
+                with open(os.path.join(CATALOG_DIR, "product-config-%s.json" % realm),
+                          "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False)
+            except Exception:
+                pass
             return parsed
         last = "empty catalogue"
     log("remote catalog: %s fetch failed (%s)" % (realm, last))

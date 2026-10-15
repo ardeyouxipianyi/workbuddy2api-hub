@@ -13,6 +13,9 @@ usage/*.sqlite3-shm
 !usage/README.txt
 usage/*.bak*
 
+# 运行时模型目录落盘存档（上游 /v3/config 成功响应副本，删除安全）
+catalog/
+
 # 运行时日志文件
 logs/
 
