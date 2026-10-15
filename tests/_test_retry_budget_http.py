@@ -50,6 +50,11 @@ def jwt(uid):
 
 
 # 4 个账号：预算把它截在 2 次尝试上，「是预算收的手、不是池子空了」才可证。
+# lastDailyChat 写成今天：调度器启动 10 秒后会跑一次无条件巡检，其中对国际账号
+# 只有「每日活跃打卡」这一步会发请求——它会用一个代表账号往同一个假上游打一发
+# "Hi"，把「这一轮链打了几次」数成 2 且换个账号（CI 上就是它把这条用例搞红的）。
+# 标成今天已打卡，can_daily_chat() 即为 False，那次巡检对本套件就没有出站请求了。
+_TODAY = time.strftime("%Y-%m-%d %H:%M:%S")
 for index in (1, 2, 3, 4):
     uid = "acct-budget-%d" % index
     with open(os.path.join(ACCOUNTS, "acct%d.json" % index), "w", encoding="utf-8") as fh:
@@ -62,6 +67,7 @@ for index in (1, 2, 3, 4):
             "domain": "www.workbuddy.ai",
             "platform": "CLI",
             "product": "workbuddy",
+            "lastDailyChat": _TODAY,
             "enabled": True,
         }, fh)
 
@@ -160,6 +166,12 @@ class Args(object):
 
 P._apply_cli_overrides(Args())
 P._bootstrap_runtime(Args())
+# 隔离自检：这批账号今天都「已打卡」，调度器启动后的那次巡检就不该对国际账号
+# 发任何出站请求。少了它，假上游的计数会被后台流量污染，而失败现场看起来像是
+# 重试链多换了一次号（CI 上正是如此）。哪天 fixture 的 lastDailyChat 被拿掉，
+# 这里会直接报出来，而不是留成一条偶发红。
+assert P.POOL and P.POOL.accounts, "账号池没起来"
+assert all(not a.can_daily_chat() for a in P.POOL.accounts),     "fixture 的 lastDailyChat 没生效，调度器巡检会污染上游计数"
 gateway = ThreadingHTTPServer(("127.0.0.1", GATEWAY_PORT), P.Handler)
 threading.Thread(target=gateway.serve_forever, daemon=True).start()
 
