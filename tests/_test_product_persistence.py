@@ -7,6 +7,9 @@ default and parked the stored value in a `saved_product` field that nothing in
 the repository ever read, so a switch looked saved on disk and silently
 reverted on every restart.
 
+Section [5] also pins the conversation header family every identity must carry
+(upstream answers 400 / code 11-128, `conversation id missing`, without it).
+
 No network: accounts are built from dicts and written to a temp directory.
 """
 import json
@@ -90,6 +93,43 @@ check("the outbound headers follow it",
       cn.headers().get("X-IDE-Type") == "VSCode"
       and desktop.headers().get("X-IDE-Type") == "WorkBuddy",
       (cn.headers().get("X-IDE-Type"), desktop.headers().get("X-IDE-Type")))
+
+print()
+print("[5] the outbound identity carries the conversation header family")
+# 上游的渠道校验在请求完全没有会话 id 时回 400 / code 11-128
+# （`conversation id missing`，displayTips「这次调用没通过渠道校验」）。三套
+# 身份都得带这套头：VSCode / CLI 一直带，桌面端（所有账号默认的那套）原来
+# 一个都没有。X-Conversation-ID 由会话键稳定派生，同一会话内不变。
+CONV_HEADERS = ("X-Conversation-ID", "X-Conversation-Request-ID",
+                "X-Conversation-Message-ID")
+for want in ("workbuddy", "vscode", "cli"):
+    h = wb_identity.build_identity_headers(want, "intl", "u1", "tok",
+                                           conversation_id="conv-seed")
+    check("%s sends the conversation header family" % want,
+          all(h.get(k) for k in CONV_HEADERS),
+          [k for k in CONV_HEADERS if not h.get(k)])
+    check("%s: the message id equals the request id" % want,
+          h.get("X-Conversation-Message-ID") == h.get("X-Request-ID"))
+check("the conversation id is stable for one seed",
+      wb_identity.conversation_uuid("s") == wb_identity.conversation_uuid("s"))
+check("and differs across seeds",
+      wb_identity.conversation_uuid("s") != wb_identity.conversation_uuid("t"))
+no_seed = wb_identity.conversation_uuid(None)
+check("no seed still yields an uppercase UUID",
+      no_seed == no_seed.upper() and len(no_seed) == 36, no_seed)
+conv_acc = A.Account(credential("workbuddy"))
+h1 = conv_acc.headers(purpose="chat", conversation_id="pfx-same")
+h2 = conv_acc.headers(purpose="chat", conversation_id="pfx-same")
+h3 = conv_acc.headers(purpose="chat", conversation_id="pfx-other")
+check("Account.headers threads the seed into X-Conversation-ID",
+      h1.get("X-Conversation-ID") == wb_identity.conversation_uuid("pfx-same"),
+      h1.get("X-Conversation-ID"))
+check("same seed -> same header across calls",
+      h1.get("X-Conversation-ID") == h2.get("X-Conversation-ID"))
+check("different seed -> different header",
+      h1.get("X-Conversation-ID") != h3.get("X-Conversation-ID"))
+check("the billing headers are untouched",
+      "X-Conversation-ID" not in conv_acc.headers(purpose="billing"))
 
 print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))

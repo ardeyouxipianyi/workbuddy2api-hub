@@ -1128,11 +1128,16 @@ class Account(object):
             return self.refresh()
         return self.refresh()
 
-    def headers(self, purpose="chat"):
+    def headers(self, purpose="chat", conversation_id=None):
         """组出这一轮的出站标头。
 
         chat 用途走 wb_identity（CLI 头 / WorkBuddy 头，可切换）；
         billing 用途维持原本的轻量标头，计费端点不吃那套身分。
+
+        conversation_id 是这一轮所属会话的键（客户端自带的会话标识，或按对话
+        前缀派生的亲和键）：三套身分都会据此推一个稳定的 X-Conversation-ID，
+        因为上游的渠道校验在请求完全没有会话 id 时回 400 / code 11-128
+        （`conversation id missing`）。留空则退回随机 UUID（一次性探针）。
         """
         cfg = get_realm_config(self.realm)
 
@@ -1170,7 +1175,9 @@ class Account(object):
             realm=self.realm,
             uid=self.uid,
             token=self.access_token,
-            conversation_id=getattr(self, "conversation_id", None),
+            conversation_id=(conversation_id
+                             if conversation_id is not None
+                             else getattr(self, "conversation_id", None)),
             enterprise_id=self.enterprise_id,
             tenant_id=self.enterprise_id,
         )

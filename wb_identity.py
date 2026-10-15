@@ -22,6 +22,11 @@
      - X-Product: SaaS
      - UA: CLI/<ver> CodeBuddy/<ver>
      - 国际版端点: www.workbuddy.ai，国内版端点: copilot.tencent.com
+
+三套身分都带官方客户端的会话头族（X-Conversation-ID / -Request-ID /
+-Message-ID）：缺了它上游的渠道校验会回 400 / code 11-128
+（`conversation id missing`）。X-Conversation-ID 由会话键稳定派生，见
+conversation_uuid。
 """
 
 import uuid
@@ -73,6 +78,22 @@ def domain_for_realm(realm):
     return endpoint_for(realm, PRODUCT_DESKTOP)[1]
 
 
+def conversation_uuid(seed):
+    """会话 id：同一会话稳定，无种子时退回随机 UUID。
+
+    官方客户端整段会话复用同一个 X-Conversation-ID，所以这里从网关已有的
+    会话键（客户端自带的会话标识，或按对话前缀派生的亲和键）确定性地推一个
+    UUID，而不是每次请求新造一个。上游的渠道校验也看这个头：请求里完全没有
+    会话 id 时它会回 400 / code 11-128（`conversation id missing`），所以三套
+    身分都必须带上。没有种子（一次性探针）时退回随机值，与 VSCode/CLI 身分
+    一直以来的行为一致。
+    """
+    s = str(seed or "").strip()
+    if not s:
+        return str(uuid.uuid4()).upper()
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, s)).upper()
+
+
 def build_identity_headers(product, realm, uid, token,
                            conversation_id=None, enterprise_id="",
                            tenant_id="", department=""):
@@ -80,7 +101,7 @@ def build_identity_headers(product, realm, uid, token,
     product = normalize_product(product)
     is_cn = (realm == "cn")
 
-    conv = str(conversation_id or "").strip() or str(uuid.uuid4()).upper()
+    conv = conversation_uuid(conversation_id)
     msg_id = uuid.uuid4().hex
 
     if product == PRODUCT_DESKTOP:
@@ -97,6 +118,9 @@ def build_identity_headers(product, realm, uid, token,
             "User-Agent": chat_ua,
             "X-User-Id": str(uid or "anonymous"),
             "Authorization": "Bearer " + str(token or ""),
+            "X-Conversation-ID": conv,
+            "X-Conversation-Request-ID": uuid.uuid4().hex,
+            "X-Conversation-Message-ID": msg_id,
             "X-Request-ID": msg_id,
         }
     elif product == PRODUCT_VSCODE:
