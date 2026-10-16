@@ -180,6 +180,17 @@ class ChatPathTests(unittest.TestCase):
         self.assertNotIsInstance(ctx.exception, P.LocalNetworkError)
         self.assertGreaterEqual(self.account.fails, 1)
 
+    def test_generic_failure_is_logged_with_the_account(self):
+        """通用失败分支以前不写日志：账号被冷却，可事后查不到是谁、为什么。"""
+        lines = []
+        with mock.patch.object(P, "log", lambda msg, **kw: lines.append(str(msg))):
+            with self.assertRaises(Exception):
+                self._run(ValueError("boom from the request body"))
+        self.assertTrue(any(self.account.uid[:8] in line and "cooling" in line
+                            for line in lines), lines)
+        self.assertTrue(any("boom from the request body" in line for line in lines), lines)
+        self.assertGreaterEqual(self.account.fails, 1)
+
 
 class ProbeTests(unittest.TestCase):
     """一键测试里的连通性探针：只连写死的 https 上游，且拒绝私有/环回地址。"""
@@ -268,6 +279,86 @@ class TestAllRouteTests(unittest.TestCase):
         body = self._call({"realm": "bogus"}, [], network)["body"]
         self.assertEqual(body["summary"]["tested"], 0)
         self.assertEqual(body["summary"]["realm"], P.CURRENT_REALM)
+
+
+class SoftLadderTests(unittest.TestCase):
+    """软限流的两条阶梯同样要有时间窗（老实现只加不减、只有成功才归零）。"""
+
+    def setUp(self):
+        self.window = A.FAIL_WINDOW
+
+    def tearDown(self):
+        A.FAIL_WINDOW = self.window
+
+    def test_account_ladder_restarts_after_the_window(self):
+        acc = account()
+        for _ in range(3):
+            acc.note_soft_rate("HTTP 429 (account soft rate)")
+        self.assertEqual(acc.soft_streak, 3)
+        self.assertEqual(acc.note_soft_rate("HTTP 429 (account soft rate)"), 4800.0,
+                         "窗口内第 4 次：600 * 2**3")
+        acc.last_soft_at = time.time() - (A.FAIL_WINDOW + 1)
+        self.assertEqual(acc.note_soft_rate("HTTP 429 (account soft rate)"), 600.0,
+                         "隔了许久再来一次，该回到第一档而不是继续抬价")
+        self.assertEqual(acc.soft_streak, 1)
+
+    def test_model_ladder_restarts_after_the_window(self):
+        acc = account()
+        for _ in range(3):
+            acc.note_unscoped_rate("deepseek-v4.1-flash")
+        self.assertEqual(acc.unscoped_streak, 3)
+        self.assertEqual(acc.note_unscoped_rate("deepseek-v4.1-flash"), 480.0,
+                         "窗口内第 4 次：60 * 2**3")
+        acc.last_soft_at = time.time() - (A.FAIL_WINDOW + 1)
+        self.assertEqual(acc.note_unscoped_rate("deepseek-v4.1-flash"), 60.0)
+        self.assertEqual(acc.unscoped_streak, 1)
+
+    def test_success_resets_the_soft_window(self):
+        acc = account()
+        acc.note_soft_rate("HTTP 429 (account soft rate)")
+        acc.note_success()
+        self.assertEqual(acc.last_soft_at, 0.0)
+        self.assertEqual(acc.soft_streak, 0)
+        self.assertEqual(acc.note_soft_rate("HTTP 429 (account soft rate)"), 600.0)
+
+    def test_zero_window_keeps_the_old_ladder(self):
+        A.FAIL_WINDOW = 0
+        acc = account()
+        acc.note_soft_rate("HTTP 429 (account soft rate)")
+        acc.last_soft_at = time.time() - 86400
+        acc.note_soft_rate("HTTP 429 (account soft rate)")
+        self.assertEqual(acc.soft_streak, 2, "WB_FAIL_WINDOW=0 时保持旧的累计语义")
+
+
+class LeftTimeFormatTests(unittest.TestCase):
+    """剩余时间要说人话：还剩几十秒时写「0 min」会被读成「早该能用了」。"""
+
+    def test_seconds_minutes_hours(self):
+        self.assertEqual(A._human_left(42), "42s")
+        self.assertEqual(A._human_left(90), "1m30s")
+        self.assertEqual(A._human_left(600), "10m")
+        self.assertEqual(A._human_left(7200), "2h")
+        self.assertEqual(A._human_left(9000), "2h30m")
+        self.assertEqual(A._human_left(-5), "0s")
+
+    def test_reason_never_says_zero_minutes(self):
+        acc = account()
+        acc.cooldown_until = time.time() + 42
+        acc.soft_streak = 3
+        reason = acc.unavailable_reason(model="deepseek-v4.1-flash")
+        self.assertIn("软限流冷却", reason)
+        self.assertIn("剩余 42s", reason)
+        self.assertNotIn("0 min", reason, "「剩余 0 min」正是那条误导人的日志")
+        self.assertIn("连续第 3 次", reason, "升级到第几档要看得出来")
+
+    def test_model_window_shows_its_own_streak(self):
+        acc = account()
+        acc.model_cooldowns["deepseek-v4.1-flash"] = time.time() + 90
+        acc.unscoped_streak = 2
+        reason = acc.unavailable_reason(model="deepseek-v4.1-flash")
+        self.assertIn("模型 deepseek-v4.1-flash 冷却", reason)
+        self.assertIn("剩余 1m30s", reason)
+        self.assertIn("连续第 2 次", reason)
 
 
 class _FakePool(object):

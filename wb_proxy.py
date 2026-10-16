@@ -13278,6 +13278,13 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                 continue
             charge_account(account, str(exc)[:120], unknown=True)
             account.note_error(str(exc)[:120], cooldown=60, single_account=(total <= 1))
+            # 这一类失败以前是静默的：账号被记一笔 + 冷却 3/60 秒，日志里一个字
+            # 都没有。于是「账号不断冷却、可面板测试又是绿的」在生产上只能靠猜
+            # ——池子空了的报错只说得清「谁在冷却」，说不清「是谁把它记成冷却的」。
+            # 把 uid、异常原文与刚设的冷却时长打出来，下次对上号就能直接定位。
+            log("account %s: %s, cooling %.0fs (fails=%d, ready=%d)"
+                % (account.uid[:8], exc_detail(exc, 160),
+                   3.0 if total <= 1 else 60.0, account.fails, total))
             last_error = exc
             continue
     # Only spend credits after every enabled, credential-bearing account in

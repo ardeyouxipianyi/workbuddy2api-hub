@@ -575,6 +575,8 @@ class Account(object):
         self.degrade_until = 0.0
         # 最近一次记失败的时刻：FAIL_WINDOW 用它判断「连续」是否还成立。
         self.last_fail_at = 0.0
+        # 最近一次软限流（429）的时刻：两条软限流阶梯用同一个时间窗。
+        self.last_soft_at = 0.0
         self.credits = data.get("credits") or None
         self.last_checkin = data.get("lastCheckin") or None
         self.last_daily_chat = data.get("lastDailyChat") or None
@@ -1094,7 +1096,15 @@ class Account(object):
             penalties.append(("模型 %s 冷却" % model, self.model_cooldowns.get(model, 0.0)))
         label, until = max(penalties, key=lambda item: item[1])
         if until > now:
-            return "%s 剩余 %s" % (label, _human_delta(until - now) or "?")
+            # 剩余时间要精确到秒：还剩 42 秒时写「0 min」，读起来就是「已经该能用
+            # 了却还被挡着」——生产日志里那串「软限流冷却 剩余 0 min」就是这么
+            # 来的。连续次数一并带上，才看得出是在升级还是刚开始。
+            streak = ""
+            if label == "软限流冷却" and self.soft_streak > 1:
+                streak = "（连续第 %d 次）" % self.soft_streak
+            elif label.startswith("模型") and self.unscoped_streak > 1:
+                streak = "（连续第 %d 次）" % self.unscoped_streak
+            return "%s 剩余 %s%s" % (label, _human_left(until - now), streak)
         if self.reserve_blocked():
             return "余额低于保留线"
         if self.daily_limit_blocked():
@@ -2159,11 +2169,26 @@ class Account(object):
     def note_soft_rate(self, message):
         """Account-level rate limit: soft cooldown with exponential backoff."""
         with self._throttle_lock:
+            self._decay_soft_streak()
             self.soft_streak += 1
             wait = soft_backoff(self.soft_streak)
             self.last_error = str(message)[:200]
             self.cooldown_until = max(self.cooldown_until, time.time() + wait)
         return wait
+
+    def _decay_soft_streak(self):
+        """软限流阶梯也要有时间窗（调用方已持有 _throttle_lock）。
+
+        这两条阶梯原先只加不减、只有成功才归零：昨天被限过 3 次，今天第一个
+        429 就直接从 2400s 起步，后天起步更高，直到 7200s 封顶——账号明明已经
+        恢复正常（面板测试通过），却动不动被按几十分钟到两小时，这正是「不断
+        软限流」的另一半。窗口内才算连续，隔得久就回到第一档（600s / 60s）。
+        """
+        now = time.time()
+        if FAIL_WINDOW and self.last_soft_at and now - self.last_soft_at > FAIL_WINDOW:
+            self.soft_streak = 0
+            self.unscoped_streak = 0
+        self.last_soft_at = now
 
     def note_unscoped_rate(self, model):
         """An unscoped soft 429: grow its own streak, return this model's window.
@@ -2176,6 +2201,7 @@ class Account(object):
         request clears both through note_success().
         """
         with self._throttle_lock:
+            self._decay_soft_streak()
             self.unscoped_streak += 1
             return unverified_soft_backoff(self.unscoped_streak)
 
@@ -2228,6 +2254,7 @@ class Account(object):
             self.fails = 0
             self.degrade_count = 0
             self.last_fail_at = 0.0
+            self.last_soft_at = 0.0
             self.breaker_until = 0.0
             self.degrade_until = 0.0
             self.last_error = ""
@@ -2283,6 +2310,25 @@ def _human_delta(seconds):
     hours = seconds / 3600.0
     if hours >= 1: return "%.1f hours" % hours
     return "%d min" % int(seconds / 60)
+
+def _human_left(seconds):
+    """还剩多久，精确到秒（对外解释「为什么现在不能用」时用）。
+
+    `_human_delta` 是给凭据有效期那种以天计的场景用的，小于一分钟一律写
+    「0 min」；而冷却/熔断的剩余时间经常就是几十秒，写成 0 分钟会让人以为
+    账号已经可用、网关还在挡它。
+    """
+    secs = max(0, int(round(seconds)))
+    if secs < 60:
+        return "%ds" % secs
+    if secs < 3600:
+        m, s = divmod(secs, 60)
+        return "%dm%02ds" % (m, s) if s else "%dm" % m
+    if secs < 86400:
+        h, rem = divmod(secs, 3600)
+        m = rem // 60
+        return "%dh%02dm" % (h, m) if m else "%dh" % h
+    return "%.1f days" % (secs / 86400.0)
 
 class SessionAffinity(object):
     """Which upstream account served a conversation, so the next turn can go
