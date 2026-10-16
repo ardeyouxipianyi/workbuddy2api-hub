@@ -195,5 +195,31 @@ check("the billing session id is stable for one account",
       == sess_acc_a.headers(purpose="billing").get("X-Session-ID"))
 
 print()
+print("[8] every desktop UA / version comes from wb_identity (single source)")
+# PR #381 把 wb_identity 立为桌面端身份的唯一来源，但漏改了 REALM_CONFIGS
+# 与两个死常量里各写一份的旧值（intl 那份还停在 5.5.2）。REALM_CONFIGS 的
+# chat_ua 不只是留档：remote_config_headers() 拿它拉产品目录，UA 不对上游
+# 直接 400 / code 12403。这几条断言把「单一来源」钉住，下次对齐漏一处就红。
+for realm in ("intl", "cn"):
+    cfg = A.get_realm_config(realm)
+    want_ua = (wb_identity.DESKTOP_UA_INTL if realm == "intl"
+               else wb_identity.DESKTOP_UA_CN)
+    want_ver = (wb_identity.DESKTOP_VERSION_INTL if realm == "intl"
+                else wb_identity.DESKTOP_VERSION_CN)
+    check("%s chat_ua is wb_identity's" % realm, cfg["chat_ua"] == want_ua,
+          cfg["chat_ua"])
+    check("%s billing_ua is built from wb_identity's version" % realm,
+          cfg["billing_ua"] == "WorkBuddy/" + want_ver, cfg["billing_ua"])
+check("DEFAULT_UA_VERSION is wb_identity's intl version",
+      A.DEFAULT_UA_VERSION == wb_identity.DESKTOP_VERSION_INTL,
+      A.DEFAULT_UA_VERSION)
+check("USER_AGENT follows the intl chat UA", A.USER_AGENT == wb_identity.DESKTOP_UA_INTL,
+      A.USER_AGENT)
+# 5.5.2 是这次修掉的过时值，任何身份常量再退回它都算回归。
+check("no realm still advertises the stale 5.5.2",
+      all("5.5.2" not in str(A.get_realm_config(r).get(k, ""))
+          for r in ("intl", "cn") for k in ("chat_ua", "billing_ua")))
+
+print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
