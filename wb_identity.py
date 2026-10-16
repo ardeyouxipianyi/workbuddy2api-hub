@@ -39,6 +39,12 @@ import uuid
 # 5.8.4 实测（国际版桌面客户端抓包）: 对话请求的版本号与 UA。
 # UA 末段 CLI/2.161.0 是客户端内置 CLI 的版本，不是桌面端自己的版本。
 DESKTOP_VERSION_INTL = "5.8.4"
+# 对话请求由客户端内置 CLI 子进程发出，该进程带 CLIENT_INFO_IDE_TYPE=WorkBuddy
+# （sidecar-manager.js 硬编码），buildUserAgent 里 platform 段取它、application
+# 段取 product.json 的 applicationName（国际版为 workbuddy-ai），所以首段是大写
+# WorkBuddy、次段是小写 workbuddy-ai。
+# 注意 Electron 主进程自己发的旁路请求（msg-center / conversations）UA 是
+# workbuddy-ai/... workbuddy-ai/...，两者不是同一条链路，别照抄错。
 DESKTOP_UA_INTL = "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"
 # 国内版客户端没有对应抓包，维持原值，不凭猜测改。
 DESKTOP_VERSION_CN = "5.5.6"

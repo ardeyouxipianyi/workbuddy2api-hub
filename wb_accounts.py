@@ -181,8 +181,10 @@ REALM_CONFIGS = {
         "billing_upstream": "https://www.workbuddy.ai",
         "origin": "https://www.workbuddy.ai",
         "domain": "www.workbuddy.ai",
-        "chat_ua": "WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2",
-        "billing_ua": "WorkBuddy/5.5.2",
+        # 5.8.4 实测（2026-10-16 抓包）：桌面端 UA 是三段式，末段是客户端内置
+        # CLI 的版本；取值与 wb_identity.DESKTOP_UA_INTL 保持同一来源。
+        "chat_ua": wb_identity.DESKTOP_UA_INTL,
+        "billing_ua": "WorkBuddy/%s" % wb_identity.DESKTOP_VERSION_INTL,
         "info_filename": "workbuddy-desktop-ai.info",
         "cache_dir_name": ".workbuddy-ai",
         "has_checkin": False,
@@ -193,8 +195,10 @@ REALM_CONFIGS = {
         "billing_upstream": "https://www.codebuddy.cn",
         "origin": "https://www.codebuddy.cn",
         "domain": "copilot.tencent.com",
-        "chat_ua": "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1",
-        "billing_ua": "WorkBuddy/5.5.6",
+        # 国内版没有对应抓包，取值维持原样，但同样从 wb_identity 取，
+        # 免得两处各写一份（国际版 5.8.4 对齐时就漏改过 intl 那一份）。
+        "chat_ua": wb_identity.DESKTOP_UA_CN,
+        "billing_ua": "WorkBuddy/%s" % wb_identity.DESKTOP_VERSION_CN,
         "info_filename": "workbuddy-desktop.info",
         "cache_dir_name": ".workbuddy",
         "has_checkin": True,
@@ -216,7 +220,10 @@ ENTERPRISE_USAGE_PATH = "/billing/meter/get-enterprise-user-usage"
 LOGIN_PENDING = 11217
 LOGIN_TTL_SECONDS = 600
 USER_AGENT = REALM_CONFIGS['intl']['chat_ua']
-DEFAULT_UA_VERSION = '5.5.2'
+#: 国际版桌面端的版本号。以前这里硬编码 5.5.2，和 wb_identity 的
+#: DESKTOP_VERSION_INTL 各写一份，改版本时容易只改一处（5.8.4 对齐时
+#: 就漏了这个常量）。现在统一从 wb_identity 取，保持单一来源。
+DEFAULT_UA_VERSION = wb_identity.DESKTOP_VERSION_INTL
 
 def get_realm_config(realm):
     return REALM_CONFIGS.get(realm) or REALM_CONFIGS["intl"]
