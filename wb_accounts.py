@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from wb_fingerprint import derive_id, generate_request_id
+from wb_fingerprint import derive_id, generate_request_id, session_id
 import wb_activity
 import wb_atrest
 import wb_identity
@@ -768,7 +768,7 @@ class Account(object):
             "canDailyChat": self.realm == "intl",
             "canReportActivity": self.realm == "cn" and not self.is_enterprise(),
             "machineId": derive_id(self.uid, "machine"),
-            "sessionId": derive_id(self.uid, "session"),
+            "sessionId": session_id(),
         }
 
     def save(self, directory):
@@ -1128,16 +1128,15 @@ class Account(object):
             return self.refresh()
         return self.refresh()
 
-    def headers(self, purpose="chat", conversation_id=None):
+    def headers(self, purpose="chat"):
         """组出这一轮的出站标头。
 
         chat 用途走 wb_identity（CLI 头 / WorkBuddy 头，可切换）；
         billing 用途维持原本的轻量标头，计费端点不吃那套身分。
 
-        conversation_id 是这一轮所属会话的键（客户端自带的会话标识，或按对话
-        前缀派生的亲和键）：三套身分都会据此推一个稳定的 X-Conversation-ID，
-        因为上游的渠道校验在请求完全没有会话 id 时回 400 / code 11-128
-        （`conversation id missing`）。留空则退回随机 UUID（一次性探针）。
+        chat 标头按 5.8.4 抓包对齐：官方对话请求不带 X-Machine-ID /
+        X-Session-ID（那两个只用于反馈上报），所以这里也不再发——之前发的
+        是每个账号恒定的派生值，反而是一处「网关特征」。
         """
         cfg = get_realm_config(self.realm)
 
@@ -1156,7 +1155,7 @@ class Account(object):
                 "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
                 "X-Request-ID": generate_request_id(self.uid),
                 "X-Machine-ID": derive_id(self.uid, "machine"),
-                "X-Session-ID": derive_id(self.uid, "session"),
+                "X-Session-ID": session_id(),
             }
             if self.enterprise_id:
                 headers["X-Enterprise-Id"] = self.enterprise_id
@@ -1175,9 +1174,6 @@ class Account(object):
             realm=self.realm,
             uid=self.uid,
             token=self.access_token,
-            conversation_id=(conversation_id
-                             if conversation_id is not None
-                             else getattr(self, "conversation_id", None)),
             enterprise_id=self.enterprise_id,
             tenant_id=self.enterprise_id,
         )
@@ -1189,8 +1185,6 @@ class Account(object):
             "Referer": cfg["origin"] + "/",
             "X-CodeBuddy-Request": "1",
             "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
-            "X-Machine-ID": derive_id(self.uid, "machine"),
-            "X-Session-ID": derive_id(self.uid, "session"),
         }
         headers.update(identity)
         device_token = self._device_token()
