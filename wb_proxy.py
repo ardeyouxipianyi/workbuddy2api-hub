@@ -19305,47 +19305,6 @@ class Handler(BaseHTTPRequestHandler):
             _release_key_slot(self.key_entry)
 
     
-# ---------------------------------------------------------------------------
-# Per-key concurrency tracking (#359)
-# ---------------------------------------------------------------------------
-_key_active_concurrency = {}
-_key_concurrency_lock = threading.Lock()
-
-def _acquire_key_slot(key_entry):
-    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit)."""
-    if not isinstance(key_entry, dict):
-        return True, 0, 0
-    k_id = key_entry.get("id")
-    if not k_id:
-        return True, 0, 0
-    limit = int(key_entry.get("concurrency_limit") or 0)
-    if limit <= 0:
-        return True, 0, 0
-    with _key_concurrency_lock:
-        current = _key_active_concurrency.get(k_id, 0)
-        if current >= limit:
-            return False, current, limit
-        _key_active_concurrency[k_id] = current + 1
-        return True, current + 1, limit
-
-def _release_key_slot(key_entry):
-    """Release a concurrency slot for key_entry."""
-    if not isinstance(key_entry, dict):
-        return
-    k_id = key_entry.get("id")
-    if not k_id:
-        return
-    limit = int(key_entry.get("concurrency_limit") or 0)
-    if limit <= 0:
-        return
-    with _key_concurrency_lock:
-        current = _key_active_concurrency.get(k_id, 0)
-        if current > 1:
-            _key_active_concurrency[k_id] = current - 1
-        else:
-            _key_active_concurrency.pop(k_id, None)
-
-
     def _dispatch_chat_post(self, path, payload):
         # 先挡背景请求：Codex 自己发的（记忆整理／环境建议／自动复核）
         # 不算「使用者实际使用」，一律本地拒绝，不碰上游。
@@ -19606,6 +19565,47 @@ def _release_key_slot(key_entry):
                      gen_ms=(wall - first_ms) if first_ms is not None else None,
                      fp=fp, account=account.uid, key=self._key_id(), effort=effort)
         return self._json(200, result)
+
+# ---------------------------------------------------------------------------
+# Per-key concurrency tracking (#359)
+# ---------------------------------------------------------------------------
+_key_active_concurrency = {}
+_key_concurrency_lock = threading.Lock()
+
+def _acquire_key_slot(key_entry):
+    """Try to acquire a concurrency slot for key_entry. Returns (ok, current, limit)."""
+    if not isinstance(key_entry, dict):
+        return True, 0, 0
+    k_id = key_entry.get("id")
+    if not k_id:
+        return True, 0, 0
+    limit = int(key_entry.get("concurrency_limit") or 0)
+    if limit <= 0:
+        return True, 0, 0
+    with _key_concurrency_lock:
+        current = _key_active_concurrency.get(k_id, 0)
+        if current >= limit:
+            return False, current, limit
+        _key_active_concurrency[k_id] = current + 1
+        return True, current + 1, limit
+
+def _release_key_slot(key_entry):
+    """Release a concurrency slot for key_entry."""
+    if not isinstance(key_entry, dict):
+        return
+    k_id = key_entry.get("id")
+    if not k_id:
+        return
+    limit = int(key_entry.get("concurrency_limit") or 0)
+    if limit <= 0:
+        return
+    with _key_concurrency_lock:
+        current = _key_active_concurrency.get(k_id, 0)
+        if current > 1:
+            _key_active_concurrency[k_id] = current - 1
+        else:
+            _key_active_concurrency.pop(k_id, None)
+
 
 def running_version():
     """The version this process reports, e.g. "1.6.19".
