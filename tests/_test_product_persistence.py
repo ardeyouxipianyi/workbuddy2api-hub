@@ -169,11 +169,30 @@ machine = wb_fingerprint.derive_id("u1", "machine")
 check("the machine id is a stable dashed uuid",
       machine == wb_fingerprint.derive_id("u1", "machine")
       and len(machine) == 36 and machine.count("-") == 4, machine)
-check("the session id is per process, not per account",
-      wb_fingerprint.session_id() == wb_fingerprint.session_id()
-      and len(wb_fingerprint.session_id()) == 36)
+# 每账号一台设备：sessionId 必须按账号派生。取进程级的值会让全部账号共用
+# 同一个 session id，那是把它们串起来的关联键（device_token 是同一类问题）。
+sess = wb_fingerprint.session_id("u1")
+check("the session id is a stable dashed uuid",
+      sess == wb_fingerprint.session_id("u1")
+      and len(sess) == 36 and sess.count("-") == 4, sess)
+check("the session id differs across accounts",
+      wb_fingerprint.session_id("u1") != wb_fingerprint.session_id("u2"))
+check("the session id is not the machine id",
+      wb_fingerprint.session_id("u1") != machine)
 check("the request id is 32 hex chars",
       len(wb_fingerprint.generate_request_id("u1")) == 32)
+
+# 计费路径同样按账号隔离：两个账号的 X-Session-ID 不能相同。
+sess_acc_a = A.Account(credential("workbuddy"))
+sess_acc_b = A.Account(credential("workbuddy"))
+sess_acc_b.uid = sess_acc_a.uid + "-other"
+check("the billing session id is per account",
+      sess_acc_a.headers(purpose="billing").get("X-Session-ID")
+      != sess_acc_b.headers(purpose="billing").get("X-Session-ID"),
+      sess_acc_a.headers(purpose="billing").get("X-Session-ID"))
+check("the billing session id is stable for one account",
+      sess_acc_a.headers(purpose="billing").get("X-Session-ID")
+      == sess_acc_a.headers(purpose="billing").get("X-Session-ID"))
 
 print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))

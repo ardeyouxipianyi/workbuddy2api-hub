@@ -768,7 +768,7 @@ class Account(object):
             "canDailyChat": self.realm == "intl",
             "canReportActivity": self.realm == "cn" and not self.is_enterprise(),
             "machineId": derive_id(self.uid, "machine"),
-            "sessionId": session_id(),
+            "sessionId": session_id(self.uid),
         }
 
     def save(self, directory):
@@ -1137,6 +1137,11 @@ class Account(object):
         chat 标头按 5.8.4 抓包对齐：官方对话请求不带 X-Machine-ID /
         X-Session-ID（那两个只用于反馈上报），所以这里也不再发——之前发的
         是每个账号恒定的派生值，反而是一处「网关特征」。
+
+        billing 标头仍带 X-Machine-ID / X-Session-ID，但两个都必须按账号派生：
+        网关是一个进程冒充几十台设备，一旦取进程级的值，全部账号就会共用同一个
+        session id，那是一条把它们串起来的关联键（与每账号一台设备的隔离口径
+        相悖）。见 wb_fingerprint.session_id。
         """
         cfg = get_realm_config(self.realm)
 
@@ -1155,7 +1160,7 @@ class Account(object):
                 "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
                 "X-Request-ID": generate_request_id(self.uid),
                 "X-Machine-ID": derive_id(self.uid, "machine"),
-                "X-Session-ID": session_id(),
+                "X-Session-ID": session_id(self.uid),
             }
             if self.enterprise_id:
                 headers["X-Enterprise-Id"] = self.enterprise_id

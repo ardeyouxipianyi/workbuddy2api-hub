@@ -8,14 +8,15 @@
 sessionId 取自「每进程一个 randomUUID」，两者都是带连字符的 UUID；请求 id 是
 32 位无连字符 hex。此前这里输出的是 36 位无连字符 hex 和自造的「前缀-微秒」串，
 形态都对不上，本身就是一处「网关特征」。
+
+形态可以照抄，取值范围不行：官方客户端「一个进程 = 一台设备」，而网关是一个
+长驻进程同时冒充几十台设备。所以 machineId / sessionId 都必须按账号派生——
+照官方那样在进程维度取一次，等于让所有账号共用同一个值，反而把它们关联到
+同一台机器上，与「每账号一台设备」的隔离口径自相矛盾。
 """
 import hashlib
 import time
 import uuid
-
-# 官方客户端每进程只生成一次 sessionId（crypto.randomUUID），进程内恒定。
-# 网关是长驻进程，所以这里也在模块加载时取一次、全进程复用。
-_PROCESS_SESSION_ID = str(uuid.uuid4())
 
 
 def derive_id(uid: str, salt: str) -> str:
@@ -30,14 +31,15 @@ def derive_id(uid: str, salt: str) -> str:
     return "%s-%s-%s-%s-%s" % (h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 
 
-def session_id() -> str:
-    """这一进程的 sessionId。
+def session_id(uid: str) -> str:
+    """这一账号的 sessionId。
 
-    官方客户端是「每进程一个 randomUUID」而不是从账号派生：一个客户端实例
-    的 sessionId 全程不变，换一个实例就换一个。网关同样是长驻进程，照这个
-    口径走——进程内恒定、跨进程不同。
+    官方客户端是「每进程一个 randomUUID」，但网关一个进程要冒充几十台设备，
+    照进程维度取值会让所有账号共用同一个 sessionId——那是一条把账号池串起来
+    的关联键，也和白名单里的 machineId（按账号派生）自相矛盾。所以这里按账号
+    派生：同一账号恒定、账号之间互不相同，等价于「每个账号一个客户端实例」。
     """
-    return _PROCESS_SESSION_ID
+    return derive_id(uid, "session")
 
 
 def generate_request_id(uid: str) -> str:
@@ -65,7 +67,7 @@ def get_desktop_fingerprint(uid: str, nickname: str = "", os_name: str = "win32"
         "ideType": "WorkBuddy",
         "ideVersion": "5.8.4",
         "machineId": derive_id(uid, "machine"),
-        "sessionId": session_id(),
+        "sessionId": session_id(uid),
         "extName": "workbuddy-desktop",
         "extVersion": "5.8.4",
         "os": os_name,
