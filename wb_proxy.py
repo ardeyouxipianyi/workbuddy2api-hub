@@ -13187,15 +13187,17 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             attempt_body = upstream_body
         # 官方 CLI 的 chat 请求体（见 wb_identity）：gzip（RequestBodyGzip=true，
         # 带 Content-Encoding: gzip）+ 注入 cache_retention=long；Responses API
-        # 的字段 / 客户端 metadata 不带。桌面端 / VSCode 的请求体保持原样。
+        # 的字段 / 客户端 metadata 不带。VSCode 官方主 chat 也默认 gzip
+        # （RequestBodyGzip=true → executeByMode → createCustomFetch 压缩）。
         # 注：紧凑 JSON 由 transport PR（upstream #429）统一做，这里不重复实现。
         cli_identity = account.is_cli_identity()
+        vscode_identity = account.product == wb_identity.PRODUCT_VSCODE
         if cli_identity:
             attempt_body = {k: v for k, v in attempt_body.items()
                             if k not in wb_identity.CLI_BODY_DROP_FIELDS}
             attempt_body["cache_retention"] = wb_identity.CLI_CACHE_RETENTION
         attempt_data = json.dumps(attempt_body, ensure_ascii=False).encode("utf-8")
-        if cli_identity:
+        if cli_identity or vscode_identity:
             attempt_data = wb_identity.gzip_body(attempt_data)
         # 会话头族（X-Conversation-ID / -Request-ID）的语义见 wb_identity：桌面端
         # 仍是每请求现生成（上游不拿它存历史，补的是「有」而不是「稳定」，缺了会
@@ -13209,7 +13211,7 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             conversation_id=(vscode_conversation_id
                              if account.product == wb_identity.PRODUCT_VSCODE
                              else None))
-        if cli_identity:
+        if cli_identity or vscode_identity:
             req_headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
                                      headers=req_headers)
@@ -13610,18 +13612,18 @@ def probe_account(account, model=None, timeout=30):
                  "stream": False}
     probe_body = build_upstream_body(test_body)
     cli_identity = account.is_cli_identity()
+    vscode_identity = account.product == wb_identity.PRODUCT_VSCODE
     if cli_identity:
         probe_body = {k: v for k, v in probe_body.items()
                       if k not in wb_identity.CLI_BODY_DROP_FIELDS}
         probe_body["cache_retention"] = wb_identity.CLI_CACHE_RETENTION
     body = json.dumps(probe_body, ensure_ascii=False).encode("utf-8")
-    if cli_identity:
+    if cli_identity or vscode_identity:
         body = wb_identity.gzip_body(body)
-    # 与 open_upstream 同一条出站形态：VSCode 身分的 model 请求带 X-Model-ID。
-    # 紧凑 JSON 由 transport PR（#429）统一处理；gzip 只有 CLI 身份实现
-    # （VSCode 的 RequestBodyGzip 有 feature 开关，主 chat 是否压待抓包确认）。
+    # 与 open_upstream 同一条出站形态：VSCode 身分的 model 请求带 X-Model-ID；
+    # CLI / VSCode 官方主 chat 都默认 gzip。
     probe_headers = account.headers(purpose="chat", model=model)
-    if cli_identity:
+    if cli_identity or vscode_identity:
         probe_headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
     req = urllib.request.Request(chat_url, data=body, method="POST",
                                  headers=probe_headers)

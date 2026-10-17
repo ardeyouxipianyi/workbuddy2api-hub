@@ -115,18 +115,19 @@ CONV_HEADERS = ("X-Conversation-ID", "X-Conversation-Request-ID",
 HEX32 = ("X-Request-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID")
 for want in ("workbuddy", "vscode", "cli"):
     h = wb_identity.build_identity_headers(want, "intl", "u1", "tok")
-    if want in ("cli", "vscode"):
-        # 官方 CLI 只在 meta.rootRequestId 存在时发 X-Root-Request-ID（子代理用
-        # 主会话的 conversationRequestId）；VSCode 主对话也不发（仅 subagent 带
-        # rootRequestId）。两者都不冒充子代理。
-        want_conv = tuple(k for k in CONV_HEADERS if k != "X-Root-Request-ID")
-        want_hex = tuple(k for k in HEX32 if k != "X-Root-Request-ID")
+    if want == "vscode":
+        # 官方 VSCode 主对话不发 X-Root-Request-ID（仅 subagent 带 rootRequestId）。
         check("%s: no X-Root-Request-ID on a main-conversation request" % want,
               "X-Root-Request-ID" not in h)
-        check("%s: no X-Parent-Conversation-ID (subagent-only header)" % want,
-              "X-Parent-Conversation-ID" not in h)
     else:
-        want_conv, want_hex = CONV_HEADERS, HEX32
+        # 官方 CLI / 桌面端主对话会发 X-Root-Request-ID，值 = 本轮
+        # X-Conversation-Request-ID（CLI 的 rootRequestId 来自
+        # meta.rootRequestId ?? conversationRequestId）。
+        check("%s: root request id equals conversation request id" % want,
+              h.get("X-Root-Request-ID") == h.get("X-Conversation-Request-ID"))
+    check("%s: no X-Parent-Conversation-ID (subagent-only header)" % want,
+          "X-Parent-Conversation-ID" not in h)
+    want_conv, want_hex = CONV_HEADERS, HEX32
     check("%s sends the conversation header family" % want,
           all(h.get(k) for k in want_conv),
           [k for k in want_conv if not h.get(k)])
@@ -142,9 +143,6 @@ for want in ("workbuddy", "vscode", "cli"):
         # 桌面端按 5.8.4 抓包、CLI 按 2.168.2 契约：Request-ID = Message-ID。
         check("%s: message id equals request id" % want,
               h.get("X-Conversation-Message-ID") == h.get("X-Request-ID"))
-        if want != "cli":
-            check("%s: root request id equals conversation request id" % want,
-                  h.get("X-Root-Request-ID") == h.get("X-Conversation-Request-ID"))
     conv = str(h.get("X-Conversation-ID"))
     if want == "vscode":
         check("%s: the conversation id is 32 hex" % want,
@@ -235,8 +233,8 @@ print("[6b] the CLI identity matches the official CodeBuddy CLI 2.168.2")
 # 取值来源：官方 npm 包 @tencent-ai/codebuddy-code 2.168.2 解包（product.json 的
 # 产品常量 + dist 里的 header 常量 / buildUserAgent / 请求头组装 / 请求体处理器）。
 cli = wb_identity.build_identity_headers("cli", "intl", "u1", "tok")
-check("the CLI UA is buildUserAgent's three segments",
-      cli.get("User-Agent") == "CLI/2.168.2 CodeBuddy/2.168.2 OpenAI/JS 6.25.0",
+check("the CLI UA is buildUserAgent's two segments (adapter drops the SDK UA)",
+      cli.get("User-Agent") == "CLI/2.168.2 CodeBuddy/2.168.2",
       cli.get("User-Agent"))
 check("the CLI X-IDE-* triple",
       (cli.get("X-IDE-Type"), cli.get("X-IDE-Name"), cli.get("X-IDE-Version"))
@@ -250,20 +248,24 @@ check("the CLI agent headers",
       == ("craft", "conversation", "main", "other"),
       (cli.get("X-Agent-Intent"), cli.get("X-Agent-Purpose"),
        cli.get("X-Agent-Type"), cli.get("X-Agent-Runtime")))
-check("the CLI does not send X-Private-Data on a normal personal session",
-      "X-Private-Data" not in cli, cli.get("X-Private-Data"))
-# OpenAI Node SDK 6.25.0 的 X-Stainless-* 指纹头。
+check("the CLI sends X-Private-Data=false on a personal account",
+      cli.get("X-Private-Data") == "false", cli.get("X-Private-Data"))
+check("the CLI sends X-Private-Data=true on an enterprise account",
+      wb_identity.build_identity_headers(
+          "cli", "intl", "u1", "tok", enterprise_id="ent-1")["X-Private-Data"]
+      == "true")
+# OpenAI Node SDK 6.25.0 的 x-stainless-* 指纹头（wire 上是小写）。
 stainless = {
-    "X-Stainless-Lang": "js",
-    "X-Stainless-Package-Version": "6.25.0",
-    "X-Stainless-OS": "Windows",
-    "X-Stainless-Arch": "x64",
-    "X-Stainless-Runtime": "node",
-    "X-Stainless-Runtime-Version": "v22.21.1",
-    "X-Stainless-Retry-Count": "0",
-    "X-Stainless-Timeout": "1200",
+    "x-stainless-lang": "js",
+    "x-stainless-package-version": "6.25.0",
+    "x-stainless-os": "Windows",
+    "x-stainless-arch": "x64",
+    "x-stainless-runtime": "node",
+    "x-stainless-runtime-version": "v22.21.1",
+    "x-stainless-retry-count": "0",
+    "x-stainless-timeout": "1200",
 }
-check("the CLI carries the OpenAI SDK's X-Stainless-* family",
+check("the CLI carries the OpenAI SDK's x-stainless-* family",
       all(cli.get(k) == v for k, v in stainless.items()),
       [(k, cli.get(k)) for k, v in stainless.items() if cli.get(k) != v])
 trace = (cli.get("X-Trace-ID"), cli.get("X-B3-TraceId"), cli.get("X-B3-SpanId"),
@@ -284,10 +286,9 @@ check("the CLI b3 has the official four segments (parent span present)",
 check("the CLI sends none of the headers the official CLI does not send",
       not any(k in cli for k in ("X-Product-Version", "X-Session-ID",
                                  "X-Model-ID", "X-Device-Token",
-                                 "X-Root-Request-ID", "X-Parent-Conversation-ID")),
+                                 "X-Parent-Conversation-ID")),
       sorted(set(("X-Product-Version", "X-Session-ID", "X-Model-ID",
-                  "X-Device-Token", "X-Root-Request-ID",
-                  "X-Parent-Conversation-ID")) & set(cli)))
+                  "X-Device-Token", "X-Parent-Conversation-ID")) & set(cli)))
 check("the CN CLI carries the same official version",
       wb_identity.build_identity_headers("cli", "cn", "u1", "tok")["X-IDE-Version"]
       == "2.168.2")

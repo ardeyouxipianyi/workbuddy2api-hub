@@ -415,26 +415,29 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 ### Unreleased
 
 - **CLI 身份对齐官方 CodeBuddy CLI 2.168.2**：`X-IDE-Version` 与 UA 升到
-  `2.168.2`（`CLI/2.168.2 CodeBuddy/2.168.2 OpenAI/JS 6.25.0`）；补齐官方 CLI 的
-  `X-Agent-Purpose` / `X-Agent-Type` / `X-Agent-Runtime`、四段
-  b3 链路头族（含 `X-B3-ParentSpanId`）与 OpenAI Node SDK 6.25.0 的
-  `X-Stainless-*` 指纹头。`X-Conversation-ID` 按（账号, 会话键）稳定、
-  `X-Conversation-Request-ID` 在一轮 user send 的所有重试/换号里复用同一个值，
-  `X-Request-ID` 仍等于 `X-Conversation-Message-ID`，主对话不发
-  `X-Root-Request-ID`。chat 请求去掉 Origin / Referer / X-CodeBuddy-Request /
-  Accept-Language，`Accept` 改为 `application/json`；请求体 gzip 并注入
-  `cache_retention=long`，CLI 身份不再发 `X-Device-Token`。桌面端 / VSCode 身份
-  行为不变。国际版端点仍是 `www.workbuddy.ai`（官方 CLI 用 `www.codebuddy.ai`，
-  解析不了，属已知差异，本版不改）。
+  `2.168.2`（`CLI/2.168.2 CodeBuddy/2.168.2`；官方 adapter 会删掉 SDK 的
+  user-agent，CLI 也没有 userAgentExtension，所以是两段）；补齐官方 CLI 的
+  `X-Agent-Purpose` / `X-Agent-Type` / `X-Agent-Runtime`、`X-Private-Data`
+  （个人号 false、企业号 true）、四段 b3 链路头族（含 `X-B3-ParentSpanId`）
+  与 OpenAI Node SDK 6.25.0 的 `x-stainless-*` 指纹头。`X-Conversation-ID`
+  按（账号, 会话键）稳定、`X-Conversation-Request-ID` 在一轮 user send 的
+  所有重试/换号里复用同一个值，`X-Request-ID` 仍等于
+  `X-Conversation-Message-ID`，`X-Root-Request-ID` = 本轮
+  `X-Conversation-Request-ID`。chat 请求去掉 Origin / Referer /
+  X-CodeBuddy-Request / X-Requested-With / Accept-Language，`Accept` 改为
+  `application/json`；请求体 gzip 并注入 `cache_retention=long`，CLI 身份
+  不再发 `X-Device-Token`。桌面端 / VSCode 身份行为不变。国际版端点仍是
+  `www.workbuddy.ai`（官方 CLI 用 `www.codebuddy.ai`，解析不了，属已知差异，
+  本版不改）。
 - **VSCode 身份对齐官方扩展 4.12.39997873**：UA 改为
   `VSCode/1.119.0 CodeBuddy/4.12.39997873`（productName=CodeBuddy、扩展版本
   4.12.39997873），补 `X-Product-Version` / `X-Model-ID` / `X-Agent-Type` /
   `X-Private-Data`（仅 intl）/ B3 链路头族（含 `X-B3-ParentSpanId` 与四段 b3）/
   `X-Request-Trace-Id` / `monitor_*` 时间戳；`X-Request-ID` 与
   `X-Conversation-Request-ID` 同值、`X-Conversation-Message-ID` 独立，
-  `X-Conversation-ID` 为 32 位 hex。桌面端 / CLI 身份行为不变。VSCode 请求体
-  gzip 受官方 `enableRequestBodyGzip` 开关控制，主 chat 是否启用待抓包确认，
-  本版未启用。
+  `X-Conversation-ID` 为 32 位 hex。桌面端 / CLI 身份行为不变。官方主 chat
+  默认请求体 gzip（`RequestBodyGzip=true` → `executeByMode` →
+  `createCustomFetch` 压缩），本版启用。
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.12，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 

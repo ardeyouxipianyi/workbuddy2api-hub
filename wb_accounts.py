@@ -1294,12 +1294,11 @@ class Account(object):
             conversation_id=conversation_id,
         )
         if self.is_cli_identity():
-            # 官方 CLI 的 chat 请求由 OpenAI Node SDK 发出：浏览器头一个都没有，
-            # Accept 就是 application/json（见 headers() 的 docstring）。
+            # 官方 CLI 的 chat 请求由 OpenAI Node SDK 发出：浏览器头一个都没有
+            # （X-Requested-With 也没有），Accept 就是 application/json。
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
             }
         else:
             headers = {

@@ -257,8 +257,9 @@ class IdentityOnRetryTests(unittest.TestCase):
         self.assertTrue(first["x-conversation-request-id"])
         self.assertEqual(first["x-conversation-request-id"],
                          second["x-conversation-request-id"])
-        # 主对话不发 X-Root-Request-ID（官方只在 meta.rootRequestId 存在时发）。
-        self.assertNotIn("x-root-request-id", first)
+        # 主对话也发 X-Root-Request-ID，值 = 本轮 conversation request id。
+        self.assertEqual(first["x-root-request-id"],
+                         first["x-conversation-request-id"])
         # message id 每请求新生成；会话 id 按账号隔离（换号就换会话）。
         self.assertEqual(first["x-request-id"], first["x-conversation-message-id"])
         self.assertNotEqual(first["x-request-id"], second["x-request-id"])
@@ -266,10 +267,10 @@ class IdentityOnRetryTests(unittest.TestCase):
                             second["x-conversation-id"])
         # 官方 CLI 2.168.2 的身份头（含 OpenAI Node SDK 6.25.0 的指纹头）。
         self.assertEqual(first["user-agent"],
-                         "CLI/2.168.2 CodeBuddy/2.168.2 OpenAI/JS 6.25.0")
+                         "CLI/2.168.2 CodeBuddy/2.168.2")
         self.assertEqual(first["x-ide-version"], "2.168.2")
         self.assertEqual(first["x-agent-runtime"], "other")
-        self.assertNotIn("x-private-data", first)
+        self.assertEqual(first["x-private-data"], "false")
         self.assertEqual(first["x-stainless-lang"], "js")
         self.assertEqual(first["x-stainless-package-version"], "6.25.0")
         self.assertEqual(first["x-stainless-runtime-version"], "v22.21.1")
@@ -277,7 +278,7 @@ class IdentityOnRetryTests(unittest.TestCase):
         # 官方 CLI 的 chat 没有浏览器头，Accept 就是 application/json。
         self.assertEqual(first["accept"], "application/json")
         for gone in ("origin", "referer", "x-codebuddy-request",
-                     "accept-language", "x-device-token"):
+                     "accept-language", "x-device-token", "x-requested-with"):
             self.assertNotIn(gone, first)
         # 请求体：gzip + cache_retention=long，不带 metadata。
         # （紧凑 JSON 由 transport PR #429 统一钉，本 PR 不重复实现。）
