@@ -129,10 +129,15 @@ def urlopen(req, timeout=30, proxy=""):
 
     urllib 的 AbstractHTTPHandler.do_open 会写死 Connection: close，每个请求都得
     重新 TCP+TLS 握手（真机实测 118.0ms，是请求路径上最大的一笔开销）。默认改走
-    wb_upstream_pool：按（目标, 代理串）分池复用连接。不能逐字节对齐 urllib 语义
-    的请求（非 http(s) 目标、非 HTTP 代理、需要跟随的 3xx 重定向）由 PoolBypass
-    回退到下面这条原来的路，行为与改动前一致；WB_UPSTREAM_KEEPALIVE=0 时整条
-    路径都与改动前相同。
+    wb_upstream_pool：按（目标, 代理串, 凭据摘要）分池复用连接——不同账号不共用
+    同一条 TCP/TLS 连接，同一账号仍复用。不能逐字节对齐 urllib 语义的请求（非
+    http(s) 目标、非 HTTP 代理、需要跟随的 3xx 重定向）由 PoolBypass 回退到下面
+    这条原来的路，行为与改动前一致；WB_UPSTREAM_KEEPALIVE=0 时整条路径都与改动
+    前相同。
+
+    头名保真：调用方若把有序 [(name, value)] 挂在 req.wb_exact_headers 上，
+    池路径会原样发这些头名（见 wb_proxy.open_upstream）；没挂的请求（billing /
+    登录 / 签到等）走原来的 .title() 路径，行为不变。
     """
     if wb_upstream_pool.enabled():
         try:
@@ -1623,6 +1628,9 @@ class Account(object):
         req_body = wb_proxy.build_upstream_body(body)
         data = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        # 与 open_upstream 的 chat 路径同口径：头名原样上线（Request.add_header 会
+        # 先 capitalize，所以有序原名单独挂在请求上给池路径用）。
+        req.wb_exact_headers = list(headers.items())
         try:
             with urlopen(req, timeout=20, proxy=self.proxy) as resp:
                 _ = resp.read()

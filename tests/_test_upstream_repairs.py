@@ -388,5 +388,22 @@ check("and switched back off", P.prompt_cache_key_enabled() is False)
 del _os.environ["WB_PROMPT_CACHE_KEY"]
 
 print()
+print("[6] chat body serialization is compact (official JSON.stringify shape)")
+
+raw = P.encode_upstream_body({"model": "m", "messages": [
+    {"role": "user", "content": "hi"}]})
+check("no whitespace between JSON tokens",
+      raw == b'{"model":"m","messages":[{"role":"user","content":"hi"}]}', raw)
+check("round-trips to the same object",
+      json.loads(raw.decode("utf-8"))["messages"][0]["content"] == "hi")
+check("non-ASCII stays UTF-8 instead of \\u escapes",
+      P.encode_upstream_body({"content": "\u4e2d\u6587"})
+      == b'{"content":"\xe4\xb8\xad\xe6\x96\x87"}',
+      P.encode_upstream_body({"content": "\u4e2d\u6587"}))
+check("compact output is shorter than the old default separators",
+      len(raw) < len(json.dumps({"model": "m", "messages": [
+          {"role": "user", "content": "hi"}]}, ensure_ascii=False).encode("utf-8")))
+
+print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
