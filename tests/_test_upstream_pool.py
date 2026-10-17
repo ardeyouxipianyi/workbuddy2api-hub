@@ -3,7 +3,8 @@
 测的是 wb_upstream_pool 对 wb_accounts.urlopen 出站路径的接管：复用命中、容量与
 空闲回收、连接被对端掐掉时的探活与「安全重试一次」、Connection: close 与半截
 body 的丢弃、流式（chunked）读干净才归还、复用前重置读超时、按代理串分池、
-3xx 回退、TLS，以及 WB_UPSTREAM_KEEPALIVE=0 时与改动前逐项一致。
+3xx 回退、TLS、WB_UPSTREAM_KEEPALIVE=0 时与改动前逐项一致、chat 路径的头名
+保真（有序原名原样上线）、以及按账号凭据分池（不同账号不共用 TCP/TLS 连接）。
 
 全部用本机假上游：真 TCP、会说 keep-alive / chunked / Connection: close / 429 /
 302 / 半截 body，并且逐条记录收到的请求头。连接数就是证据——「每请求一次 SYN」
@@ -179,18 +180,24 @@ class FakeUpstream(object):
                     break
                 method, target = parts[0], parts[1]
                 headers = {}
+                header_lines = []
                 while True:
                     h = fh.readline(65536)
                     if h in (b"\r\n", b"\n", b""):
                         break
                     name, _, value = h.decode("latin-1").partition(":")
-                    headers[name.strip().lower()] = value.strip()
+                    name, value = name.strip(), value.strip()
+                    # 原名与原始顺序都留下来：头名保真用例要逐字节核对，
+                    # 小写化的 headers 字典只够现有用例做取值断言。
+                    header_lines.append((name, value))
+                    headers[name.lower()] = value
                 length = int(headers.get("content-length") or 0)
                 if length:
                     fh.read(length)
                 with self.lock:
                     self.requests.append({"method": method, "target": target,
-                                          "headers": headers})
+                                          "headers": headers,
+                                          "header_lines": header_lines})
                 if not self._respond(conn, method, target):
                     break
         except Exception:
@@ -772,6 +779,109 @@ try:
         raised = exc
     check("非 HTTP 代理回退原路径（错误形状与改动前一致）",
           isinstance(raised, urllib.error.URLError), repr(raised))
+
+    # ------------------------------------------------------------------
+    print("[17] 头名保真：有序 (name, value) 原样上线（chat 路径）")
+    srv17 = new_server()
+    pool.close_all()
+    # 与 wb_identity.build_identity_headers 同形的头名：ID / IDE / B3 都是全大写
+    # 缩写，traceparent / b3 是小写——正是 .title() 会改错的那批。
+    exact = [
+        ("Content-Type", "application/json"),
+        ("Accept", "application/json, text/plain, */*"),
+        ("X-Requested-With", "XMLHttpRequest"),
+        ("Origin", "https://www.workbuddy.ai"),
+        ("Referer", "https://www.workbuddy.ai/"),
+        ("X-CodeBuddy-Request", "1"),
+        ("Accept-Language", "en-US"),
+        ("X-Agent-Intent", "craft"),
+        ("X-IDE-Type", "WorkBuddy"),
+        ("X-IDE-Version", "5.8.4"),
+        ("User-Agent", "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"),
+        ("Authorization", "Bearer tok-exact"),
+        ("X-User-Id", "uid-exact"),
+        ("X-Conversation-ID", "4c470210-e6c7-41f4-a163-9b84b5a70485"),
+        ("X-Conversation-Request-ID", "01a14a72172775568e9c011c87bf2463"),
+        ("X-Root-Request-ID", "01a14a72172775568e9c011c87bf2463"),
+        ("X-Conversation-Message-ID", "01a14a721727766bbd5b56f85485e50d"),
+        ("X-Request-ID", "01a14a721727766bbd5b56f85485e50d"),
+        ("X-Trace-ID", "01a14a7217277c8086fcf8675238cbf2"),
+        ("traceparent", "00-01a14a7217277c8086fcf8675238cbf2-da0eb39ec077a50c-01"),
+        ("b3", "01a14a7217277c8086fcf8675238cbf2-da0eb39ec077a50c-1"),
+        ("X-B3-TraceId", "01a14a7217277c8086fcf8675238cbf2"),
+        ("X-B3-SpanId", "da0eb39ec077a50c"),
+        ("X-B3-Sampled", "1"),
+    ]
+    req = urllib.request.Request(srv17.base() + "/echo", data=b'{"x":1}',
+                                 method="POST")
+    req.wb_exact_headers = exact          # wb_proxy.open_upstream 的同款挂法
+    resp = wb_accounts.urlopen(req, timeout=5)
+    resp.read()
+    resp.close()
+    sent = [name for name, _value in srv17.requests[0]["header_lines"]]
+    want = (["Accept-Encoding", "Content-Length", "Host"]
+            + [name for name, _value in exact] + ["Connection"])
+    check("线上头名与顺序逐项原样（不再 .title()）", sent == want, (sent, want))
+    check("ID / IDE / B3 / traceparent 的大小写没被改写",
+          all(name in sent for name in ("X-Request-ID", "X-Conversation-ID",
+                                        "X-IDE-Type", "X-B3-TraceId",
+                                        "X-B3-SpanId", "traceparent", "b3")),
+          sent)
+    check("没有出现 .title() 的旧形态",
+          not any(name in sent for name in ("X-Request-Id", "X-Conversation-Id",
+                                            "X-Ide-Type", "X-B3-Traceid",
+                                            "X-B3-Spanid", "Traceparent", "B3")),
+          sent)
+    # 默认路径（billing / 登录 / 签到等）不挂 wb_exact_headers，行为必须与改动前
+    # 完全一致：仍是 .title() 形态。
+    req = urllib.request.Request(srv17.base() + "/echo", data=b'{"x":1}',
+                                 method="POST", headers=dict(exact))
+    resp = wb_accounts.urlopen(req, timeout=5)
+    resp.read()
+    resp.close()
+    legacy = [name for name, _value in srv17.requests[-1]["header_lines"]]
+    check("未声明保真的请求仍是原 .title() 路径（billing 等不回归）",
+          "X-Request-Id" in legacy and "X-Ide-Type" in legacy
+          and "Traceparent" in legacy and "B3" in legacy, legacy)
+
+    # ------------------------------------------------------------------
+    print("[18] 按账号分池：不同凭据不共用连接，同凭据仍复用")
+    srv18 = new_server()
+    pool.close_all()
+
+    def call(token):
+        req = urllib.request.Request(srv18.base() + "/ok",
+                                     headers={"Authorization": "Bearer " + token})
+        resp = wb_accounts.urlopen(req, timeout=5)
+        body = resp.read()
+        resp.close()
+        return body
+
+    call("tok-a")
+    call("tok-a")
+    check("同一凭据的两次请求复用一条连接", srv18.accepted == 1, srv18.accepted)
+    call("tok-b")
+    check("不同凭据各开一条连接（不再跨账号共用）", srv18.accepted == 2,
+          srv18.accepted)
+    call("tok-a")
+    check("凭据 A 回到自己的池连接，没有落到 B 的连接上", srv18.accepted == 2,
+          srv18.accepted)
+    identities = {key[4] for key in pool.idle_counts() if key[4]}
+    check("池键里带上了凭据摘要（两个账号两个键）", len(identities) == 2,
+          pool.idle_counts())
+    # 没有凭据的请求（登录前 / 匿名探活）仍共用一个键，与改动前一致。
+    srv18b = new_server()
+    pool.close_all()
+    for _ in range(2):
+        req = urllib.request.Request(srv18b.base() + "/ok")
+        resp = wb_accounts.urlopen(req, timeout=5)
+        resp.read()
+        resp.close()
+    check("无凭据请求仍复用一条连接", srv18b.accepted == 1, srv18b.accepted)
+    # 退避口径不变：egress_key 仍是物理出口的 4 元组，不掺账号。
+    check("egress_key 仍是 4 元组、不含账号",
+          len(pool.egress_key(srv18.base() + "/ok", "")) == 4,
+          pool.egress_key(srv18.base() + "/ok", ""))
 finally:
     for srv in servers:
         srv.stop()

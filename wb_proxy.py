@@ -12439,6 +12439,18 @@ def build_upstream_body(payload):
     return body
 
 
+def encode_upstream_body(body):
+    """Serialize a chat body the way the official client does.
+
+    官方客户端是 Node 的 JSON.stringify：token 之间没有空白。json.dumps 默认的
+    separators=(", ", ": ") 会多出空格，body 字节与 Content-Length 都成一处机器
+    特征（上游解析结果等价，只影响线上字节）。单独成函数，让「出站 chat body
+    用紧凑 JSON」有唯一入口、可被测试钉住。
+    """
+    return json.dumps(body, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+
+
 def model_catalog_meta(model):
     """The catalog metadata dict for a model, or {}.
 
@@ -13176,12 +13188,21 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             attempt_body = inject_prompt_cache_key(upstream_body, account.uid, session_key)
         else:
             attempt_body = upstream_body
-        attempt_data = json.dumps(attempt_body, ensure_ascii=False).encode("utf-8")
+        # 紧凑 JSON：官方客户端（Node JSON.stringify）不带分隔符后的空格，默认的
+        # json.dumps(separators=(", ", ": ")) 会让 body 字节与 Content-Length 都成
+        # 一处机器特征。上游解析等价，只影响线上字节。
+        attempt_data = encode_upstream_body(attempt_body)
         # 会话头族（X-Conversation-ID 等）由身分构造里每次请求现生成：上游不拿
         # 这个 id 存历史，不需要按会话复用；缺了它上游的渠道校验会回 400 /
         # code 11-128（`conversation id missing`），补的是「有」而不是「稳定」。
+        chat_headers = account.headers(purpose="chat")
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
-                                     headers=account.headers(purpose="chat"))
+                                     headers=chat_headers)
+        # 头名保真：Request.add_header 会把头名 capitalize（X-Request-ID →
+        # X-request-id），发送层再 .title() 就成了 X-Request-Id。官方客户端保留
+        # 代码里的写法，这里把有序原名挂给池路径，按原样发；回退到 urllib 的
+        # 路径（3xx / 非 HTTP 代理 / 关池）仍走原来的 .title()，行为不变。
+        req.wb_exact_headers = list(chat_headers.items())
         try:
             resp = wb_accounts.urlopen(req, timeout=header_timeout,
                                        proxy=account.proxy)
@@ -13577,9 +13598,12 @@ def probe_account(account, model=None, timeout=30):
     chat_url = account.chat_base_url() + CHAT_PATH
     test_body = {"model": model, "messages": [{"role": "user", "content": "hi"}],
                  "stream": False}
-    body = json.dumps(build_upstream_body(test_body), ensure_ascii=False).encode("utf-8")
+    body = encode_upstream_body(build_upstream_body(test_body))
+    probe_headers = account.headers(purpose="chat")
     req = urllib.request.Request(chat_url, data=body, method="POST",
-                                 headers=account.headers(purpose="chat"))
+                                 headers=probe_headers)
+    # 探活也是 chat 请求：与 open_upstream 同口径，头名原样、body 紧凑 JSON。
+    req.wb_exact_headers = list(probe_headers.items())
     t0 = time.time()
     try:
         with wb_accounts.urlopen(req, timeout=timeout, proxy=account.proxy) as resp:
