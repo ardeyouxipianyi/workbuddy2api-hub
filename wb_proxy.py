@@ -11310,7 +11310,18 @@ def sanitize_content(content):
                 out.append(part)
         return out
     return content
+
+
+def preserve_request_contract_enabled():
+    """Opt-in field/data preservation; does not enforce upstream constraints."""
+    return os.environ.get("WB_PRESERVE_REQUEST_CONTRACT", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def sanitize_tool_calls(tool_calls):
+    # Arguments are serialized application data, not a client fingerprint.
+    if preserve_request_contract_enabled():
+        return tool_calls
     if not isinstance(tool_calls, list):
         return tool_calls
     out = []
@@ -11331,7 +11342,9 @@ def sanitize_messages(messages):
     for m in messages or []:
         if isinstance(m, dict):
             item = dict(m)
-            if "content" in item:
+            preserve_tool_result = (preserve_request_contract_enabled()
+                                    and item.get("role") in ("tool", "function"))
+            if "content" in item and not preserve_tool_result:
                 item["content"] = sanitize_content(item["content"])
             if isinstance(item.get("reasoning_content"), str):
                 item["reasoning_content"] = sanitize_text(item["reasoning_content"])
@@ -14093,6 +14106,8 @@ def expand_namespace_tools(tools, _depth=0):
                     "parameters": entry.get("parameters") or entry.get("input_schema")
                                   or {"type": "object", "properties": {}},
                 }
+                if preserve_request_contract_enabled() and "strict" in entry:
+                    fn["strict"] = entry["strict"]
             name = str(fn.get("name") or "").strip()
             if not name or name in seen:
                 return
@@ -14645,6 +14660,20 @@ def responses_to_chat(payload):
     """Translate a Responses API request body into a Chat Completions body."""
     messages = _responses_input_to_messages(payload)
     chat = {"model": payload.get("model"), "messages": messages}
+    if preserve_request_contract_enabled():
+        text = payload.get("text")
+        fmt = text.get("format") if isinstance(text, dict) else None
+        if isinstance(fmt, dict):
+            kind = fmt.get("type")
+            if kind in ("text", "json_object"):
+                chat["response_format"] = {"type": kind}
+            elif kind == "json_schema":
+                chat["response_format"] = {
+                    "type": kind,
+                    "json_schema": {key: fmt[key] for key in
+                                    ("name", "description", "schema", "strict")
+                                    if key in fmt},
+                }
     for key in ("temperature", "top_p", "seed"):
         if payload.get(key) is not None:
             chat[key] = payload[key]
