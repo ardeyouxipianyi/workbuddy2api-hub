@@ -135,7 +135,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 158 个套件：116 个 Python + 42 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 159 个套件：117 个 Python + 42 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -426,6 +426,15 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
   `cache_retention=long`，CLI 身份不再发 `X-Device-Token`。桌面端 / VSCode 身份
   行为不变。国际版端点仍是 `www.workbuddy.ai`（官方 CLI 用 `www.codebuddy.ai`，
   解析不了，属已知差异，本版不改）。
+- **VSCode 身份对齐官方扩展 4.12.39997873**：UA 改为
+  `VSCode/1.119.0 CodeBuddy/4.12.39997873`（productName=CodeBuddy、扩展版本
+  4.12.39997873），补 `X-Product-Version` / `X-Model-ID` / `X-Agent-Type` /
+  `X-Private-Data`（仅 intl）/ B3 链路头族（含 `X-B3-ParentSpanId` 与四段 b3）/
+  `X-Request-Trace-Id` / `monitor_*` 时间戳；`X-Request-ID` 与
+  `X-Conversation-Request-ID` 同值、`X-Conversation-Message-ID` 独立，
+  `X-Conversation-ID` 为 32 位 hex。桌面端 / CLI 身份行为不变。VSCode 请求体
+  gzip 受官方 `enableRequestBodyGzip` 开关控制，主 chat 是否启用待抓包确认，
+  本版未启用。
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.12，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 

@@ -1220,11 +1220,16 @@ class Account(object):
         """出站身份是不是官方 CodeBuddy CLI（决定 chat 的 wire 形态）。"""
         return self.product == wb_identity.PRODUCT_CLI
 
-    def headers(self, purpose="chat", session_key=None, turn_request_id=None):
+    def headers(self, purpose="chat", session_key=None, turn_request_id=None,
+                model=None, conversation_id=None):
         """组出这一轮的出站标头。
 
-        chat 用途走 wb_identity（CLI 头 / WorkBuddy 头，可切换）；
+        chat 用途走 wb_identity（CLI 头 / WorkBuddy 头 / VSCode 头，可切换）；
         billing 用途维持原本的轻量标头，计费端点不吃那套身分。
+
+        `model` / `conversation_id` 只对 chat 用途有意义：官方 VSCode 扩展在
+        model 请求上带 `X-Model-ID`（值就是本次 model），`X-Conversation-ID`
+        按会话稳定；计费端点不吃这套身分，两个参数在 billing 路径上被忽略。
 
         chat 标头按 5.8.4 抓包对齐：官方对话请求不带 X-Machine-ID /
         X-Session-ID（那两个只用于反馈上报），所以这里也不再发——之前发的
@@ -1285,6 +1290,8 @@ class Account(object):
             tenant_id=self.enterprise_id,
             session_key=session_key,
             turn_request_id=turn_request_id,
+            model=model,
+            conversation_id=conversation_id,
         )
         if self.is_cli_identity():
             # 官方 CLI 的 chat 请求由 OpenAI Node SDK 发出：浏览器头一个都没有，
@@ -1308,6 +1315,13 @@ class Account(object):
         device_token = self._device_token() if not self.is_cli_identity() else ""
         if device_token:
             headers["X-Device-Token"] = device_token
+        elif (self.product == wb_identity.PRODUCT_VSCODE
+              and not self.enterprise_id):
+            # 官方非企业号会带本机 QIMEI/TuringShield 真实设备 token；hub 没有
+            # 本机 native SDK，生成不了也不伪造。官方取不到 token 时发
+            # X-Device-Token-Error（TuringShieldServiceImpl 的
+            # {error: "sdk_not_initialized"}），这里用同一个值占位。
+            headers["X-Device-Token-Error"] = "sdk_not_initialized"
         return headers
 
     def _device_token(self):
@@ -1637,9 +1651,10 @@ class Account(object):
         """每日活跃对话的实际流程；返回形状见 daily_chat。"""
         import wb_proxy
         url = self.chat_base_url() + wb_proxy.CHAT_PATH
-        headers = self.headers("chat")
+        model = self.daily_chat_model()
+        headers = self.headers("chat", model=model)
         body = {
-            "model": self.daily_chat_model(),
+            "model": model,
             "messages": [{"role": "user", "content": "Hi"}],
             "stream": True,
             "max_tokens": 10,
@@ -1647,7 +1662,8 @@ class Account(object):
         }
         req_body = wb_proxy.build_upstream_body(body)
         # 官方 CLI 的 chat 请求体：gzip + cache_retention（紧凑 JSON 由传输层统一
-        # 处理，本 PR 不重复实现）；桌面端 / VSCode 维持原请求体。
+        # 处理，本 PR 不重复实现）；桌面端 / VSCode 维持原请求体（VSCode 的
+        # RequestBodyGzip 有 feature 开关、主 chat 是否压仍待抓包确认）。
         cli_identity = self.is_cli_identity()
         if cli_identity:
             req_body = {k: v for k, v in req_body.items()

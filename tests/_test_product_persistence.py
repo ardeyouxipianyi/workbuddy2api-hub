@@ -107,36 +107,52 @@ print("[5] the outbound identity carries the conversation header family")
 # 上游的渠道校验在请求完全没有会话 id 时回 400 / code 11-128
 # （`conversation id missing`，displayTips「这次调用没通过渠道校验」）。三套
 # 身份都得带这套头：VSCode / CLI 一直带，桌面端（所有账号默认的那套）原来
-# 一个都没有。形态按 5.8.4 抓包：会话 id 是带连字符的 UUID，请求/消息 id 是
-# 32 位无连字符 hex。
+# 一个都没有。形态按各自官方客户端的实测/源码：桌面端会话 id 是带连字符的
+# UUID、请求/消息 id 是 32 位 hex；VSCode 扩展（4.12.39997873）的
+# conversationId / requestId 都是 uuidv4 去连字符的 32 位 hex。
 CONV_HEADERS = ("X-Conversation-ID", "X-Conversation-Request-ID",
-                "X-Root-Request-ID", "X-Conversation-Message-ID")
-HEX32 = ("X-Request-ID", "X-Conversation-Request-ID", "X-Root-Request-ID",
-         "X-Conversation-Message-ID")
+                "X-Conversation-Message-ID")
+HEX32 = ("X-Request-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID")
 for want in ("workbuddy", "vscode", "cli"):
     h = wb_identity.build_identity_headers(want, "intl", "u1", "tok")
-    if want == "cli":
+    if want in ("cli", "vscode"):
         # 官方 CLI 只在 meta.rootRequestId 存在时发 X-Root-Request-ID（子代理用
-        # 主会话的 conversationRequestId）；主对话不发，网关不冒充子代理。
+        # 主会话的 conversationRequestId）；VSCode 主对话也不发（仅 subagent 带
+        # rootRequestId）。两者都不冒充子代理。
         want_conv = tuple(k for k in CONV_HEADERS if k != "X-Root-Request-ID")
         want_hex = tuple(k for k in HEX32 if k != "X-Root-Request-ID")
-        check("cli: no X-Root-Request-ID on a main-conversation request",
+        check("%s: no X-Root-Request-ID on a main-conversation request" % want,
               "X-Root-Request-ID" not in h)
-        check("cli: no X-Parent-Conversation-ID (subagent-only header)",
+        check("%s: no X-Parent-Conversation-ID (subagent-only header)" % want,
               "X-Parent-Conversation-ID" not in h)
     else:
         want_conv, want_hex = CONV_HEADERS, HEX32
     check("%s sends the conversation header family" % want,
           all(h.get(k) for k in want_conv),
           [k for k in want_conv if not h.get(k)])
-    check("%s: message id equals request id" % want,
-          h.get("X-Conversation-Message-ID") == h.get("X-Request-ID"))
-    if want != "cli":
-        check("%s: root request id equals conversation request id" % want,
-              h.get("X-Root-Request-ID") == h.get("X-Conversation-Request-ID"))
+    if want == "vscode":
+        # 官方 VSCode 扩展 4.12.39997873 的 model-provider：X-Request-ID 与
+        # X-Conversation-Request-ID 是同一个本轮 requestId，Message-ID 是另一个
+        # 独立的随机值。
+        check("%s: request id equals conversation request id" % want,
+              h.get("X-Request-ID") == h.get("X-Conversation-Request-ID"))
+        check("%s: message id is independent" % want,
+              h.get("X-Conversation-Message-ID") != h.get("X-Request-ID"))
+    else:
+        # 桌面端按 5.8.4 抓包、CLI 按 2.168.2 契约：Request-ID = Message-ID。
+        check("%s: message id equals request id" % want,
+              h.get("X-Conversation-Message-ID") == h.get("X-Request-ID"))
+        if want != "cli":
+            check("%s: root request id equals conversation request id" % want,
+                  h.get("X-Root-Request-ID") == h.get("X-Conversation-Request-ID"))
     conv = str(h.get("X-Conversation-ID"))
-    check("%s: the conversation id is a dashed uuid" % want,
-          len(conv) == 36 and conv.count("-") == 4, conv)
+    if want == "vscode":
+        check("%s: the conversation id is 32 hex" % want,
+              len(conv) == 32
+              and all(c in "0123456789abcdef" for c in conv), conv)
+    else:
+        check("%s: the conversation id is a dashed uuid" % want,
+              len(conv) == 36 and conv.count("-") == 4, conv)
     check("%s: the request/message ids are 32 hex chars" % want,
           all(len(str(h.get(k))) == 32
               and all(c in "0123456789abcdef" for c in str(h.get(k)))
