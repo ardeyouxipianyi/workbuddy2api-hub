@@ -145,10 +145,10 @@ class BoundaryCase(unittest.TestCase):
             {"id": "k1", "name": "k", "key": KEY, "enabled": True}])
         self.updates = StubUpdates()
 
-    def dispatch(self, path, headers=None, command="GET", body=b""):
+    def dispatch(self, path, headers=None, command="GET", body=b"", pool=None):
         request = DispatchRequest(path, headers=headers, command=command, body=body)
         with mock.patch.multiple(proxy, ACCOUNTS_DIR=self.directory, API_KEY=None,
-                                 POOL=None, PRICING=None, UPDATES=self.updates,
+                                 POOL=pool, PRICING=None, UPDATES=self.updates,
                                  SCHEDULER=None, fetch_models=injected_models):
             return request.dispatch()
 
@@ -338,6 +338,79 @@ class ApiKeySurfaceTests(BoundaryCase):
         # behaviour rather than something this suite introduces.
         status, _body, _raw = self.dispatch("/v1/models", self.session())
         self.assertEqual(status, 200)
+
+
+class SummaryAccount(object):
+    """Minimal account surface used by the cached balance aggregation."""
+
+    def __init__(self, remain, realm="cn", enabled=True, updated_at=None):
+        self.uid = "private-account-uid"
+        self.nickname = "private-account-name"
+        self.realm = realm
+        self.enabled = enabled
+        self.credits = None if remain is None else {
+            "remain": remain,
+            "updated_at": updated_at,
+        }
+
+    def fetch_credits(self):
+        raise AssertionError("balance summary must use cached credit snapshots")
+
+
+class SummaryPool(object):
+    def __init__(self, accounts):
+        self.accounts = accounts
+
+
+class BalanceSummaryTests(BoundaryCase):
+    """The compact balance read is key-accessible and does not leak accounts."""
+
+    def test_anonymous_call_is_refused_as_a_key_problem(self):
+        status, body, _raw = self.dispatch("/v1/balance-summary")
+        self.assertEqual(status, 401)
+        self.assertIn("invalid api key", body["error"]["message"])
+        self.assertNotIn(PANEL_ONLY_MESSAGE, body["error"]["message"])
+
+    def test_key_reads_only_the_bound_realm_and_never_refreshes_upstream(self):
+        pool = SummaryPool([
+            SummaryAccount(10.25, updated_at=100),
+            SummaryAccount(2.5, updated_at=200),
+            SummaryAccount(100, enabled=False),
+            SummaryAccount(50, realm="intl"),
+        ])
+        headers = dict(self.key_only(), **{"X-Realm": "cn"})
+        status, body, raw = self.dispatch("/v1/balance-summary", headers, pool=pool)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {
+            "balance": 12.75,
+            "unit": "credit",
+            "realm": "cn",
+            "accounts_enabled": 2,
+            "accounts_with_credit_data": 2,
+            "updated_at": 200.0,
+        })
+        self.assertNotIn("private-account-uid", raw)
+        self.assertNotIn("private-account-name", raw)
+
+    def test_unknown_credit_snapshots_do_not_become_zero(self):
+        pool = SummaryPool([
+            SummaryAccount(3),
+            SummaryAccount(None),
+        ])
+        headers = dict(self.key_only(), **{"X-Realm": "cn"})
+        status, body, _raw = self.dispatch(
+            "/v1/balance-summary", headers, pool=pool)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["balance"], 3.0)
+        self.assertEqual(body["accounts_enabled"], 2)
+        self.assertEqual(body["accounts_with_credit_data"], 1)
+
+        status, body, _raw = self.dispatch(
+            "/v1/balance-summary", headers,
+            pool=SummaryPool([SummaryAccount(None)]))
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["balance"])
+        self.assertEqual(body["accounts_with_credit_data"], 0)
 
 
 if __name__ == "__main__":

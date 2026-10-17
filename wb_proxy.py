@@ -4,6 +4,7 @@ Reuses the credentials the WorkBuddy desktop app already stored on this machine
 (%%LOCALAPPDATA%%\\CodeBuddyExtension\\Data\\Public\\auth\\*.info), so no separate
 login is needed. Exposes:
     GET  /v1/models
+    GET  /v1/balance-summary
     POST /v1/chat/completions     (stream=true and stream=false)
     GET  /health
 Only the Python standard library is required.
@@ -18,6 +19,7 @@ import bisect
 import hashlib
 import heapq
 import ipaddress
+import math
 from collections import deque
 import re
 import json
@@ -5921,6 +5923,49 @@ def account_views(realm=None):
     if not POOL:
         return []
     return POOL.list_public(realm=realm)
+
+
+def credit_balance_summary(realm=None):
+    """Aggregate cached credit snapshots without account-identifying fields.
+
+    This intentionally never calls fetch_credits(): a balance widget may poll
+    this route frequently, and each upstream refresh would spend time and risk
+    needless upstream traffic. Unknown snapshots stay unknown instead of being
+    reported as a zero balance.
+    """
+    accounts = [
+        account for account in (POOL.accounts if POOL else [])
+        if account.enabled and (
+            not realm or realm == "all" or account.realm == realm
+        )
+    ]
+    total = 0.0
+    known = 0
+    updated = []
+    for account in accounts:
+        credits = account.credits if isinstance(account.credits, dict) else {}
+        try:
+            remain = float(credits.get("remain"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(remain) or remain < 0:
+            continue
+        total += remain
+        known += 1
+        try:
+            stamp = float(credits.get("updated_at"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(stamp):
+            updated.append(stamp)
+    return {
+        "balance": round(total, 2) if known else None,
+        "unit": "credit",
+        "realm": realm or CURRENT_REALM,
+        "accounts_enabled": len(accounts),
+        "accounts_with_credit_data": known,
+        "updated_at": max(updated) if updated else None,
+    }
 
 # --------------------------------------------------------- 积分获取历史（发放记录）
 # 上游对每个账号返回一份积分包清单（免费套餐、每日活跃奖励的 Bonus Pack、活动包…），
@@ -16677,6 +16722,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_health()
         if path == "/realm":
             return self._get_realm()
+        if path == "/v1/balance-summary":
+            return self._get_v1_balance_summary()
         if path in ("/v1/models", "/models"):
             return self._get_v1_models()
         if path in ("/usage", "/v1/usage"):
@@ -16847,6 +16894,12 @@ class Handler(BaseHTTPRequestHandler):
         if meta:
             payload["catalog"] = meta
         return self._json(200, payload)
+
+    def _get_v1_balance_summary(self):
+        if not self._authorized():
+            return
+        realm = self._request_realm() or CURRENT_REALM
+        return self._json(200, credit_balance_summary(realm))
 
     def _get_v1_usage(self, query):
         if not self._authorized():
