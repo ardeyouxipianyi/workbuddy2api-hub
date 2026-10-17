@@ -13096,6 +13096,11 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
         if session_key and AFFINITY_DEBUG:
             log("affinity: derived %s for %d msgs"
                 % (session_key, len(upstream_body.get("messages") or [])))
+    # 一轮 user send 的 request id：官方桌面端在这一轮的所有请求（含重试/换号）
+    # 复用同一个 X-Conversation-Request-ID / X-Root-Request-ID，只有 message id
+    # 每请求新生成（见 wb_identity.new_turn_request_id）。生成在重试循环外，
+    # 循环里只把它传给身份构造 / 国内版 body。
+    turn_request_id = wb_identity.new_turn_request_id()
     total = max(1, POOL.count_ready(realm, model=model)) if POOL else 1
     tried = set()
     # 这一轮请求已经记过账的账号：重试轮（transient_hits 后 tried.clear() 整池
@@ -13176,12 +13181,27 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             attempt_body = inject_prompt_cache_key(upstream_body, account.uid, session_key)
         else:
             attempt_body = upstream_body
+        # 官方桌面端 chat 请求体：国内版追加 agent:"cli" + conversationRequestId
+        # （5.6.2 抓包；国际版 5.2.7 原始报文没有这两个字段，不加），整体 gzip
+        # 并带 Content-Encoding: gzip（5.2.7/5.6.2/5.8.4 抓包都有）。桌面端以外
+        # 的身份维持原请求体（gzip 由各自身份的 PR 负责）。
+        desktop_identity = account.is_desktop_identity()
+        if desktop_identity:
+            cn_fields = wb_identity.desktop_body_fields(realm, turn_request_id)
+            if cn_fields:
+                attempt_body = dict(attempt_body)
+                attempt_body.update(cn_fields)
         attempt_data = json.dumps(attempt_body, ensure_ascii=False).encode("utf-8")
-        # 会话头族（X-Conversation-ID 等）由身分构造里每次请求现生成：上游不拿
-        # 这个 id 存历史，不需要按会话复用；缺了它上游的渠道校验会回 400 /
-        # code 11-128（`conversation id missing`），补的是「有」而不是「稳定」。
+        req_headers = account.headers(purpose="chat", session_key=session_key,
+                                      turn_request_id=turn_request_id)
+        if desktop_identity:
+            attempt_data = wb_identity.gzip_body(attempt_data)
+            req_headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
+        # 会话头族（X-Conversation-ID 等）由身分构造里生成：上游不拿这个 id 存
+        # 历史，不需要按会话复用；缺了它上游的渠道校验会回 400 / code 11-128
+        # （`conversation id missing`），补的是「有」而不是「稳定」。
         req = urllib.request.Request(chat_url, data=attempt_data, method="POST",
-                                     headers=account.headers(purpose="chat"))
+                                     headers=req_headers)
         try:
             resp = wb_accounts.urlopen(req, timeout=header_timeout,
                                        proxy=account.proxy)
@@ -13577,9 +13597,24 @@ def probe_account(account, model=None, timeout=30):
     chat_url = account.chat_base_url() + CHAT_PATH
     test_body = {"model": model, "messages": [{"role": "user", "content": "hi"}],
                  "stream": False}
-    body = json.dumps(build_upstream_body(test_body), ensure_ascii=False).encode("utf-8")
+    probe_body = build_upstream_body(test_body)
+    # 桌面端探活也按官方 chat wire 形态发（同一套头 / gzip / 国内版 body 字段）：
+    # 面板「测试」若用另一套形态，测出来的就不是真实对话链路。
+    desktop_identity = account.is_desktop_identity()
+    turn_request_id = wb_identity.new_turn_request_id()
+    if desktop_identity:
+        cn_fields = wb_identity.desktop_body_fields(account.realm, turn_request_id)
+        if cn_fields:
+            probe_body = dict(probe_body)
+            probe_body.update(cn_fields)
+    body = json.dumps(probe_body, ensure_ascii=False).encode("utf-8")
+    probe_headers = account.headers(purpose="chat",
+                                    turn_request_id=turn_request_id)
+    if desktop_identity:
+        body = wb_identity.gzip_body(body)
+        probe_headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
     req = urllib.request.Request(chat_url, data=body, method="POST",
-                                 headers=account.headers(purpose="chat"))
+                                 headers=probe_headers)
     t0 = time.time()
     try:
         with wb_accounts.urlopen(req, timeout=timeout, proxy=account.proxy) as resp:

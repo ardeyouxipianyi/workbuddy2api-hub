@@ -4,6 +4,7 @@ Run with: python _test_prompt_modes.py
 No upstream credentials or outbound network are used.
 """
 import datetime
+import gzip
 import io
 import json
 import os
@@ -22,6 +23,14 @@ import wb_accounts
 import wb_prompt
 import wb_proxy
 import wb_settings
+
+
+def sent_body(req):
+    """这次出站请求的 JSON body；桌面端身份是 gzip wire 形态，先解回来。"""
+    data = req.data
+    if (req.get_header("Content-encoding") or "").lower() == "gzip":
+        data = gzip.decompress(data)
+    return json.loads(data.decode("utf-8"))
 
 CST = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -253,7 +262,7 @@ class DegradedRetryTests(unittest.TestCase):
                     pass
 
             def fake_urlopen(req, timeout=30, proxy=""):
-                bodies.append(json.loads(req.data.decode("utf-8")))
+                bodies.append(sent_body(req))
                 if len(bodies) == 1:
                     raise urllib.error.HTTPError(
                         "https://upstream.invalid", 403, "forbidden", {},

@@ -414,6 +414,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 ### Unreleased
 
+- **桌面端身份对齐官方客户端（国际 5.8.4 / 国内 5.6.2）**：chat 补 OpenAI Node SDK 6.25.0 的 `x-stainless-*` 指纹头、会话级 `acp-connection-id`、`X-B3-ParentSpanId` 与四段 `b3`；请求体 gzip（`Content-Encoding: gzip`），去掉 `Origin` / `Referer` / `Accept-Language`、`Accept` 改为 `application/json`。国内版按 5.6.2 CLI 钩子抓包补 `agent:"cli"` / `conversationRequestId`，`X-IDE-Version` 升 5.6.2（5.8.2/5.8.3 无完整抓包，先钉 5.6.2）。`X-Conversation-Request-ID` 在一轮 user send 的所有重试/换号里复用；`X-Device-Token` 仍只在配置了真实 token 时发送，不伪造、不共享。VSCode / CLI 身份行为不变。已知差异：国际版端点仍走 `www.workbuddy.ai`；国内版 UA 的版本段取自 5.6.2 包内静态值（appVersion=5.6.2、内置 CLI customPackage.version=2.147.0），整条 UA 仍无 5.6.2 抓包原值。
+
 已发布版本的完整记录（v1.4.5 ~ v1.7.12，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ## 七、致谢与引用声明 (Credits & References)

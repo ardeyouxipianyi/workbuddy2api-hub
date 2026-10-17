@@ -13,6 +13,7 @@ credential); 401/403/429 already have their own paths.
 No network: accounts are built from dicts, the upstream call is stubbed, and
 time.sleep is recorded instead of slept.
 """
+import gzip
 import io
 import json
 import os
@@ -30,6 +31,14 @@ import wb_egress
 import wb_proxy
 import wb_settings
 import wb_upstream_pool
+
+
+def sent_body(req):
+    """这次出站请求的 JSON body；桌面端身份是 gzip wire 形态，先解回来。"""
+    data = req.data
+    if (req.get_header("Content-encoding") or "").lower() == "gzip":
+        data = gzip.decompress(data)
+    return json.loads(data.decode("utf-8"))
 
 
 class EgressKeyTests(unittest.TestCase):
@@ -277,7 +286,7 @@ class SwitchOnTests(_OpenUpstreamHarness):
         sent_models = []
 
         def urlopen(req, timeout=30, proxy=""):
-            sent_models.append(json.loads(req.data.decode())["model"])
+            sent_models.append(sent_body(req)["model"])
             if len(sent_models) == 1:
                 raise error
             return _Response(_Sock())
@@ -325,7 +334,7 @@ class SwitchOnTests(_OpenUpstreamHarness):
         switch_attempts = []
 
         def urlopen(req, timeout=30, proxy=""):
-            model = json.loads(req.data.decode())["model"]
+            model = sent_body(req)["model"]
             uid = dict((k.lower(), v) for k, v in req.header_items()).get("x-user-id")
             sent.append((model, uid))
             if uid == first.uid:

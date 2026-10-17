@@ -155,7 +155,37 @@ check("traceparent follows the W3C shape",
       and str(d.get("traceparent", "")).endswith("-01"), d.get("traceparent"))
 check("the CN desktop keeps its own version and UA",
       wb_identity.build_identity_headers("workbuddy", "cn", "u1", "tok")["X-IDE-Version"]
-      == "5.5.6")
+      == "5.6.2")
+# 官方桌面端 chat 由内置 CLI 子进程的 OpenAI Node SDK 6.25.0 发出：SDK 指纹头、
+# acp-connection-id、四段 b3 都随请求上行（5.2.7 原始报文 / 5.6.2 抓包实证）。
+# 版本号只有 5.8.4 国际版有逐项抓包；CN 钉 5.6.2（唯一有完整 CLI 钩子抓包的
+# 国内版本）。X-Agent-Runtime 没有出现在任何一份桌面端抓包里（5.2.7 原始报文、
+# 5.6.2 CLI 钩子、5.8.4 抓包清单都没有），所以不发。
+check("desktop sends the OpenAI SDK fingerprint headers",
+      all(d.get(k) == v for k, v in wb_identity.DESKTOP_STAINLESS_HEADERS.items()),
+      {k: d.get(k) for k in wb_identity.DESKTOP_STAINLESS_HEADERS})
+check("desktop does not send X-Agent-Runtime (absent from every capture)",
+      "X-Agent-Runtime" not in d)
+check("desktop sends an acp-connection-id",
+      bool(d.get("acp-connection-id")), d.get("acp-connection-id"))
+_acp_a = wb_identity.build_identity_headers("workbuddy", "intl", "u1", "tok",
+                                            session_key="sess-1")["acp-connection-id"]
+_acp_b = wb_identity.build_identity_headers("workbuddy", "intl", "u1", "tok",
+                                            session_key="sess-2")["acp-connection-id"]
+check("acp-connection-id is stable per (uid, session_key)",
+      _acp_a == wb_identity.build_identity_headers(
+          "workbuddy", "intl", "u1", "tok", session_key="sess-1")["acp-connection-id"]
+      and _acp_a != _acp_b, (_acp_a, _acp_b))
+check("desktop main request carries X-B3-ParentSpanId and a four-segment b3",
+      bool(d.get("X-B3-ParentSpanId"))
+      and len(str(d.get("b3", "")).split("-")) == 4, d.get("b3"))
+check("CN desktop body fields: agent=cli + conversationRequestId",
+      wb_identity.desktop_body_fields("cn", "f" * 32)
+      == {"agent": "cli", "conversationRequestId": "f" * 32}
+      and wb_identity.desktop_body_fields("intl", "f" * 32) == {})
+_gz = wb_identity.gzip_body(b'{"model":"x"}')
+check("gzip_body round-trips the chat body",
+      __import__("gzip").decompress(_gz) == b'{"model":"x"}')
 
 print()
 print("[7] chat headers drop the feedback-only ids and keep the fingerprint shape")
@@ -215,6 +245,10 @@ check("DEFAULT_UA_VERSION is wb_identity's intl version",
       A.DEFAULT_UA_VERSION)
 check("USER_AGENT follows the intl chat UA", A.USER_AGENT == wb_identity.DESKTOP_UA_INTL,
       A.USER_AGENT)
+check("cn chat UA uses the 5.6.2 package's static versions",
+      wb_identity.DESKTOP_UA_CN
+      == "WorkBuddy/5.6.2 WorkBuddy/5.6.2 CLI/2.147.0",
+      wb_identity.DESKTOP_UA_CN)
 # 5.5.2 是这次修掉的过时值，任何身份常量再退回它都算回归。
 check("no realm still advertises the stale 5.5.2",
       all("5.5.2" not in str(A.get_realm_config(r).get(k, ""))

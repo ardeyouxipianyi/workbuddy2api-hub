@@ -1216,7 +1216,11 @@ class Account(object):
             return self.refresh()
         return self.refresh()
 
-    def headers(self, purpose="chat"):
+    def is_desktop_identity(self):
+        """出站身份是不是 WorkBuddy 独立桌面端（决定 chat 的 wire 形态）。"""
+        return self.product == wb_identity.PRODUCT_DESKTOP
+
+    def headers(self, purpose="chat", session_key=None, turn_request_id=None):
         """组出这一轮的出站标头。
 
         chat 用途走 wb_identity（CLI 头 / WorkBuddy 头，可切换）；
@@ -1225,6 +1229,16 @@ class Account(object):
         chat 标头按 5.8.4 抓包对齐：官方对话请求不带 X-Machine-ID /
         X-Session-ID（那两个只用于反馈上报），所以这里也不再发——之前发的
         是每个账号恒定的派生值，反而是一处「网关特征」。
+
+        桌面端身份另按官方 wire 形态对齐（5.2.7 原始报文 + 5.6.2/5.8.4 抓包）：
+        官方 chat 由客户端内置 CLI 子进程经 OpenAI Node SDK 发出，没有
+        Origin / Referer / Accept-Language 这些浏览器头，Accept 就是
+        application/json；x-stainless-* / acp-connection-id /
+        X-B3-ParentSpanId 由 wb_identity 补齐。
+
+        session_key / turn_request_id 只影响桌面端身份（官方语义：acp 连接 id
+        会话级稳定、X-Conversation-Request-ID 一轮 user send 内复用），由
+        open_upstream 传进来；VSCode / CLI 分支不吃这两个参数，行为不变。
 
         billing 标头仍带 X-Machine-ID / X-Session-ID，但两个都必须按账号派生：
         网关是一个进程冒充几十台设备，一旦取进程级的值，全部账号就会共用同一个
@@ -1269,16 +1283,29 @@ class Account(object):
             token=self.access_token,
             enterprise_id=self.enterprise_id,
             tenant_id=self.enterprise_id,
+            session_key=session_key,
+            turn_request_id=turn_request_id,
         )
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-            "Origin": cfg["origin"],
-            "Referer": cfg["origin"] + "/",
-            "X-CodeBuddy-Request": "1",
-            "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
-        }
+        if self.is_desktop_identity():
+            # 官方桌面端 chat（CLI 子进程 + OpenAI Node SDK）：没有浏览器头，
+            # Accept 是 application/json；x-requested-with / x-codebuddy-request
+            # 仍带，wire 上是小写（5.2.7 原始报文 / 5.6.2 抓包都有）。
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "x-requested-with": "XMLHttpRequest",
+                "x-codebuddy-request": "1",
+            }
+        else:
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": cfg["origin"],
+                "Referer": cfg["origin"] + "/",
+                "X-CodeBuddy-Request": "1",
+                "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
+            }
         headers.update(identity)
         device_token = self._device_token()
         if device_token:

@@ -6,6 +6,7 @@ request translation, the SSE event sequence and the usage rows - with no
 network access and no real accounts.
 """
 import base64
+import gzip
 import json
 import os
 import sys
@@ -83,6 +84,10 @@ class MockUpstream(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
+        # 官方桌面端 chat 请求体是 gzip（Content-Encoding: gzip），mock 要按同样
+        # 的 wire 形态解回来，否则 json.loads 会看到 gzip 头字节。
+        if (self.headers.get("Content-Encoding") or "").lower() == "gzip":
+            raw = gzip.decompress(raw)
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception:
