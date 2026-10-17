@@ -11345,27 +11345,60 @@ function addApiKeyRow(){
   }, 50);
 }
 /* Copy the key in a row, fetching the stored value when the field is blank
-   (the panel only ever displays a masked key). */
+   (the panel only ever displays a masked key).
+
+   Safari ties navigator.clipboard to the click's transient activation: an
+   `await` before the write drops it and the promise rejects with
+   NotAllowedError ("... not allowed by the user agent ..."). Chrome is looser
+   about "recent activation", which is why only Safari fails here. So copy
+   synchronously when the value is already in hand, and when it has to be
+   fetched hand the plaintext to the clipboard as a promise inside a
+   ClipboardItem -- the one asynchronous copy form Safari accepts. */
 async function copyKeyRow(index){
   const row = API_KEY_ROWS[index];
   if(!row) return;
   const btn = document.getElementById('copyBtn' + index);
-  let value = (row.key || '').trim();
+  const markCopied = () => {
+    if(!btn) return;
+    const old = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = old; }, 1600);
+  };
+  const value = (row.key || '').trim();
   try {
-    if(!value && row.id){
-      const data = await getJSON('/settings/reveal?id=' + encodeURIComponent(row.id));
-      value = data.key || '';
+    if(value){
+      // Already in hand: copy without yielding, keeping the click activation.
+      await writeClipboard(value);
+      markCopied();
+      toast('已复制到剪贴板', 'ok');
+      return;
     }
-    if(!value){
+    if(!row.id){
       toast('这一行还没有 Key，点「随机生成」或直接填写', 'warn');
       return;
     }
-    await writeClipboard(value);
-    if(btn){
-      const old = btn.textContent;
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = old; }, 1600);
+    const reveal = () => getJSON('/settings/reveal?id=' + encodeURIComponent(row.id))
+      .then(d => (d.key || '').trim());
+    if(window.ClipboardItem && navigator.clipboard && window.isSecureContext){
+      // write() is called synchronously inside the click handler; the plaintext
+      // arrives later through the item's promise.
+      const item = new ClipboardItem({
+        'text/plain': reveal().then(k => {
+          if(!k) throw new Error('这一行还没有 Key');
+          return new Blob([k], { type: 'text/plain' });
+        }),
+      });
+      await navigator.clipboard.write([item]);
+    } else {
+      // Older engines / insecure context: fetch first, then the textarea path.
+      const k = await reveal();
+      if(!k){
+        toast('这一行还没有 Key，点「随机生成」或直接填写', 'warn');
+        return;
+      }
+      await writeClipboard(k);
     }
+    markCopied();
     toast('已复制到剪贴板', 'ok');
   } catch(e) {
     toast('复制失败: ' + e.message, 'bad');
@@ -12405,7 +12438,9 @@ function copyFilteredLogs(){
     return true;
   });
   const text = filtered.map(x => '[' + (x.ts || x.time) + '] [' + x.level + '] [' + x.tag + '] ' + x.msg).join('\n');
-  navigator.clipboard.writeText(text).then(() => {
+  // Same secure-context caveat as writeClipboard(): plain http on a LAN address
+  // has no navigator.clipboard at all, so reuse the shared helper.
+  writeClipboard(text).then(() => {
     toast('已复制 ' + filtered.length + ' 行日志', 'ok');
   }).catch(e => {
     toast('复制失败: ' + e.message, 'bad');
