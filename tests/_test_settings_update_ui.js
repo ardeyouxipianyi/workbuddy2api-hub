@@ -1,6 +1,7 @@
-/* 设置页「更新」卡片的契约：只显示结论、只检查，不安装。
+/* 设置页「更新」卡片的契约：显示检查结果，安装必须由用户手动确认。
  *
- * 这一片是纯前端消费：后端 GET /updates 与 POST /updates/check 已经落地，
+ * 这一片是纯前端消费：后端 GET /updates、POST /updates/check 与
+ * POST /updates/install 已经落地，
  * 面板负责把结论画出来、把两个动作接上去。这里钉住五件事：
  *
  *   1. 三个字段（当前版本 / 最新版本 / 状态）真的被填上，且状态随结论变化；
@@ -8,8 +9,8 @@
  *   3. **200 不等于成功**：响应体里 ok=false 或 last_error 非空时，卡片与提示
  *      都必须报失败，不能对着一次失败的检查说「已是最新版本」；
  *   4. 「每天自动检查更新」走既有 /settings/save 契约，不用浏览器本地存储；
- *   5. **不下载、不安装、不重启**：安装按钮固定禁用，页面只访问自己网关的
- *      相对路径——浏览器从不直接接触 GitHub，所以也就不存在任何凭证依赖。
+ *   5. 安装按钮只在已配置更新服务且发现稳定新版本时可用；取消确认不得提交安装；
+ *      页面只访问自己网关的相对路径，浏览器从不直接接触 GitHub。
  *
  * Run with Node: node tests/_test_settings_update_ui.js
  */
@@ -30,6 +31,7 @@ let updatesPayload = {};
 let updatesStatus = 200;
 let saveReply = {ok: true};
 let saveStatus = 200;
+let confirmCalls = 0;
 
 const SETTINGS = {
   panel_password_is_default: false,
@@ -49,6 +51,7 @@ const SETTINGS = {
 };
 
 dom.installDom({
+  confirm: () => { confirmCalls += 1; return false; },
   fetch: (url, options) => {
     const target = String(url);
     calls.push({url: target, method: (options && options.method) || 'GET',
@@ -87,6 +90,7 @@ try {
       loadSettings: loadSettings,
       loadUpdateStatus: loadUpdateStatus,
       checkUpdateNow: checkUpdateNow,
+      installUpdateNow: installUpdateNow,
       saveUpdateCheckEnabled: saveUpdateCheckEnabled,
       applyUpdateStatus: applyUpdateStatus,
       saveDailyChatWebRetry: saveDailyChatWebRetry,
@@ -116,6 +120,8 @@ const posts = () => calls.filter(c => c.method === 'POST');
     enabled: true, checking: false,
     last_attempt: '2026-10-09 12:00:00', last_success: '2026-10-09 12:00:00',
     last_error: '', release_url: 'https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases/tag/v1.6.18',
+    latest_tag: 'v1.6.18', install_enabled: true,
+    installation: {state: 'idle', version: '', message: ''},
     published_at: '2026-10-09T00:00:00Z',
   };
   calls.length = 0;
@@ -236,17 +242,43 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('没有走浏览器本地存储（偏好由服务端保存）',
         !calls.some(c => c.url.indexOf('localStorage') !== -1), urls().join(', '));
 
-  // ---- 6. 不下载、不安装、不重启 ----
+  // ---- 6. 安装入口受更新状态与人工确认控制 ----
   const installBtn = element('setUpdateInstallBtn');
-  check('安装按钮固定禁用（本版没有安装路径）', installBtn.disabled === true);
-  check('安装按钮说明为什么不可用',
-        String(installBtn.title).indexOf('尚未提供') !== -1, installBtn.title);
+  updatesPayload = {
+    current_version: '1.6.17', latest_version: '1.6.18', update_available: true,
+    latest_tag: 'v1.6.18', release_url: 'https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases/tag/v1.6.18',
+    install_enabled: true, last_error: '', installation: {state: 'idle'},
+  };
+  api.applyUpdateStatus(updatesPayload);
+  check('有可用稳定更新且更新服务已安装时按钮可用', installBtn.disabled === false);
+  api.applyUpdateStatus({...updatesPayload, install_enabled: false});
+  check('没有安装服务时按钮保持禁用', installBtn.disabled === true);
+  api.applyUpdateStatus({...updatesPayload, installation: {state: 'applying'}});
+  check('安装过程中按钮保持禁用', installBtn.disabled === true);
+  api.applyUpdateStatus(updatesPayload);
+  updatesPayload = {
+    current_version: '1.6.18', latest_version: '1.6.18', update_available: false,
+    install_enabled: true, last_error: '', installation: {state: 'idle'},
+  };
+  api.applyUpdateStatus(updatesPayload);
+  check('没有新版本时安装按钮禁用', installBtn.disabled === true);
+  updatesPayload = {
+    current_version: '1.6.17', latest_version: '1.6.18', update_available: true,
+    latest_tag: 'v1.6.18', release_url: 'https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases/tag/v1.6.18',
+    install_enabled: true, last_error: '', installation: {state: 'idle'},
+  };
+  api.applyUpdateStatus(updatesPayload);
+  calls.length = 0;
+  const confirmsBeforeInstall = confirmCalls;
+  await api.installUpdateNow(installBtn); // DOM stub declines the confirmation.
+  await settled();
+  check('安装点击先经过人工确认', confirmCalls === confirmsBeforeInstall + 1);
+  check('取消确认不会提交安装请求',
+        posts().filter(c => c.url === '/updates/install').length === 0, urls().join(', '));
   check('面板从不直接访问 GitHub',
         !calls.some(c => /github\.com|api\.github/i.test(c.url)), urls().join(', '));
   check('面板只访问自己网关的相对路径',
         calls.every(c => c.url.charAt(0) === '/'), urls().join(', '));
-  check('没有任何安装/下载/重启端点被调用',
-        !calls.some(c => /install|download|restart|reload/i.test(c.url)), urls().join(', '));
 
   // ---- 7. 读取失败不拖垮设置页的其它区块 ----
   updatesStatus = 500;

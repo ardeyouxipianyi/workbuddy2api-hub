@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for an operator-requested WorkBuddy gateway update
+
+[Path]
+PathChanged=/run/workbuddy2api-hub-updater/request.json
+Unit=workbuddy2api-hub-updater.service
+
+[Install]
+WantedBy=multi-user.target

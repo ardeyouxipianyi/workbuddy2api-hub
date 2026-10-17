@@ -74,7 +74,7 @@ DROP_SUFFIXES = (".pdb", ".pyc")
 REQUIRED_FILES = (
     "python.exe", "python3.dll", "python312.dll",
     "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt",
-    "Lib/os.py", "Lib/io.py", "Lib/ssl.py", "Lib/hashlib.py", "Lib/hmac.py",
+    "Lib/os.py", "Lib/io.py", "Lib/ssl.py", "Lib/hashlib.py", "Lib/hmac.py", "Lib/stat.py",
     "Lib/socket.py",
     "Lib/json/__init__.py", "Lib/urllib/__init__.py", "Lib/urllib/request.py",
     "Lib/uuid.py", "Lib/secrets.py",

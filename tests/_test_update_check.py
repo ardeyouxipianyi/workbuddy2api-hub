@@ -452,6 +452,7 @@ class RouteTests(unittest.TestCase):
         _handle_settings_save = proxy.Handler._handle_settings_save
         _get_updates = proxy.Handler._get_updates
         _route_update_check = proxy.Handler._route_update_check
+        _route_update_install = proxy.Handler._route_update_install
 
         def __init__(self, payload=None):
             self.payload = payload
@@ -539,6 +540,29 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(request.reply["latest_version"], "1.6.18")
             self.assertTrue(request.reply["update_available"])
             self.assertEqual(len(fetcher.calls), 1)
+
+    def test_manual_install_queues_only_the_checked_newer_release(self):
+        with tempfile.TemporaryDirectory(prefix="upd-install-route-") as d:
+            worker = checker(d, FakeFetcher([release("v1.6.18")]))
+            worker.check(manual=True)
+            with mock.patch.object(proxy, "UPDATES", worker), \
+                    mock.patch.object(proxy.wb_update_request, "request_install",
+                                      return_value={"state": "queued", "version": "1.6.18"}) as queue:
+                request = self.Request()
+                request._route_update_install()
+            self.assertEqual(request.status, 202)
+            self.assertIs(request.reply["ok"], True)
+            self.assertEqual(request.reply["version"], "1.6.18")
+            queue.assert_called_once_with("v1.6.18", CURRENT)
+
+    def test_manual_install_refuses_when_no_new_release_was_checked(self):
+        with tempfile.TemporaryDirectory(prefix="upd-install-none-") as d:
+            worker = checker(d, FakeFetcher([]))
+            with mock.patch.object(proxy, "UPDATES", worker):
+                request = self.Request()
+                request._route_update_install()
+            self.assertEqual(request.status, 409)
+            self.assertFalse(request.reply["ok"])
 
     def test_the_status_route_still_answers_without_a_worker(self):
         with tempfile.TemporaryDirectory(prefix="upd-route-") as d:

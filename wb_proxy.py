@@ -74,6 +74,7 @@ import wb_prompt
 import wb_modelsdev
 import wb_probes
 import wb_updates
+import wb_update_request
 IS_WINDOWS = os.name == "nt"
 
 # ---- 一键配置客户端（wb_agents）的可用性判定（issue #246）----
@@ -9995,7 +9996,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "1.7.12",
+        "version": "1.7.13",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -16159,7 +16160,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/1.7.12"
+    server_version = "wb-proxy/1.7.13"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -17131,15 +17132,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         if UPDATES:
-            return self._json(200, UPDATES.status())
-        return self._json(200, {
-            "current_version": running_version(),
-            "latest_version": None, "update_available": False,
-            "enabled": wb_settings.update_check_enabled(ACCOUNTS_DIR),
-            "checking": False, "last_attempt": None, "last_success": None,
-            "last_error": "", "release_url": "", "published_at": "",
-            "msg": "更新检查未运行",
-        })
+            payload = UPDATES.status()
+        else:
+            payload = {
+                "current_version": running_version(),
+                "latest_version": None, "update_available": False,
+                "enabled": wb_settings.update_check_enabled(ACCOUNTS_DIR),
+                "checking": False, "last_attempt": None, "last_success": None,
+                "last_error": "", "release_url": "", "latest_tag": "",
+                "published_at": "",
+                "msg": "更新检查未运行",
+            }
+        payload.update(wb_update_request.status())
+        return self._json(200, payload)
 
     def _get_logs(self, query):
         if not self._authorized():
@@ -18519,8 +18524,28 @@ class Handler(BaseHTTPRequestHandler):
         if not UPDATES:
             return self._json(200, {"ok": False, "msg": "更新检查未运行"})
         status = UPDATES.check(manual=True)
+        status.update(wb_update_request.status())
         status["ok"] = True
         return self._json(200, status)
+
+    def _route_update_install(self):
+        """Queue the checked stable release for the root-owned systemd worker."""
+        if not UPDATES:
+            return self._json(503, {"ok": False, "msg": "更新检查未运行"})
+        status = UPDATES.status()
+        if status.get("last_error"):
+            return self._json(409, {"ok": False, "msg": "请先成功检查更新"})
+        if not status.get("update_available"):
+            return self._json(409, {"ok": False, "msg": "当前没有可安装的新版本"})
+        if not status.get("latest_tag") or not status.get("release_url"):
+            return self._json(409, {"ok": False, "msg": "请先点击立即检查更新"})
+        try:
+            queued = wb_update_request.request_install(
+                status["latest_tag"], status["current_version"])
+        except wb_update_request.UpdateRequestError as exc:
+            return self._json(409, {"ok": False, "msg": str(exc)})
+        queued["ok"] = True
+        return self._json(202, queued)
 
     def _route_scheduler_trigger(self, payload):
         if SCHEDULER:
@@ -19420,6 +19445,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")
             return self._route_update_check()
+        if path == "/updates/install":
+            # The panel session can only enqueue a version tag. The separate
+            # root-owned updater rechecks the fixed repository and release
+            # assets before it writes any managed application file.
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            return self._route_update_install()
         if path in ("/pricing/refresh", "/pricing/mapping"):
             # Panel-only management writes (the pricing table is the panel's
             # own view of the estimate). Registered here because the generic

@@ -252,6 +252,15 @@ class PanelOnlyPostTests(BoundaryCase):
         self.assertEqual(self.updates.manual_checks, 1,
                          "only the session may spend the check")
 
+    def test_manual_update_install_requires_a_panel_session(self):
+        self.assert_refused("/updates/install", self.key_only(), command="POST")
+        self.assert_refused("/updates/install", {"X-Panel-Token": "not-a-session"},
+                            command="POST")
+        status, payload, _raw = self.dispatch(
+            "/updates/install", headers=self.session(), command="POST")
+        self.assertEqual(status, 409)
+        self.assertEqual(payload.get("msg"), "当前没有可安装的新版本")
+
 
 class RemoteAgentsTests(BoundaryCase):
     """一键配置只在「浏览器和网关同一台机器」时可用（issue #246）。
