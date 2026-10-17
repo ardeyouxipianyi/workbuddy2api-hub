@@ -1216,7 +1216,11 @@ class Account(object):
             return self.refresh()
         return self.refresh()
 
-    def headers(self, purpose="chat"):
+    def is_cli_identity(self):
+        """出站身份是不是官方 CodeBuddy CLI（决定 chat 的 wire 形态）。"""
+        return self.product == wb_identity.PRODUCT_CLI
+
+    def headers(self, purpose="chat", session_key=None, turn_request_id=None):
         """组出这一轮的出站标头。
 
         chat 用途走 wb_identity（CLI 头 / WorkBuddy 头，可切换）；
@@ -1225,6 +1229,15 @@ class Account(object):
         chat 标头按 5.8.4 抓包对齐：官方对话请求不带 X-Machine-ID /
         X-Session-ID（那两个只用于反馈上报），所以这里也不再发——之前发的
         是每个账号恒定的派生值，反而是一处「网关特征」。
+
+        CLI 身份另按官方 CodeBuddy CLI 2.168.2 对齐：它的 chat 请求由 OpenAI
+        Node SDK 发出，没有 Origin / Referer / X-CodeBuddy-Request /
+        Accept-Language 这些浏览器头，Accept 就是 application/json；CLI 包里
+        也没有设备 token 逻辑，所以 CLI 身份不发 X-Device-Token。
+
+        session_key / turn_request_id 只影响 CLI 身份（官方 CLI 语义：会话 id
+        按会话稳定、X-Conversation-Request-ID 一轮 user send 内复用），由
+        open_upstream 传进来；桌面端 / VSCode 分支不吃这两个参数，行为不变。
 
         billing 标头仍带 X-Machine-ID / X-Session-ID，但两个都必须按账号派生：
         网关是一个进程冒充几十台设备，一旦取进程级的值，全部账号就会共用同一个
@@ -1257,7 +1270,8 @@ class Account(object):
                 headers["X-No-Enterprise-Id"] = "1"
             if self.realm == "cn":
                 headers["X-Product"] = "SaaS"
-            device_token = self._device_token()
+            # 官方 CLI 全包没有设备 token 逻辑，CLI 身份一律不发。
+            device_token = self._device_token() if not self.is_cli_identity() else ""
             if device_token:
                 headers["X-Device-Token"] = device_token
             return headers
@@ -1269,18 +1283,29 @@ class Account(object):
             token=self.access_token,
             enterprise_id=self.enterprise_id,
             tenant_id=self.enterprise_id,
+            session_key=session_key,
+            turn_request_id=turn_request_id,
         )
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-            "Origin": cfg["origin"],
-            "Referer": cfg["origin"] + "/",
-            "X-CodeBuddy-Request": "1",
-            "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
-        }
+        if self.is_cli_identity():
+            # 官方 CLI 的 chat 请求由 OpenAI Node SDK 发出：浏览器头一个都没有，
+            # Accept 就是 application/json（见 headers() 的 docstring）。
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        else:
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": cfg["origin"],
+                "Referer": cfg["origin"] + "/",
+                "X-CodeBuddy-Request": "1",
+                "Accept-Language": "en-US" if self.realm == "intl" else "zh-CN",
+            }
         headers.update(identity)
-        device_token = self._device_token()
+        device_token = self._device_token() if not self.is_cli_identity() else ""
         if device_token:
             headers["X-Device-Token"] = device_token
         return headers
@@ -1621,7 +1646,17 @@ class Account(object):
             "reasoning_effort": "none",
         }
         req_body = wb_proxy.build_upstream_body(body)
+        # 官方 CLI 的 chat 请求体：gzip + cache_retention（紧凑 JSON 由传输层统一
+        # 处理，本 PR 不重复实现）；桌面端 / VSCode 维持原请求体。
+        cli_identity = self.is_cli_identity()
+        if cli_identity:
+            req_body = {k: v for k, v in req_body.items()
+                        if k not in wb_identity.CLI_BODY_DROP_FIELDS}
+            req_body["cache_retention"] = wb_identity.CLI_CACHE_RETENTION
+            headers["Content-Encoding"] = wb_identity.REQUEST_CONTENT_ENCODING
         data = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
+        if cli_identity:
+            data = wb_identity.gzip_body(data)
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urlopen(req, timeout=20, proxy=self.proxy) as resp:

@@ -11,11 +11,14 @@ account has been restricted due to unusual activity","zh":"账号存在异常行
   1. 风控 403 与内容审核 403 分流：前者冷却账号 2 小时并轮到下一个账号；
   2. 内容审核 403 的原路径不变（降级重试、透传，不给账号上长冷却）；
   3. 一切 >=500 的未知状态码（实测 550）也按瞬时故障轮转；
-  4. 池里只有这一个账号时，仍把限制原因交给客户端（没有别的可试）。
+  4. 池里只有这一个账号时，仍把限制原因交给客户端（没有别的可试）；
+  5. 换号重试时 CLI 身份的 X-Conversation-Request-ID 整轮复用、message id 每
+     请求新生成，桌面端身份保持原样（官方 CLI 2.168.2 对齐的回归钉）。
 
 Run with the current interpreter (python tests/run_all.py restricted).
 """
 import io
+import gzip
 import json
 import os
 import sys
@@ -60,6 +63,39 @@ class FakeResp(object):
 def make_account(uid):
     return wb_accounts.Account({"uid": uid, "accessToken": "t-" + uid,
                                 "realm": "intl"})
+
+
+def make_cli_account(uid):
+    """官方 CLI 身份的账号（product=cli）。"""
+    return wb_accounts.Account({"uid": uid, "accessToken": "t-" + uid,
+                                "realm": "intl", "product": "cli"})
+
+
+def request_headers(req):
+    """urllib 会把头名 capitalize，比较时统一小写。"""
+    return {str(k).lower(): v for k, v in req.headers.items()}
+
+
+def run_switch(accounts, script):
+    """一次 open_upstream：第一个账号 403 11140，第二个账号正常应答。
+
+    返回 (upstream, result, raised)；upstream.calls 是两次出站请求。
+    """
+    old_pool = P.POOL
+    P.POOL = StubPool(accounts)
+    upstream = ScriptedUpstream(script)
+    real_urlopen = wb_accounts.urlopen
+    wb_accounts.urlopen = upstream
+    try:
+        result = P.open_upstream(dict(PAYLOAD), target_realm="intl")
+        raised = None
+    except Exception as exc:
+        result = None
+        raised = exc
+    finally:
+        wb_accounts.urlopen = real_urlopen
+        P.POOL = old_pool
+    return upstream, result, raised
 
 
 class StubPool(object):
@@ -144,6 +180,7 @@ class Restricted403DispatchTests(unittest.TestCase):
     def _run(self, accounts, script):
         P.POOL = StubPool(accounts)
         upstream = ScriptedUpstream(script)
+        self.upstream = upstream
         real_urlopen = wb_accounts.urlopen
         wb_accounts.urlopen = upstream
         try:
@@ -202,6 +239,77 @@ class Restricted403DispatchTests(unittest.TestCase):
         self.assertIsNone(raised)
         self.assertEqual(resp[1].uid, "f2")
         self.assertEqual(flaky.fails, 1)
+
+
+class IdentityOnRetryTests(unittest.TestCase):
+    """换号重试时的出站身份语义（官方 CLI 2.168.2 对齐）。"""
+
+    def test_cli_turn_request_id_survives_the_account_switch(self):
+        upstream, resp, raised = run_switch(
+            [make_cli_account("r1"), make_cli_account("h1")],
+            [http_error(403, RESTRICT_BODY), FakeResp()])
+        self.assertIsNone(raised)
+        self.assertEqual(resp[1].uid, "h1")
+        self.assertEqual(len(upstream.calls), 2)
+        first = request_headers(upstream.calls[0])
+        second = request_headers(upstream.calls[1])
+        # 一轮 user send 的 request id 在整轮（含换号重试）复用同一个值。
+        self.assertTrue(first["x-conversation-request-id"])
+        self.assertEqual(first["x-conversation-request-id"],
+                         second["x-conversation-request-id"])
+        # 主对话不发 X-Root-Request-ID（官方只在 meta.rootRequestId 存在时发）。
+        self.assertNotIn("x-root-request-id", first)
+        # message id 每请求新生成；会话 id 按账号隔离（换号就换会话）。
+        self.assertEqual(first["x-request-id"], first["x-conversation-message-id"])
+        self.assertNotEqual(first["x-request-id"], second["x-request-id"])
+        self.assertNotEqual(first["x-conversation-id"],
+                            second["x-conversation-id"])
+        # 官方 CLI 2.168.2 的身份头（含 OpenAI Node SDK 6.25.0 的指纹头）。
+        self.assertEqual(first["user-agent"],
+                         "CLI/2.168.2 CodeBuddy/2.168.2 OpenAI/JS 6.25.0")
+        self.assertEqual(first["x-ide-version"], "2.168.2")
+        self.assertEqual(first["x-agent-runtime"], "other")
+        self.assertNotIn("x-private-data", first)
+        self.assertEqual(first["x-stainless-lang"], "js")
+        self.assertEqual(first["x-stainless-package-version"], "6.25.0")
+        self.assertEqual(first["x-stainless-runtime-version"], "v22.21.1")
+        self.assertTrue(first["x-b3-parentspanid"])
+        # 官方 CLI 的 chat 没有浏览器头，Accept 就是 application/json。
+        self.assertEqual(first["accept"], "application/json")
+        for gone in ("origin", "referer", "x-codebuddy-request",
+                     "accept-language", "x-device-token"):
+            self.assertNotIn(gone, first)
+        # 请求体：gzip + cache_retention=long，不带 metadata。
+        # （紧凑 JSON 由 transport PR #429 统一钉，本 PR 不重复实现。）
+        self.assertEqual(first["content-encoding"], "gzip")
+        self.assertEqual(upstream.calls[0].data[:2], b"\x1f\x8b")
+        body = json.loads(gzip.decompress(upstream.calls[0].data).decode("utf-8"))
+        self.assertEqual(body.get("cache_retention"), "long")
+        self.assertNotIn("metadata", body)
+        self.assertNotIn("conversation_id", body)
+
+    def test_desktop_identity_is_unchanged_by_the_cli_alignment(self):
+        upstream, resp, raised = run_switch(
+            [make_account("d1"), make_account("d2")],
+            [http_error(403, RESTRICT_BODY), FakeResp()])
+        self.assertIsNone(raised)
+        self.assertEqual(resp[1].uid, "d2")
+        first = request_headers(upstream.calls[0])
+        second = request_headers(upstream.calls[1])
+        # 桌面端仍是每请求现生成会话 request id（本 PR 不改它的行为）。
+        self.assertNotEqual(first["x-conversation-request-id"],
+                            second["x-conversation-request-id"])
+        self.assertNotIn("x-b3-parentspanid", first)
+        self.assertEqual(first["user-agent"],
+                         "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0")
+        # 桌面端的请求体与浏览器头都保持原样（不 gzip）。
+        self.assertNotIn("content-encoding", first)
+        self.assertNotEqual(upstream.calls[0].data[:2], b"\x1f\x8b")
+        self.assertEqual(first["accept"], "application/json, text/plain, */*")
+        self.assertIn("origin", first)
+        self.assertIn("referer", first)
+        self.assertIn("x-codebuddy-request", first)
+        self.assertIn("accept-language", first)
 
 
 if __name__ == "__main__":
