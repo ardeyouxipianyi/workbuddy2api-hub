@@ -417,6 +417,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 ### Unreleased
 
+- **修复限流标签在恢复时刻之后不消失**（#454）：账号撞到 6004 后用 `lastError` 画出的「HTTP 429 · code:6004」短标签，原先只有下一次成功请求才会清掉——上游给的重置时刻过了、账号重新接单、状态列已经显示「可用」，标签却还挂着，只能重启清掉；而它偏偏只在有活跃模型冷却时被隐藏，时序正好相反。现在限流类错误会带上恢复时刻（`last_error_until`），到期后由 `_throttle_snapshot()` 随手清掉；看板改成「冷却还开着才显示」，登录过期 / 风控限制 / 余额停靠 / 5xx 这类没有恢复时刻的错误照旧常显。
 - **修复 Anthropic `tool_result` 图片被拍平成文本**（#452）：`/v1/messages` 的工具结果里带图片时，base64 data URL 以前被当普通文本发给上游，按约 1 token/字符计费，一张截图就能把长上下文顶到 11115；现在含图时保留结构化 `image_url` 数组，纯文本仍折叠成字符串。实测同一张 31KB PNG 从约 3 万 input tokens 降到 665。
 - **修复函数参数 Schema 结构缺陷与工具参数反序列化失败导致上游 400 拦截**：针对客户端（如 Hermes Agent、各类 OpenAI 兼容 SDK 等）声明无参工具时发送 `"parameters": {}`（缺失顶层 `type: "object"`）触发上游 Go struct 校验拒绝报 `code 11129 invalid function call parameters` 的问题，网关层自动补齐 `type: "object"` 与 `properties: {}` 并清洗非法的 `required` 字段；同步修复历史对话消息中 `tool_calls[].function.arguments` 为字典对象导致上游反序列化失败（`code 11101`）的缺陷。
 - **自动切换出站身份支持配置允许的身份**：此前 429 自动换身分固定按 WB → VSC → CLI 轮转，无法排除某条身份（例如不想让账号落到某个身份上）。现在「设置 → 自动切换出站身份」可以勾选允许的 WB / VSC / CLI（至少一个），自动切换只在勾选的身份之间按原顺序轮转；未配置时默认三条全允许，行为与旧版一致。设置持久化在 `accounts/settings.json` 的 `auto_switch_products`，读取时会过滤未知值，保存时校验非法值返回 400。

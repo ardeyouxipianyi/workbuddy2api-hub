@@ -154,6 +154,69 @@ row = A.normalise_import_row(credential(
 check("imported lastError is reset", row["lastError"] == "", row["lastError"])
 check("imported cooldown is reset", row["cooldownUntil"] == 0.0, row["cooldownUntil"])
 
+print("[7] a rate-limit label expires with the window that produced it")
+# 6004 一类的限流错误在上游给的恢复时刻之后就不再成立：账号马上能接单，标签
+# 却会一直挂到下一次成功请求为止（生产上「状态=可用 + 过期 429 标签」并存，
+# 只能重启清掉，issue #454）。这里钉住「到期即清」，同时钉住不能误清那些
+# 没有恢复时刻的错误（登录过期 / 风控限制 / 余额停靠 / 5xx）。
+soon = A.Account(credential(uid="u-expire-model"))
+soon.note_error("HTTP 429 (model throttled)", model="deepseek-v4.1-flash",
+                until=time.time() + 0.15,
+                detail='{"code":6004,"msg":"usage limit","requestId":"req-1"}')
+state = soon.public()
+check("the model-scoped 429 is visible while its window is open",
+      state["lastError"] == "HTTP 429 (model throttled)", state["lastError"])
+check("the upstream body is kept for the tooltip",
+      "6004" in (state["lastErrorDetail"] or ""), state["lastErrorDetail"])
+check("the account itself is not in an account-level cooldown",
+      state["inCooldown"] is False, state["inCooldown"])
+check("the model window is listed while it lasts", len(state["modelCooldowns"]) == 1,
+      state["modelCooldowns"])
+time.sleep(1.2)  # note_error() floors a model window at 1s
+state = soon.public()
+check("the label is gone once the window has passed", state["lastError"] == "",
+      state["lastError"])
+check("its upstream body is gone too", state["lastErrorDetail"] is None,
+      state["lastErrorDetail"])
+check("the model window is gone as well", state["modelCooldowns"] == [],
+      state["modelCooldowns"])
+
+account_level = A.Account(credential(uid="u-expire-account"))
+account_level.note_error("HTTP 429 (model throttled)", cooldown=0.15)
+time.sleep(0.3)
+check("an account-level 429 expires the same way",
+      account_level.public()["lastError"] == "", account_level.public()["lastError"])
+
+fresh = A.Account(credential(uid="u-expire-fresh"))
+fresh.note_error("HTTP 429 (model throttled)", cooldown=600)
+check("a live 429 is still shown", fresh.public()["lastError"] ==
+      "HTTP 429 (model throttled)", fresh.public()["lastError"])
+
+auth = A.Account(credential(uid="u-expire-auth"))
+auth._set_last_error("登录已过期 (HTTP 401)，请重新登录")
+time.sleep(0.3)
+check("an auth error has no deadline and stays", auth.public()["lastError"] != "",
+      auth.public()["lastError"])
+
+restricted = A.Account(credential(uid="u-expire-restricted"))
+restricted.note_restricted('{"code":11140,"msg":"request illegal"}')
+time.sleep(0.3)
+check("a 403 restriction stays until upstream lifts it",
+      restricted.public()["lastError"] == "HTTP 403 (account restricted)",
+      restricted.public()["lastError"])
+
+balance = A.Account(credential(uid="u-expire-balance"))
+balance.note_balance_cooled("402 insufficient credits")
+time.sleep(0.3)
+check("a balance park stays until credits come back",
+      balance.public()["lastError"] != "", balance.public()["lastError"])
+
+transport = A.Account(credential(uid="u-expire-5xx"))
+transport.note_failure("HTTP 502 upstream reset")
+check("a transport error has no deadline either",
+      transport.public()["lastError"] == "HTTP 502 upstream reset",
+      transport.public()["lastError"])
+
 print()
 print("passed %d, failed %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

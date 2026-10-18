@@ -7306,7 +7306,16 @@ function accountRow(a){
   // 拉宽、也读不出重点。
   const errFull = a.lastErrorDetail || a.lastError || '';
   let err = '';
-  if (a.lastError && !(pills && a.lastError === 'HTTP 429 (model throttled)')) {
+  // 限流类错误只在限流还开着时成立：6004 的恢复时刻一过账号就能接单，这条
+  // 标签原先却要等到下一次成功请求才消失，于是「状态=可用 + 过期 429 标签」
+  // 同屏并存，只能重启清掉（issue #454）。现在模型窗口还在时照旧由 pill 表达
+  // （不重复画一遍文案），窗口/冷却都结束以后就不再画；登录过期 / 风控 / 额度
+  // 这类与冷却无关的错误照旧常显。
+  const cooldownActive = !!a.inCooldown
+    || (Array.isArray(a.modelCooldowns) && a.modelCooldowns.length > 0);
+  const throttleLike = /HTTP\s*429/.test(String(a.lastError || ''))
+    || /"code"\s*:\s*(6004|14018)/.test(String(errFull));
+  if (a.lastError && !(throttleLike && (pills || !cooldownActive))) {
     const httpM = String(a.lastError).match(/HTTP\s+(\d{3})/);
     const codeM = String(errFull).match(/"code"\s*:\s*(\d+)/);
     const label = httpM

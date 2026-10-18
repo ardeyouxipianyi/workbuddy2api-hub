@@ -597,6 +597,14 @@ class Account(object):
         # in its own runtime-only field so the visible label keeps the truncation
         # it has always had; never persisted, never exported.
         self.last_error_detail = ""
+        # When the throttle behind `last_error` is due to expire (epoch seconds,
+        # 0 = no deadline attached). Only the rate-limit paths set it: they have a
+        # real recovery time (the 429 cooldown / the model window), and once that
+        # time has passed the label is stale - the panel would otherwise keep
+        # showing "HTTP 429 · code:6004" next to a green 可用 badge until some
+        # later request happens to succeed and clear it. Auth / restriction /
+        # balance errors have no such deadline and stay until they are resolved.
+        self.last_error_until = 0.0
         self.cooldown_until = 0.0
         # 运行时标记：上游返回 401 或 token 为空时置为 True，提示需重新登录
         self.token_expired = bool(not self.access_token)
@@ -781,6 +789,17 @@ class Account(object):
             restricted = self.restricted_until
             active = [(model, until) for model, until in self.model_cooldowns.items()
                       if until > now]
+            # 限流类错误的标签只在限流窗口内成立：恢复时刻一过（该模型也已不在
+            # 冷却表里）账号立刻就能接单，标签却会一直挂到下一次成功请求为止——
+            # 生产上看到的就是「状态=可用 + 过期 429 标签」并存，只能重启清掉。
+            # 这里按记录下来的到期时刻随手清掉，面板读到的永远是当前还有效的错误。
+            if (error and self.last_error_until and now >= self.last_error_until
+                    and not active and deadline <= now):
+                self.last_error = ""
+                self.last_error_detail = ""
+                self.last_error_until = 0.0
+                error = ""
+                detail = ""
         active.sort(key=lambda pair: (pair[1], pair[0]))
         models = []
         for model, until in active:
@@ -2374,6 +2393,8 @@ class Account(object):
         with self._throttle_lock:
             self.last_error = str(message)[:200]
             self.last_error_detail = ""
+            # 刷新/登录类错误没有恢复时刻，不许被上一轮的限流窗口顺手清掉。
+            self.last_error_until = 0.0
 
     def note_error(self, message, cooldown=60, single_account=False, model=None, until=None,
                    detail=None):
@@ -2393,9 +2414,12 @@ class Account(object):
                 # 起始时刻：面板要如实说「限流时刻 + 恢复时间」，而恢复时刻减不出
                 # 起始时刻（wait 来自 60s→10m 的阶梯，不落库）。记这一次就够了。
                 self.model_cooldowns_at[model] = now
+                # 标签与这个模型的窗口同寿（见 _throttle_snapshot 的过期清理）。
+                self.last_error_until = now + wait
                 return
             actual_cooldown = 3 if single_account else cooldown
             self.cooldown_until = time.time() + actual_cooldown
+            self.last_error_until = self.cooldown_until
 
     def note_restricted(self, detail="", cooldown=None):
         """上游账号级风控限制（403 / code 11140）：按小时冷却，且不随重启消失。
@@ -2418,6 +2442,8 @@ class Account(object):
         with self._throttle_lock:
             self.last_error = "HTTP 403 (account restricted)"
             self.last_error_detail = str(detail)[:2000] if detail else ""
+            # 风控限制靠 restricted_until 解除，不是限流窗口：不挂过期时刻。
+            self.last_error_until = 0.0
             # 第一次命中才起算：反复探测/重试不该把 2 小时越推越长。
             if self.restricted_until <= now:
                 self.restricted_until = now + max(1.0, wait)
@@ -2435,6 +2461,9 @@ class Account(object):
         until = next_local_4am()
         with self._throttle_lock:
             self.last_error = str(message)[:200]
+            # 余额停靠到 04:00，由 revive_balance_cooldown() 提前解除：不挂
+            # 限流那套过期时刻，免得跟限流窗口混在一起被提前清掉。
+            self.last_error_until = 0.0
             self.balance_until = max(self.balance_until, until)
         return until
 
@@ -2457,6 +2486,7 @@ class Account(object):
             self.balance_until = 0.0
             self.last_error = ""
             self.last_error_detail = ""
+            self.last_error_until = 0.0
         return True
 
     def note_soft_rate(self, message):
@@ -2467,6 +2497,7 @@ class Account(object):
             wait = soft_backoff(self.soft_streak)
             self.last_error = str(message)[:200]
             self.cooldown_until = max(self.cooldown_until, time.time() + wait)
+            self.last_error_until = self.cooldown_until
         return wait
 
     def _decay_soft_streak(self):
@@ -2502,6 +2533,8 @@ class Account(object):
         """5xx / transport failure: feed the breaker counter."""
         with self._throttle_lock:
             self.last_error = str(message)[:200]
+            # 传输/5xx 失败没有上游给的恢复时刻：保留到下一次成功或清错为止。
+            self.last_error_until = 0.0
             self._decay_strikes()
             self.fails += 1
             if self.fails >= BREAKER_THRESHOLD:
@@ -2524,6 +2557,7 @@ class Account(object):
         """Unknown error: degrade counter plus the shared breaker counter."""
         with self._throttle_lock:
             self.last_error = str(message)[:200]
+            self.last_error_until = 0.0
             self._decay_strikes()
             self.degrade_count += 1
             self.fails += 1
@@ -2559,6 +2593,7 @@ class Account(object):
             self.restricted_until = 0.0
             self.last_error = ""
             self.last_error_detail = ""
+            self.last_error_until = 0.0
             self.cooldown_until = 0.0
 
     def throttle_wait(self, model=None):
@@ -2600,6 +2635,7 @@ class Account(object):
                     or self.last_error_detail or self.balance_until):
                 self.last_error = ""
                 self.last_error_detail = ""
+                self.last_error_until = 0.0
                 self.cooldown_until = 0
                 self.balance_until = 0.0
             # 上游账号级风控限制（restricted_until）故意不在这里清：它不是本机

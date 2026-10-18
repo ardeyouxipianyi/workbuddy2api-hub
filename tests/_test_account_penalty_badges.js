@@ -92,4 +92,38 @@ check('正常账号不出现', !rows.some(r => r.who.includes('正常号')), JSO
 check('熔断与降权都只描述当前视图的账号',
   rows.every(r => r.realm === '国际版'), JSON.stringify(rows.map(r => r.realm)));
 
+/* ---- 4. 429 短标签只在限流还开着时显示 -------------------------------- */
+// 6004 的恢复时刻一过账号就能接单，标签却还挂着（只能重启清掉）。模型窗口还在
+// 时由 pill 表达（不重复画一遍文案）；窗口/冷却都结束以后不再画。issue #454。
+const stale429 = row({
+  lastError: 'HTTP 429 (model throttled)',
+  lastErrorDetail: '{"code":6004,"msg":"usage exceeds frequency limit","requestId":"req-1"}',
+});
+check('窗口已过的 429 不应再画标签', !stale429.includes('acct-err'), stale429);
+check('也不应出现 HTTP 429 文本', !stale429.includes('HTTP 429'), stale429);
+
+const live429 = row({
+  lastError: 'HTTP 429 (model throttled)',
+  lastErrorDetail: '{"code":6004,"msg":"usage exceeds frequency limit","requestId":"req-1"}',
+  modelCooldowns: [{model: 'deepseek-v4.1-flash', expiresAt: NOW + 600}],
+});
+check('模型窗口还开着时由 pill 表达、不再重复画 429 文案',
+  !live429.includes('HTTP 429'), live429);
+check('模型窗口本身照旧画出来', live429.includes('deepseek-v4.1-flash'), live429);
+
+const accountLevel429 = row({
+  lastError: 'HTTP 429 (model throttled)',
+  lastErrorDetail: '{"code":6004,"msg":"usage exceeds frequency limit","requestId":"req-1"}',
+  inCooldown: true, cooldownFor: 120,
+});
+check('账号级冷却还开着时 429 标签要在', accountLevel429.includes('HTTP 429 · code:6004'),
+  accountLevel429);
+check('标签要带可悬停的完整响应', accountLevel429.includes('data-tip='), accountLevel429);
+
+const authErr = row({lastError: '登录已过期 (HTTP 401)，请重新登录'});
+check('与冷却无关的错误照旧常显', authErr.includes('HTTP 401'), authErr);
+
+const plainErr = row({lastError: '登录已过期，请重新登录'});
+check('没有 HTTP 状态码的错误也照旧常显', plainErr.includes('登录已过期'), plainErr);
+
 console.log('account penalty badge assertions passed');
