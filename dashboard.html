@@ -14256,8 +14256,10 @@ const state = {
 let prevSummary = null; /* B 版：上一等长周期汇总（环比） */
 
 /* ---------- B 版：环比 / sparkline / 环形卡 / 活动流 ---------- */
-function prevRange(){
-  const now = Math.floor(Date.now() / 1000);
+function prevRange(untilAt){
+  // 环比窗口的上界同样来自调用方：轮询时与 rangeParams 共用同一个量化时刻，
+  // 否则 /usage/timeseries?…&until=… 这一条照样每轮都换 URL。
+  const now = (untilAt === undefined || untilAt === null) ? Math.floor(Date.now() / 1000) : untilAt;
   if (state.range === 'today'){
     const d = new Date(); d.setHours(0,0,0,0);
     const startToday = Math.floor(d.getTime() / 1000);
@@ -14282,8 +14284,8 @@ function prevRange(){
   if (state.range === 'd30') return [now - 60 * 86400, now - 30 * 86400];
   return null;
 }
-async function loadPrevSummary(){
-  const pr = prevRange();
+async function loadPrevSummary(untilAt){
+  const pr = prevRange(untilAt);
   if (!pr) return null;
   try{
     const p = await api(`/usage/timeseries?realm=all&range=custom&since=${pr[0]}&until=${pr[1]}`);
@@ -14363,8 +14365,19 @@ async function loadRecent(){
   }catch(e){ console.error('recent failed', e); }
 }
 
-function rangeParams(range){
-  const now = Math.floor(Date.now() / 1000);
+/* 轮询类请求的窗口上界量化：服务端 _json_cached 只在「调用前后的缓存条目一模一样」
+ * 时才发 ETag（wb_proxy.py:16872），而缓存键里含 until。until 每轮都取 now()，
+ * 缓存键每轮都是新的 → before 永远是 None → 304 一次都命不中外加整份重传。
+ * 量化到服务端聚合缓存自己的 TTL（wb_proxy.py:1778 _STATS_TTL = 15s）：同一个 15 秒
+ * 桶内 URL 逐字相同，第 2、3 轮直接吃 304；代价是最多 15 秒的新鲜度延迟。
+ * 只有轮询走这条（loadRange(true)），用户手点区间仍用精确 now。 */
+const POLL_UNTIL_BUCKET = 15;
+function pollUntil(){
+  return Math.floor(Math.floor(Date.now() / 1000) / POLL_UNTIL_BUCKET) * POLL_UNTIL_BUCKET;
+}
+function rangeParams(range, untilAt){
+  // since 必须和 until 用同一个时间点推导，否则 since 仍在逐秒变化，URL 照样每轮都新。
+  const now = (untilAt === undefined || untilAt === null) ? Math.floor(Date.now() / 1000) : untilAt;
   if (range === 'd3')  return `range=custom&since=${now - 3*86400}&until=${now}`;
   if (range === 'd30') return `range=custom&since=${now - 30*86400}&until=${now}`;
   if (range === 'all') return `range=custom&since=${now - 365*86400}&until=${now}`;
@@ -14388,19 +14401,27 @@ if(typeof MutationObserver !== 'undefined'){
 /* ============================================================
    加载与渲染
    ============================================================ */
-async function loadRange(){
+/* 区间/轮询的代次。与 refreshInner 里 REFRESH_GEN 同一套理由：取数期间又发起了更新
+ * 的一轮（刚切了区间、或轮询撞上点击），这批结果已经过期，直接丢掉——否则慢的那一轮
+ * 晚到，会把上一个区间的数字画到新区间的标题下面（实测有 1.2~1.8 秒的错位窗口）。 */
+let WBA_GEN = 0;
+async function loadRange(polled){
+  const gen = ++WBA_GEN;
+  const untilAt = polled ? pollUntil() : null;
   $('kpis').style.opacity = .55;
-  const rp = rangeParams(state.range);
+  const rp = rangeParams(state.range, untilAt);
   try{
     const [analytics, series, prev] = await Promise.all([
       api(`/usage/analytics?realm=all&${rp}`),
       api(`/usage/timeseries?realm=all&${rp}`),
-      loadPrevSummary(),
+      loadPrevSummary(untilAt),
     ]);
+    if (gen !== WBA_GEN) return;
     state.analytics = analytics;
     state.series = series;
     prevSummary = prev;
   } catch(e){
+    if (gen !== WBA_GEN) return;
     console.error('load range failed', e);
   }
   $('kpis').style.opacity = 1;
@@ -14997,6 +15018,9 @@ $('rangeSeg').addEventListener('click', ev => {
   const btn = ev.target.closest('button'); if (!btn) return;
   [...$('rangeSeg').children].forEach(b => b.classList.toggle('on', b === btn));
   state.range = btn.dataset.range;
+  // 新区间的数字还没到：先把页头的旧读数清成占位，别让「全部」标题下面继续挂着本月的
+  // 数字（那一段是页头最长的一行，误读代价最大）。取回后 renderKpis() 会重新写满。
+  $('pageSub').textContent = '—';
   loadRange();
 });
 $('metricSeg').addEventListener('click', ev => {
@@ -15093,7 +15117,7 @@ function syncOldRange(){
 let wbaStarted = false;
 function wbaTick(){
   if (!wbaStarted){ wbaStarted = true; loadStatic(); }
-  loadRange();
+  loadRange(true);   // 轮询：窗口上界按 15 秒桶量化，连续两轮同桶才有可能吃 304
 }
 window.loadAnalytics = wbaTick;            /* 面板 5s 轮询 / 切页 / 回前台统一入口 */
 window.loadAnalyticsMatrix = function(){}; /* 旧性能矩阵已并入本页（性能分位折叠区） */
