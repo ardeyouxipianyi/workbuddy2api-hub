@@ -64,6 +64,7 @@ import wb_activity
 import wb_atrest
 import wb_catalog
 import wb_egress
+import wb_entitlements
 import wb_ipintel
 import wb_logstore
 import wb_pricing
@@ -843,6 +844,13 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     # reserve_credits keeps working between refreshes (#442).
     if acc and fields.get("credit"):
         acc.consume_credit(fields["credit"])
+    # 成功一次就解除「这个模型跑不了」的隐藏：账号升级 / 换账号后自动恢复，
+    # 不需要重启或重新探测。先查缓存里的黑名单，绝大多数请求不会碰磁盘。
+    if acc and model and model in wb_entitlements.blocked(ACCOUNTS_DIR, acc.realm):
+        try:
+            wb_entitlements.note_allowed(ACCOUNTS_DIR, acc.realm, model, log=log)
+        except Exception:
+            pass
     # Always written, even when the caller presented no key. The empty value is
     # what separates "ran without a key" from rows written before the field
     # existed; the dashboard reports those as two different buckets, and a
@@ -900,6 +908,19 @@ def _persist_usage(row, fail_label):
     except Exception as exc:
         log("%s: %s" % (fail_label, exc))
 
+def _realm_of(account_uid):
+    """账号 uid 所属的 realm；查不到就落回当前出口。
+
+    模型权益是 realm 级的事实（同一出口的账号共享同一套上游策略），
+    所以只记在 realm 上，不逐个账号展开。
+    """
+    try:
+        acc = POOL.get(account_uid) if (account_uid and POOL) else None
+    except Exception:
+        acc = None
+    return acc.realm if acc else CURRENT_REALM
+
+
 def record_error(model, status, message, elapsed_ms=None, account=None,
                  usage=None, stream=None, ttft_ms=None, gen_ms=None, fp=None,
                  outcome="failed", key=None):
@@ -922,6 +943,15 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
     key's model whitelist still land on the right row instead of vanishing
     into the unattributed bucket.
     """
+    # 上游明说「这个账号类型不能跑这个模型」时，把它记成目录层面的事实：
+    # /v1/models 从此不列它，客户端不会选中一个必然 400 的模型。只认上游
+    # 错误码，不按模型名前缀猜；一次成功调用会把它清掉（见 record_usage）。
+    if status == 400 and wb_entitlements.is_denial(message):
+        try:
+            wb_entitlements.note_denied(ACCOUNTS_DIR, _realm_of(account), model,
+                                        message, log=log)
+        except Exception:
+            pass
     fields = _extract_usage(usage) or {}
     row = {
         "at": time.time(),
@@ -17306,7 +17336,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/balance-summary":
             return self._get_v1_balance_summary()
         if path in ("/v1/models", "/models"):
-            return self._get_v1_models()
+            return self._get_v1_models(query)
         if path in ("/usage", "/v1/usage"):
             return self._get_v1_usage(query)
         if path == "/usage/recent":
@@ -17441,7 +17471,7 @@ class Handler(BaseHTTPRequestHandler):
     def _get_realm(self):
         return self._json(200, {"current": CURRENT_REALM, "options": ["intl", "cn"]})
 
-    def _get_v1_models(self):
+    def _get_v1_models(self, query=None):
         if not self._authorized():
             return
         req_realm = self._request_realm() or CURRENT_REALM
@@ -17449,6 +17479,16 @@ class Handler(BaseHTTPRequestHandler):
             entries = fetch_models(realm=req_realm)
         except Exception as exc:
             return self._error(502, str(exc))
+        # 目录回答的是「产品有哪些模型」，不是「这个出口的账号能跑哪些」。
+        # 被上游以 code 11158 拒绝过的模型在这里剔除；直接按 id 调用仍可，
+        # 成功一次即解除隐藏（record_usage 会清掉记录）。
+        # include_hidden=1 供探测脚本回看被隐藏的模型（重新探测/升级账号后核对）。
+        include_hidden = bool(query and query.get("include_hidden"))
+        if not include_hidden:
+            try:
+                entries = wb_entitlements.filter_entries(ACCOUNTS_DIR, req_realm, entries)
+            except Exception:
+                pass
         # Level 4 is best effort: warm the local cache in the background at
         # most once per cooldown; offline deployments just keep the fallback.
         try:

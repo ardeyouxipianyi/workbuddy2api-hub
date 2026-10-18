@@ -135,7 +135,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 169 个套件：126 个 Python + 43 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 170 个套件：127 个 Python + 43 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -482,7 +482,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **国际版 chat 不再发送 `X-Device-Token`**：国内版客户端带真实 Turing Shield 设备 token，国际版客户端没有这个头（Zhengyuuuui 三轮抓包与 5.7.6 / 5.8.4 二进制构造器都不含）；网关配置的是全局单值，发给国际版账号既是伪造头、又把多个账号串到同一台设备上。billing 路径与国内版 chat 维持原行为。
 - **`X-Conversation-ID` 按会话稳定**：官方客户端同一会话复用同一个会话 id（主对话是 UUIDv4），网关此前每个请求都新生成，等于把一次多轮对话拆成上千个「一次性会话」。现在 chat 路径用 `wb_identity.conversation_id_for(uid, session_key)` 按「账号 + 会话键」稳定派生，不同账号 / 会话互不相同；客户端没带会话键时保持每请求新生成。
 
-已发布版本的完整记录（v1.4.5 ~ v1.7.13，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+- **模型目录按账号实际权益过滤**（`wb_entitlements.py`）：`/v1/models` 过去直接透出桌面端全量目录，免费账号（`personal_free_user`）会看到一批必然 `400 code 11158` 的 GPT / Grok / Gemini 模型，客户端选中才报错。现在上游以该错误码拒绝过的模型会记入 `accounts/model_entitlements.json` 并从目录隐藏，任何一次成功调用即自动恢复（账号升级或换号后无需重启）；判定只认上游错误码，不按模型名前缀猜；直接按 id 调用仍然放行，保留自愈通道。新增 `scripts/probe_model_entitlements.py` 一次性对齐整张目录，`GET /v1/models?include_hidden=1` 供复查被隐藏的模型，测试套件 `tests/_test_model_entitlements.py`。
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.13，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 

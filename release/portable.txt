@@ -53,6 +53,7 @@ wb_agents.py
 wb_atrest.py
 wb_catalog.py
 wb_egress.py
+wb_entitlements.py
 wb_fingerprint.py
 wb_identity.py
 wb_ipintel.py
