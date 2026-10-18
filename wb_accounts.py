@@ -390,12 +390,11 @@ _DEVICE_TOKEN_MAX_BYTES = 1024
 
 
 def resolve_device_token(accounts_dir):
-    """X-Device-Token fallback: a literal value, or a desktop token file.
+    """已弃用：全局 device_token / device_token_file 不再用于出站请求。
 
-    Mirrors the panel's device_token.go: the desktop client writes its
-    token to a file, the gateway reads it (max 1KB, trimmed) and caches
-    the result for five minutes so the header hot path stays cheap.
-    Failures degrade to an empty token instead of breaking a request.
+    历史上这里从全局设置读一个设备 token 给所有账号用；那会把整个账号池串到
+    同一台设备上。现在设备 token 只从账号档案的 deviceToken 读取（见
+    Account._device_token）。函数保留只是为了兼容可能存在的调用方。
     """
     try:
         cfg = wb_settings.upstream_config(accounts_dir)
@@ -549,6 +548,10 @@ class Account(object):
         self.proxy_legacy = str(data.get("proxy") or "").strip()
         # Runtime-resolved value; recomputed by AccountPool.apply_proxy_slots().
         self.proxy = self.proxy_legacy
+        # 设备 token（真实 QIMEI / Turing Shield 值）：按账号存，绝不用全局单值。
+        # 全局一个值发给所有账号，等于在设备维度把整池串起来，比不发更危险。
+        self.device_token = str(data.get("deviceToken")
+                                or data.get("device_token") or "").strip()
         self.enabled = data.get("enabled", True)
         # 手动调度权重（面板按账号设置，1 = 不干预）。随凭证档持久化：这是
         # 用户的明确分派意图，不该在重启后悄悄回到默认。非法值一律回落 1，
@@ -729,6 +732,9 @@ class Account(object):
             "source": self.source,
             "proxySlot": self.proxy_slot,
             "proxy": self.proxy_legacy,
+            # 设备 token 是账号级事实（每台设备一个），随凭证档持久化；
+            # 面板 public() 不返回它，避免把设备指纹暴露到看板/API。
+            "deviceToken": self.device_token,
             "enabled": self.enabled,
             "weight": self.weight,
             "note": self.note,
@@ -1336,11 +1342,14 @@ class Account(object):
         return headers
 
     def _device_token(self):
-        """Optional X-Device-Token from the configured literal or file."""
-        directory = getattr(self, "accounts_dir", "")
-        if not directory:
-            return ""
-        return resolve_device_token(directory)
+        """这一账号自己的 X-Device-Token（没有就返回空，不回退全局值）。
+
+        设备 token 是「一台设备一个」的 QIMEI / Turing Shield 产物：把全局配置
+        的同一个值发给多个账号，等于在设备维度把它们串起来，比不发更危险。
+        所以只认账号档案里的 deviceToken；旧版全局 device_token /
+        device_token_file 已弃用，不再读取。
+        """
+        return self.device_token
 
     def sync_nickname(self):
         """Manual web-console nickname refresh.

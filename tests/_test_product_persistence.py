@@ -221,5 +221,40 @@ check("no realm still advertises the stale 5.5.2",
           for r in ("intl", "cn") for k in ("chat_ua", "billing_ua")))
 
 print()
+print("[9] device tokens are per-account, never a global shared value")
+acc_a = A.Account(credential("workbuddy", uid="u-dt-a", deviceToken="tok-a"))
+acc_b = A.Account(credential("workbuddy", uid="u-dt-b", deviceToken="tok-b"))
+check("each account sends its own device token",
+      acc_a.headers(purpose="chat").get("X-Device-Token") == "tok-a"
+      and acc_b.headers(purpose="chat").get("X-Device-Token") == "tok-b",
+      (acc_a.headers(purpose="chat").get("X-Device-Token"),
+       acc_b.headers(purpose="chat").get("X-Device-Token")))
+check("billing path uses the same per-account token",
+      acc_a.headers(purpose="billing").get("X-Device-Token") == "tok-a")
+check("the account profile persists its own device token",
+      acc_a.to_dict().get("deviceToken") == "tok-a")
+no_token = A.Account(credential("workbuddy", uid="u-dt-c"))
+check("an account without a device token sends none",
+      "X-Device-Token" not in no_token.headers(purpose="chat"))
+# 旧全局配置即使存在也不能再被使用：_device_token 不再读取全局设置。
+_orig_resolve = A.resolve_device_token
+A.resolve_device_token = lambda directory: "global-token"
+try:
+    check("the deprecated global device token is ignored",
+          "X-Device-Token" not in no_token.headers(purpose="chat"))
+finally:
+    A.resolve_device_token = _orig_resolve
+# VSCode：有 token 发 token；没有 token 时本 PR 不发任何设备头
+# （#431 身份 PR 会在非企业号上补官方同款 X-Device-Token-Error 占位）。
+vs = A.Account(credential("vscode", uid="u-dt-v"))
+vs_h = vs.headers(purpose="chat")
+check("VSCode without a token sends no device header",
+      "X-Device-Token" not in vs_h
+      and "X-Device-Token-Error" not in vs_h)
+vs2 = A.Account(credential("vscode", uid="u-dt-v2", deviceToken="tok-v"))
+vs2_h = vs2.headers(purpose="chat")
+check("VSCode with a token sends it", vs2_h.get("X-Device-Token") == "tok-v")
+
+print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -104,11 +104,17 @@ class DeviceTokenTests(unittest.TestCase):
 
     def test_literal_token_is_injected_on_chat_and_billing(self):
         with tempfile.TemporaryDirectory() as directory:
-            wb_settings.set_upstream_config(directory, {"device_token": "tok-literal"})
-            account = self.make_account(directory)
-            self.assertEqual(wb_accounts.resolve_device_token(directory), "tok-literal")
-            self.assertEqual(account.headers("chat")["X-Device-Token"], "tok-literal")
-            self.assertEqual(account.headers("billing")["X-Device-Token"], "tok-literal")
+            # 设备 token 改为账号级：全局配置不再注入，账号档案里的 deviceToken 才生效。
+            wb_settings.set_upstream_config(directory, {"device_token": "tok-global"})
+            account = wb_accounts.Account(
+                {"uid": "uid-device", "accessToken": "t", "realm": "intl",
+                 "deviceToken": "tok-account"},
+                os.path.join(directory, "uid-device.json"))
+            self.assertEqual(account.headers("chat")["X-Device-Token"], "tok-account")
+            self.assertEqual(account.headers("billing")["X-Device-Token"], "tok-account")
+            global_only = self.make_account(directory)
+            self.assertNotIn("X-Device-Token", global_only.headers("chat"))
+            self.assertNotIn("X-Device-Token", global_only.headers("billing"))
 
     def test_file_token_is_read_trimmed_and_cached(self):
         with tempfile.TemporaryDirectory() as directory:
