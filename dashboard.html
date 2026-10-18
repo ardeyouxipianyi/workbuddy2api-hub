@@ -14618,11 +14618,16 @@ function drawSeries(){
   // hover
   cv.onmousemove = ev => {
     if (!seriesLayout) return;
+    // 空数据（今日还没有请求 / 新装实例）时 series.length 是 0，而下面那行的夹取是
+    // Math.max(0, Math.min(n - 1, idx))：n-1 = -1 会被 Math.max 拉回 0，于是
+    // series[0] 是 undefined，B 版气泡里的 b.at 直接抛 TypeError。没有点就收起返回。
+    if (!series.length) { tip.style.opacity = 0; return; }
     const rect = cv.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     let idx = Math.round((mx - padL) / gap - .5);
-    idx = Math.max(0, Math.min(n - 1, idx));
+    idx = Math.max(0, Math.min(series.length - 1, idx));
     const b = series[idx];
+    if (!b) return;
     tip.style.opacity = 1;
     tip.style.left = Math.min(window.innerWidth - 200, ev.clientX + 14) + 'px';
     tip.style.top = Math.max(8, ev.clientY - 46) + 'px';
