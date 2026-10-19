@@ -203,7 +203,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 - **未定价可见**：`/pricing` 列出未定价模型及分类（别名 / OpenRouter 无对应 / 剥后缀后无唯一基准）与相似候选（仅建议，不自动采用），可在「设置 → 定价刷新」为某条手填 OpenRouter id 并登记（写 `pricing-overrides.json`，不改源码，登记后立即取价）。
 - **展示位置**：数据看板「API 等价花费」卡片、各账号用量透视与模型性能表**最后一列**、网关页「估算价格」卡片、最近请求**最后一列**（悬停可看完整定价链：三档原始单价、汇率、匹配证据、策略 id 与补算标记 `*`）。
 - **人民币 / 美元**一键切换（记在浏览器本地）；快照覆盖不到的模型显示 `—`，不猜数字。
-- **响应里的花费**（设置 →「模型价格估算」下的 `api_cost_response`，默认开启）：除看板之外，`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式都算）的 `usage` 里再追加 `cost`（美元）、`cost_cny`、`cost_details`（输入 / 输出 / 缓存读 / 缓存写分项、总价、汇率、命中的定价策略 id）与 `pricing_known` 四个字段，金额与看板同一套算法（都走 `wb_pricing`），客户端不必自己维护价表。未定价的模型这四项一律 `null` 配 `pricing_known:false`——不猜、不写 0；内部取价出错时同样降级成这组 `null`，不会让本次回复失败。关掉该键后响应与加这个功能之前逐字节相同。Anthropic 流式的 `message_start` 帧里 token 尚未开始计数，那一帧的金额是 `0.0`（`pricing_known` 仍为 `true`）——本次请求的最终金额请以最后一个 `message_delta` 的 `usage` 为准。
+- **响应里的花费**（设置 →「模型价格估算」下的 `api_cost_response`，默认开启）：除看板之外，`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式都算）的 `usage` 里再追加 `cost`（美元）、`cost_cny`、`cost_details`（输入 / 输出 / 缓存读 / 缓存写分项、总价、汇率、命中的定价策略 id——直接命中出厂快照时是 `builtin`，命中一条价策略时是 12 位策略 id，可在看板悬停与 `/pricing` 里对上同一条）与 `pricing_known` 四个字段，金额与看板同一套算法（都走 `wb_pricing`），客户端不必自己维护价表。未定价的模型这四项一律 `null` 配 `pricing_known:false`——不猜、不写 0；内部取价出错时同样降级成这组 `null`，不会让本次回复失败。关掉该键后响应与加这个功能之前逐字节相同。Anthropic 流式的 `message_start` 帧里 token 尚未开始计数，那一帧的金额是 `0.0`（`pricing_known` 仍为 `true`）——本次请求的最终金额请以最后一个 `message_delta` 的 `usage` 为准。
 - **给 cc-switch 的定价导出**：`GET /pricing/cc-switch.json` 把当前价表导出成 cc-switch 认识的 `model-pricing.json`（camelCase、每百万 token 的十进制字符串），在 cc-switch「设置 → 模型定价」里导入后，它就能按同一套价给请求算出金额，请求详情不再显示「未定价」。字段含义、导入步骤与显示精度说明见 [docs/cc-switch-pricing.md](docs/cc-switch-pricing.md)。
 
 ### 7. 本地网络工具（可选，默认关闭）
