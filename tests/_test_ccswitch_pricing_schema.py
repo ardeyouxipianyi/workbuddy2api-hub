@@ -348,6 +348,8 @@ class CcSwitchPricingSchemaTests(unittest.TestCase):
         flash = self.by_id.get("deepseek-v4.1-flash")
         self.assertIsNotNone(flash, "deepseek-v4.1-flash is not exported")
         # 1000 * 0.03 / 1M + 500 * 0.5 / 1M + 200 * 0.01 / 1M
+        # 这条断言故意绑 builtin 出厂价口径：价表一改它就红，那是要的信号而不是
+        # 脆弱点 —— 改价时把上面这行算式和下面的 expected 一起更新即可。
         expected = (Decimal("0.00003") + Decimal("0.00025")
                     + Decimal("0.000002"))
         actual = (Decimal("1000") * Decimal(flash["inputCostPerMillion"])
