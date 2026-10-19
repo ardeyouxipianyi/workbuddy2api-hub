@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """反代代跑 web_search / web_fetch（开关在 wb_proxy.LOCAL_WEB_TOOLS）
 
-背景：Codex App 会宣告 web_search 这种 Responses 的伺服器端工具，但 WorkBuddy
-上游没有任何搜寻服务——v1.5.3 的 revert 已经量测过，直接把 web_search /
-web_search_preview / web_fetch 丢给 chat endpoint，模型的回答跟完全不给工具
-一样（零个 tool call）。所以没有现成的执行器可以转接，只能由反代自己跑。
+背景：Codex App 会宣告 web_search 这种 Responses 的伺服器端工具。WorkBuddy
+现已提供官方联网搜索端点；生产路径由 wb_proxy 注入搜索 runner 执行，web_fetch
+仍由本模块在本地抓取。直接把服务端工具声明丢给 chat endpoint 依旧没有执行器，
+因此仍需要换成本地可执行的同名 function。
+
+没有 runner 时保留本地多引擎 fallback，供离线单测与旧调用兼容；正式网关路径
+不会走 fallback。
 
 v1.5.0 ~ 1.5.2 做过同一件事，被 revert（issue #43）。三个缺陷都在这里修掉：
 
@@ -828,7 +831,7 @@ def web_search_tool_def():
                 },
                 "numResults": {
                     "type": "number",
-                    "description": "How many results to return (1-10, default 5).",
+                    "description": "How many results to return (1-10, default 10).",
                 },
             },
             "required": ["query"],
@@ -971,19 +974,101 @@ MAX_WEB_ROUNDS = max_rounds()
 # 对外动作：search / fetch（execute 永不抛例外，永远回一句能喂回模型的字串）
 # ---------------------------------------------------------------------------
 
-def search(query, num_results=5):
-    """多引擎搜寻；模型只会看到成功的结果或一句明确的失败。"""
+def clamp_web_result_count(value):
+    """把调用方给的条数收敛到上游接受的 1-10；缺省返回上限 10。"""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = 10
+    if count <= 0:
+        count = 10
+    return max(1, min(MAX_RESULTS, count))
+
+
+def parse_workbuddy_search_payload(payload, query):
+    """解析官方联网搜索的扁平响应。
+
+    成功响应没有统一的 `{code,msg,data}` 信封，结果字段与 code/msg 同级；
+    个别网关版本会补一层 data，这里两种形态都接受，避免发布切换期失败。
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("official search returned a non-object response")
+    body = payload
+    if not isinstance(body.get("results"), list) and isinstance(body.get("data"), dict):
+        body = body["data"]
+    try:
+        code = int(payload.get("code") or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if code:
+        msg = str(payload.get("msg") or payload.get("message") or "").strip()
+        raise RuntimeError("upstream code=%s%s" %
+                           (code, (": " + msg[:240]) if msg else ""))
+    rows = body.get("results")
+    if not isinstance(rows, list):
+        rows = []
+    results = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("url") or "").strip()
+        if not url:
+            continue
+        results.append({
+            "title": str(row.get("title") or url).strip() or url,
+            "url": url,
+            "snippet": str(row.get("snippet") or row.get("description") or "").strip(),
+        })
+    try:
+        total = int(body.get("total_results") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return {
+        "query": str(body.get("query") or query).strip() or query,
+        "results": results,
+        "total_results": total or len(results),
+        "provider": str(body.get("provider") or "").strip(),
+        "response_time_ms": body.get("response_time_ms"),
+    }
+
+
+def search(query, num_results=10, runner=None):
+    """执行 web_search；runner 由 wb_proxy 按请求注入。
+
+    runner(query, count) 返回官方搜索接口解析后的 JSON。没有 runner 时走旧版
+    本地多引擎 fallback，保持离线测试和直接调用兼容。
+    """
     query = str(query or "").strip()
     if len(query) < 2:
         return ('Error: web_search needs a query of at least 2 characters; '
                 'got %r. Pass it as {"query": "..."}.' % query)
-    try:
-        n = int(num_results)
-    except (TypeError, ValueError):
-        n = 5
-    n = max(1, min(MAX_RESULTS, n))
+    count = clamp_web_result_count(num_results)
 
-    key = ("search", query.lower(), n)
+    if runner is not None:
+        try:
+            payload = runner(query, count)
+            parsed = parse_workbuddy_search_payload(payload, query)
+        except Exception as exc:
+            detail = str(exc).strip() or type(exc).__name__
+            _log("webtools: official search failed for %r: %s" % (query, detail),
+                 level="ERROR")
+            return ("Error: WorkBuddy official web search failed (%s). Tell the user "
+                    "that web search is temporarily unavailable and continue with "
+                    "what you already know; do not retry the same query immediately."
+                    % detail[:300])
+        results = parsed.get("results") or []
+        if not results:
+            _log("webtools: official search returned no results for %r" % query)
+            return ("No results found for: %s%sTry a broader or differently worded query."
+                    % (query, chr(10) + chr(10)))
+        _log("webtools: official search %r -> %d result(s), provider=%s, %sms"
+             % (query, len(results), parsed.get("provider") or "-",
+                parsed.get("response_time_ms")
+                if parsed.get("response_time_ms") is not None else "-"))
+        return _format_results(query, results[:count])
+
+    # 兼容旧调用：没有注入 runner 时仍可走本地多引擎。
+    key = ("search", query.lower(), count)
     hit = _CACHE.get(key)
     if hit is not None:
         _log("webtools: search cache hit for %r" % query)
@@ -997,7 +1082,7 @@ def search(query, num_results=5):
             _log("webtools: search cache hit after coalescing for %r" % query)
             return hit
     try:
-        text = _search_fanout(query, n)
+        text = _search_fanout(query, count)
         if not text.startswith(_UNAVAILABLE_PREFIX):
             ttl = CACHE_TTL if text.startswith("Search results") else min(CACHE_TTL, 120.0)
             if ttl > 0:
@@ -1075,7 +1160,7 @@ def sources_from_result(result):
     return out
 
 
-def execute(name, args_raw):
+def execute(name, args_raw, search_runner=None):
     """执行一次内部网路工具。永不抛例外，永远回一句能喂回模型的字串。"""
     name = str(name or "").strip()
     if isinstance(args_raw, str):
@@ -1092,7 +1177,12 @@ def execute(name, args_raw):
 
     try:
         if name == WEB_SEARCH_NAME:
-            return search(query_args(args), args.get("numResults") or 5)
+            requested = args.get("numResults")
+            if requested is None:
+                requested = args.get("num_results")
+            if requested is None:
+                requested = args.get("max_results")
+            return search(query_args(args), requested or 10, runner=search_runner)
         if name == WEB_FETCH_NAME:
             return fetch(url_arg(args), args.get("startIndex") or 0)
         return "Error: %s is not a tool this gateway runs." % name

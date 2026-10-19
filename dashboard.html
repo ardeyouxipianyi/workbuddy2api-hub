@@ -2385,7 +2385,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '选择颜色主题': 'Choose a color theme',
     '速度': 'Speed',
     '那一份（': '(that set,',
-    '部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而上游没有对应的执行器：声明送上去，模型看到工具却没有执行器，客户端最后只拿到一句 unsupported call。开启后由本网关代跑——把声明换成自己的同名函数，在本地执行（搜索按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的顺序自动轮换，抓页面抓这个 URL）再把结果喂回模型。默认关闭，关闭时声明原样透传，客户端自己声明的搜索工具照常拿到调用。': 'Some clients (such as the Codex App) declare server-side tools like web_search / web_fetch, but the upstream has no executor for them: the declaration goes up, the model sees the tool with nothing to run it, and the client ends up with nothing but unsupported call. With this on, the gateway runs them instead: it swaps the declaration for its own same-named function, runs it locally (search rotates automatically through DuckDuckGo -> Bing -> Wikipedia -> Stack Overflow -> Google News; page fetch uses that URL) and feeds the result back to the model. Off by default; when off the declaration passes through untouched and search tools the client declares itself still get called.',
+    '部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而 chat 端点没有对应的执行器。开启后由本网关代跑：web_search 优先复用当前对话账号调用 WorkBuddy 官方 /agenttool/v1/search，并把真实搜索结果喂回模型（限流或传输失败时按账号池轮换）；web_fetch 在本地抓取模型给出的 URL（私网地址会被拦截）。默认关闭，关闭时声明原样透传。': 'Some clients (such as the Codex App) declare server-side tools like web_search / web_fetch, but the chat endpoint has no executor for them. With this on, the gateway runs them: web_search reuses the current conversation account to call the official WorkBuddy /agenttool/v1/search endpoint and feeds the real results back to the model (rotating the account pool on throttling or transport failure); web_fetch fetches the URL locally (private-network addresses are blocked). Off by default; when off the declaration passes through untouched.',
     '重新扫描': 'Rescan',
     '重新生成链接': 'Regenerate link',
     '错误': 'errors',
@@ -3016,7 +3016,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象， 以及桌面客户端的": "選擇一個帳號 JSON 檔案。支援本閘道匯出的檔案、帳號陣列、單個帳號物件， 以及桌面客戶端的",
     "选择要登录的版本：": "選擇要登入的版本：",
     "逐个刷新所有账号的上游访问凭证（相当于对每个账号点一次「刷新凭证」）": "逐個重新整理所有帳號的上游訪問憑證（相當於對每個帳號點一次「重新整理憑證」）",
-    "部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而上游没有对应的执行器：声明送上去，模型看到工具却没有执行器，客户端最后只拿到一句 unsupported call。开启后由本网关代跑——把声明换成自己的同名函数，在本地执行（搜索按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的顺序自动轮换，抓页面抓这个 URL）再把结果喂回模型。默认关闭，关闭时声明原样透传，客户端自己声明的搜索工具照常拿到调用。": "部分客戶端（如 Codex App）會宣告 web_search / web_fetch 這類服務端工具，而上游沒有對應的執行器：宣告送上去，模型看到工具卻沒有執行器，客戶端最後只拿到一句 unsupported call。開啟後由本閘道代跑——把宣告換成自己的同名函式，在本地執行（搜尋按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的順序自動輪換，抓頁面抓這個 URL）再把結果喂回模型。預設關閉，關閉時宣告原樣透傳，客戶端自己宣告的搜尋工具照常拿到呼叫。",
+    "部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而 chat 端点没有对应的执行器。开启后由本网关代跑：web_search 优先复用当前对话账号调用 WorkBuddy 官方 /agenttool/v1/search，并把真实搜索结果喂回模型（限流或传输失败时按账号池轮换）；web_fetch 在本地抓取模型给出的 URL（私网地址会被拦截）。默认关闭，关闭时声明原样透传。": "部分客戶端（如 Codex App）會宣告 web_search / web_fetch 這類服務端工具，而 chat 端點沒有對應的執行器。開啟後由本閘道代跑：web_search 優先複用目前對話帳號呼叫 WorkBuddy 官方 /agenttool/v1/search，並把真實搜尋結果喂回模型（限流或傳輸失敗時按帳號池輪換）；web_fetch 在本機抓取模型給出的 URL（私網位址會被攔截）。預設關閉，關閉時宣告原樣透傳。",
     "重新打开会补算关闭期间的请求": "重新開啟會補算關閉期間的請求",
     "重新生成链接": "重新生成連結",
     "限额已保存": "限額已儲存",
@@ -4716,7 +4716,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
           <div>
             <h2 style="margin:0">本地网络工具 <em id="setLocalWebToolsState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而上游没有对应的执行器：声明送上去，模型看到工具却没有执行器，客户端最后只拿到一句 unsupported call。开启后由本网关代跑——把声明换成自己的同名函数，在本地执行（搜索按 DuckDuckGo → Bing → Wikipedia → Stack Overflow → Google News 的顺序自动轮换，抓页面抓这个 URL）再把结果喂回模型。默认关闭，关闭时声明原样透传，客户端自己声明的搜索工具照常拿到调用。
+              部分客户端（如 Codex App）会宣告 web_search / web_fetch 这类服务端工具，而 chat 端点没有对应的执行器。开启后由本网关代跑：web_search 优先复用当前对话账号调用 WorkBuddy 官方 /agenttool/v1/search，并把真实搜索结果喂回模型（限流或传输失败时按账号池轮换）；web_fetch 在本地抓取模型给出的 URL（私网地址会被拦截）。默认关闭，关闭时声明原样透传。
             </div>
             <div style="font-size:12px;color:var(--warn);margin-top:4px">
               注意：开启后网关会主动出网抓取模型给出的 URL（字面私网地址与解析进内网的域名都会被挡），且每轮代跑都会多跑一次上游、多消耗该账号的额度；某个搜寻引擎被限流时会自动轮换到下一家，全部不可用才把明确错误交给模型。

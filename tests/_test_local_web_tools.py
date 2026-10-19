@@ -262,7 +262,7 @@ with mock.patch.multiple(proxy,
                          open_upstream=fake_open_upstream,
                          record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
-        mock.patch.object(W, "execute", lambda name, args: executed.append((name, args)) or
+        mock.patch.object(W, "execute", lambda name, args, **kwargs: executed.append((name, args)) or
                           "Search results for: cats" + chr(10) + "1. Cats - https://example.com"):
     handler._responses_stream_response(
         FakeUpstream(sse(TOOL_CHUNKS)), "deepseek-v4.1-flash", set(), {}, "fp",
@@ -307,7 +307,7 @@ with mock.patch.multiple(proxy,
                          open_upstream=always_tool_body,
                          record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
-        mock.patch.object(W, "execute", lambda name, args: "Search results for: cats"):
+        mock.patch.object(W, "execute", lambda name, args, **kwargs: "Search results for: cats"):
     handler2._responses_stream_response(
         FakeUpstream(sse(TOOL_CHUNKS)), "deepseek-v4.1-flash", set(), {}, "fp",
         FakeAccount(), 0.0, None, base_body=dict(chat_body),
@@ -407,7 +407,7 @@ with mock.patch.multiple(proxy,
                          aggregate_stream=fake_aggregate,
                          record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
-        mock.patch.object(W, "execute", lambda name, args: SAMPLE):
+        mock.patch.object(W, "execute", lambda name, args, **kwargs: SAMPLE):
     jh._responses_nonstream_response(
         FakeUpstream(sse(TOOL_CHUNKS)), "deepseek-v4.1-flash", set(), {}, "fp",
         FakeAccount(), 0.0, None, base_body=dict(chat_body),
@@ -442,7 +442,7 @@ with mock.patch.multiple(proxy,
                          open_upstream=passthrough_open,
                          record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
-        mock.patch.object(W, "execute", lambda name, args: ran.append(name) or "no"), \
+        mock.patch.object(W, "execute", lambda name, args, **kwargs: ran.append(name) or "no"), \
         mock.patch.object(proxy.wb_settings, "local_web_tools", lambda accounts_dir: False):
     handler3._responses_stream_response(
         FakeUpstream(sse(TOOL_CHUNKS)), "deepseek-v4.1-flash", set(), {}, "fp",

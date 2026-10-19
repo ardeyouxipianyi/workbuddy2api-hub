@@ -19,6 +19,7 @@ import bisect
 import calendar
 import hashlib
 import heapq
+import io
 import ipaddress
 from collections import deque
 import re
@@ -270,6 +271,9 @@ def install_console_close_handler():
 # ---------------------------------------------------------------------------
 UPSTREAM = "https://www.workbuddy.ai"
 CHAT_PATH = "/v2/chat/completions"
+WORKBUDDY_SEARCH_PATH = "/agenttool/v1/search"
+WORKBUDDY_SEARCH_TIMEOUT = 20.0
+WORKBUDDY_SEARCH_MAX_BYTES = 1024 * 1024
 MODELS_PATH = "/v2/enterprises/personal/models"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -10271,7 +10275,7 @@ def log(msg, level=None, tag=None):
     sys.stderr.flush()
     add_log_entry(msg, level=level, tag=tag)
 
-# 本地网路工具的多引擎轮换、冷却与失败分类写进看板日志（tag=webtools）
+# 官方搜索 / 本地抓取的轮换、冷却与失败分类写进看板日志（tag=webtools）
 wb_webtools.set_logger(log)
 
 def get_logs(limit=200, level="", tag="", search="", since_id=0):
@@ -13456,6 +13460,169 @@ def _apply_stream_idle_timeout(response, seconds):
         return False
 
 
+def build_workbuddy_search_request(account, query, result_limit,
+                                   session_key, turn_request_id):
+    """构造一次 WorkBuddy 官方联网搜索请求。
+
+    请求体字段顺序保持 query -> type -> max_results，与官方客户端一致；
+    其余身份头复用该账号的 chat 头，再覆盖搜索端点独有的四项。
+    """
+    conversation_id = None
+    if session_key and account.product != wb_identity.PRODUCT_VSCODE:
+        conversation_id = wb_identity.conversation_id_for(account.uid, session_key)
+    headers = account.headers(
+        purpose="chat", session_key=session_key,
+        turn_request_id=turn_request_id, model=None,
+        conversation_id=conversation_id)
+    headers["Accept"] = "application/json"
+    headers["Content-Type"] = "application/json;charset=UTF-8"
+    headers["X-Agent-Intent"] = "craft"
+    headers["X-Agent-Runtime"] = "other"
+    request_body = json.dumps({
+        "query": query,
+        "type": "text2text",
+        "max_results": result_limit,
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        account.chat_base_url() + WORKBUDDY_SEARCH_PATH,
+        data=request_body, method="POST", headers=headers)
+    # 让 keep-alive 传输层保留官方头名大小写。
+    request.wb_exact_headers = list(headers.items())
+    return request
+
+
+def read_search_error_body(exc, limit=300):
+    """读取搜索端点的 HTTP 错误正文；任何读取异常都退化为异常摘要。"""
+    try:
+        return exc.read(limit).decode("utf-8", "replace").strip()
+    except Exception:
+        return str(exc)
+
+
+def run_workbuddy_search(query, num_results=10, realm=None, session_key=None,
+                         preferred_account=None):
+    """通过官方 /agenttool/v1/search 执行一次联网搜索。
+
+    优先使用刚服务本轮对话的账号，保持设备身份一致；仅在该账号限流或传输
+    失败时按账号池轮换。搜索不改写会话 affinity，避免一次搜索失败把后续
+    chat 固定到另一个账号。返回结构由 wb_webtools 进一步格式化为 tool result。
+    """
+    query = str(query or "").strip()
+    if len(query) < 2:
+        raise ValueError("search query must be at least 2 characters")
+    result_limit = wb_webtools.clamp_web_result_count(num_results)
+    if POOL is None:
+        raise RuntimeError("no account pool is loaded")
+    apply_daily_guards()
+    realm = realm or CURRENT_REALM
+    pinned = pinned_account()
+    if pinned is not None and pinned.realm != realm:
+        raise PinnedAccountError(
+            409, "pinned account '%s' belongs to realm %s, search targets %s"
+            % (pinned_ref(), pinned.realm, realm), pinned.uid)
+
+    search_request_id = wb_identity.new_turn_request_id()
+    attempted = set()
+    last_problem = ""
+    ready_count = POOL.count_ready(realm=realm)
+    max_attempts = 1 if pinned is not None else min(3, max(1, ready_count))
+
+    for attempt in range(max_attempts):
+        if pinned is not None:
+            account = pinned if pinned.uid not in attempted else None
+        elif (attempt == 0 and preferred_account is not None
+              and preferred_account.realm == realm
+              and preferred_account.uid not in attempted
+              and preferred_account.ready()):
+            account = preferred_account
+        else:
+            account = POOL.pick(realm=realm, model=None, exclude=attempted)
+        if account is None:
+            break
+        if account.uid in attempted:
+            break
+        attempted.add(account.uid)
+        if not account.ready():
+            last_problem = "account %s is not ready: %s" % (
+                account.uid[:8], account.unavailable_reason())
+            continue
+
+        request = build_workbuddy_search_request(
+            account, query, result_limit, session_key, search_request_id)
+        refreshed = False
+        try:
+            while True:
+                try:
+                    response = wb_accounts.urlopen(
+                        request, timeout=WORKBUDDY_SEARCH_TIMEOUT,
+                        proxy=account.proxy)
+                    with response:
+                        raw_body = response.read(WORKBUDDY_SEARCH_MAX_BYTES + 1)
+                    break
+                except urllib.error.HTTPError as exc:
+                    detail = read_search_error_body(exc)
+                    if exc.code == 401 and not refreshed and account.refresh():
+                        refreshed = True
+                        request = build_workbuddy_search_request(
+                            account, query, result_limit, session_key,
+                            search_request_id)
+                        continue
+                    raise urllib.error.HTTPError(
+                        exc.url, exc.code, exc.msg, exc.hdrs,
+                        io.BytesIO(detail.encode("utf-8", "replace")))
+        except urllib.error.HTTPError as exc:
+            detail = read_search_error_body(exc)
+            last_problem = "HTTP %s%s" % (
+                exc.code, (": " + detail[:240]) if detail else "")
+            if exc.code == 429:
+                wait = account.note_soft_rate("HTTP 429 (WorkBuddy search)")
+                log("workbuddy search: account %s soft-rate limited, cooling %.0fs"
+                    % (account.uid[:8], wait), level="WARN")
+            elif exc.code >= 500 or exc.code == 403:
+                account.note_failure(
+                    "WorkBuddy search HTTP %s: %s" % (exc.code, detail[:160]))
+            log("workbuddy search: account %s failed: %s"
+                % (account.uid[:8], last_problem), level="WARN")
+            # 400 是请求契约本身被拒，换号不会改变结果。
+            if exc.code == 400:
+                break
+        except Exception as exc:
+            last_problem = "%s: %s" % (type(exc).__name__, exc)
+            account.note_unknown_failure(
+                "WorkBuddy search transport failure: " + last_problem[:160])
+            log("workbuddy search: account %s transport failure: %s"
+                % (account.uid[:8], last_problem), level="WARN")
+        else:
+            if len(raw_body) > WORKBUDDY_SEARCH_MAX_BYTES:
+                raise RuntimeError("WorkBuddy search response exceeded 1 MiB")
+            try:
+                payload = json.loads(raw_body.decode("utf-8", "replace"))
+                parsed = wb_webtools.parse_workbuddy_search_payload(payload, query)
+            except Exception as exc:
+                last_problem = "invalid WorkBuddy search response: %s" % exc
+                account.note_failure(last_problem[:200])
+                log("workbuddy search: account %s returned invalid payload: %s"
+                    % (account.uid[:8], exc), level="ERROR")
+            else:
+                account.note_success()
+                log("workbuddy search: %r served by account %s (%d result(s), "
+                    "provider=%s, %sms)"
+                    % (query, account.uid[:8], len(parsed.get("results") or []),
+                       parsed.get("provider") or "-",
+                       parsed.get("response_time_ms")
+                       if parsed.get("response_time_ms") is not None else "-"))
+                return parsed
+
+        if pinned is None and attempt + 1 < max_attempts:
+            time.sleep(min(0.6 * (attempt + 1), 1.5))
+
+    if pinned is not None:
+        raise PinnedAccountError(
+            503, "WorkBuddy search is unavailable on pinned account '%s': %s"
+            % (pinned_ref(), last_problem or "no usable result"))
+    raise RuntimeError(last_problem or "no usable account for WorkBuddy search")
+
+
 def schedule_window_probe(account, model, reset_at):
     """把上游给出的重置时刻登记给窗口探针（wb_window_probe）。
 
@@ -14811,11 +14978,10 @@ def _unwrap_custom_input(args):
 # The gateway can run web_search / web_fetch itself; the panel switch decides.
 #
 # Some clients (Codex App and similar harnesses) declare web_search as a
-# server-side tool, but the upstream has no executor for it: forwarding the
-# declaration leaves the model answering as if no tool had been offered. With
-# the switch on, the gateway swaps the declaration for a function of its own,
-# swallows the calls and runs them locally (wb_webtools), then feeds the
-# results back.
+# server-side tool, but the chat endpoint has no executor for that declaration.
+# With the switch on, the gateway swaps it for its own function, runs searches
+# through WorkBuddy's official search endpoint (web_fetch stays local), and
+# feeds the results back.
 #
 # Off by default: the declaration is forwarded untouched and a client that
 # declares its own search tool receives the call - the behaviour since v1.5.3.
@@ -14923,7 +15089,7 @@ def build_citations(text, sources):
 
 
 def follow_up_with_tool_results(internal_calls, holder, model, session_key, t_start,
-                                drop_tools=False):
+                                drop_tools=False, preferred_account=None):
     """执行反代自己代跑的网路工具，把结果喂回模型，回传新的上游连线。
 
     drop_tools=True 表示这是最后一轮：把网路工具从工具清单收回，模型没有东西
@@ -14945,9 +15111,16 @@ def follow_up_with_tool_results(internal_calls, holder, model, session_key, t_st
         })
     convo.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
 
+    def official_search_runner(query, count):
+        return run_workbuddy_search(
+            query, count, realm=holder.get("realm"),
+            session_key=session_key,
+            preferred_account=preferred_account)
+
     for tc in tool_calls:
         nm = tc["function"]["name"]
-        result = wb_webtools.execute(nm, tc["function"]["arguments"])
+        result = wb_webtools.execute(
+            nm, tc["function"]["arguments"], search_runner=official_search_runner)
         found = wb_webtools.sources_from_result(result)
         if found:
             holder.setdefault("web_sources", []).extend(found)
@@ -19915,7 +20088,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 upstream, account, _ = follow_up_with_tool_results(
-                    internal, holder, model, session_key, t_start, drop_tools=give_up)
+                    internal, holder, model, session_key, t_start,
+                    drop_tools=give_up, preferred_account=account)
             if total_usage:
                 holder["usage"] = total_usage
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -19985,7 +20159,8 @@ class Handler(BaseHTTPRequestHandler):
                       "web_sources": sources}
             try:
                 upstream, account, _ = follow_up_with_tool_results(
-                    calls, holder, model, session_key, t_start, drop_tools=give_up)
+                    calls, holder, model, session_key, t_start,
+                    drop_tools=give_up, preferred_account=account)
             except Exception as exc:
                 record_error(model, 502, "web tool follow-up failed: %s" % exc,
                              elapsed_ms=int((time.time() - t_start) * 1000),

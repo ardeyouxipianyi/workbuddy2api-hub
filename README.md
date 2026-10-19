@@ -135,7 +135,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 172 个套件：127 个 Python + 45 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 173 个套件：128 个 Python + 45 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -206,12 +206,12 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### 7. 本地网络工具（可选，默认关闭）
 
-Codex App 这类客户端会在 Responses 请求里声明 `web_search` / `web_fetch`，而上游没有对应的执行器——声明送上去只会拿到一句 unsupported call。打开「设置 → 本地网络工具」后，网关把那份声明换成自己的同名 function，拦下模型的调用并在本地执行（搜索在 DuckDuckGo / Bing / Wikipedia / Stack Overflow / Google News 之间自动轮换，抓页面抓模型给出的 URL），再把结果喂回模型，最多代跑 3 轮（`WB_MAX_WEB_ROUNDS` 可调，上限 8）；搜索过程会作为 `web_search_call` 卡片事件与 `url_citation` 引用回到客户端。
+Codex App 这类客户端会在 Responses 请求里声明 `web_search` / `web_fetch`，而 chat 端点没有对应的执行器。打开「设置 → 本地网络工具」后，网关把声明换成同名 function：`web_search` 优先复用当前对话账号调用 WorkBuddy 官方 `POST /agenttool/v1/search`，`web_fetch` 在本地抓取模型给出的 URL；结果再喂回模型，最多代跑 3 轮（`WB_MAX_WEB_ROUNDS` 可调，上限 8）。搜索过程会作为 `web_search_call` 卡片事件与 `url_citation` 引用回到客户端。
 
 - 关闭时（默认）声明原样透传，客户端自己声明的搜索工具照常拿到调用；
 - 打开后网关会主动出网抓取模型给出的 URL（字面私网地址与解析进内网的域名都会被挡；
   `WB_WEB_TOOLS_PROXY` 可以给这组工具单独指定出口代理），每轮代跑都会多跑一次上游、多消耗该账号额度；
-- 某个搜寻引擎被限流／拦截时会自动轮换到下一家，只有全部不可用才把明确错误交给模型；常规引擎（DuckDuckGo / Bing）接手时对模型无感，Wikipedia / Stack Overflow / Google News 这类非常规来源会在结果里标明来源；
+- `web_search` 走官方原生搜索：请求头、请求体与扁平响应契约对齐 WorkBuddy 客户端，默认请求上限 10 条；优先复用发起本轮对话的账号，限流或传输失败时按账号池轮换，并沿用账号冷却／熔断语义；没有注入官方 runner 的离线调用仍可使用旧多引擎 fallback；
 - 只影响声明了这两个工具的客户端，普通 `/v1/chat/completions` 客户端不经过这条路径。
 
 ### 8. 智能体一键配置
@@ -434,6 +434,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 ### Unreleased
+
+- **本地网络工具的 `web_search` 改接 WorkBuddy 官方联网搜索**（#491）：`web_search` 不再默认走 DuckDuckGo / Bing 等公开网页抓取，而是复用当前对话账号调用官方 `POST /agenttool/v1/search`，并使用与官方客户端一致的请求头、`query → type=text2text → max_results` 请求体与扁平响应解析（默认 `max_results=10`）；账号限流或传输失败时按池轮换，400 契约错误不换号。`web_fetch` 继续在本地执行并保留私网拦截。旧多引擎 fallback 仅在没有注入官方 runner 的离线调用中保留。新增 `tests/_test_workbuddy_search.py` 覆盖请求契约、响应解析、条数收敛与换号语义。
+  `web_search` in the local web tools now uses WorkBuddy's official `POST /agenttool/v1/search` through the account that served the current turn, instead of scraping DuckDuckGo / Bing by default. The request headers, ordered `query -> type=text2text -> max_results` body and flat response parser match the official client; throttling and transport failures rotate accounts while HTTP 400 contract errors do not. `web_fetch` stays local with the private-network guard. The old multi-engine fallback remains only for offline calls without an official runner. `tests/_test_workbuddy_search.py` covers the request contract, response parsing, result clamping and account rotation.
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.16，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
