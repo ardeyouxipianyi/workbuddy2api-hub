@@ -18,6 +18,8 @@ additive contract that closes the gap:
   F    the cc-switch export speaks that app's own field names and units.
   G    the same amounts ride out as `X-Api-Cost-*` headers on non-streaming
        replies; streaming replies only announce `X-Api-Cost-In-Stream`.
+  H    the dashboard owns a switch for the whole feature, wired to the same
+       `api_cost_response` key, with both dictionaries translated.
 
 Unpriced is never free. An unknown model reports null components and
 `pricing_known: false`, because a zero is a number somebody can bill against.
@@ -34,6 +36,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -646,6 +649,94 @@ class CcSwitchExportTests(_CostTest):
         for entry in doc["models"]:
             self.assertIsNotNone(wb_pricing.per_token_pricing(entry["modelId"]),
                                  "%s exported but not priceable" % entry["modelId"])
+
+
+class PanelToggleTests(_CostTest):
+    """Contract H: the dashboard can turn the response-side cost off.
+
+    The switch defaults to on, so an operator who does not want the extra
+    fields needs a way back - and the panel is where every other switch lives.
+    A setting that only the settings file can reach is a support ticket.
+    """
+
+    def setUp(self):
+        _CostTest.setUp(self)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with io.open(os.path.join(root, "dashboard.html"), encoding="utf-8") as fh:
+            self.html = fh.read()
+
+    def test_the_panel_has_a_switch_wired_to_the_setting(self):
+        self.assertEqual(self.html.count('id="setApiCostResponse"'), 1)
+        self.assertIn('onchange="saveApiCostResponse(this)"', self.html)
+        # The save handler must post the same key the response side reads.
+        self.assertIn("postJSON('/settings/save', {api_cost_response: value})",
+                      self.html)
+        # ... and the loaded value has to reach the switch, otherwise the panel
+        # shows "on" for an install that turned it off.
+        self.assertIn("applyApiCostResponse(data.api_cost_response)", self.html)
+
+    def test_the_switch_labels_are_in_both_dictionaries(self):
+        # Simplified key -> English, verbatim, or the English UI falls back to
+        # Chinese (CONTRIBUTING: 键与 HTML 文本逐字一致).
+        self.assertIn("'响应里的花费': 'Cost in responses'", self.html)
+        self.assertIn("'每次响应带上花费': 'Cost on every response'", self.html)
+        # Traditional is a real translation, not the same glyphs copied over.
+        self.assertIn('"响应里的花费": "回應裡的耗費"', self.html)
+        self.assertIn('"每次响应带上花费": "每次回應帶上耗費"', self.html)
+
+    def test_the_settings_view_reports_the_switch(self):
+        # The panel polls this view; a key missing here leaves the switch
+        # unchecked no matter what the settings file says.
+        view = wb_proxy.runtime_settings_view()
+        self.assertIs(view["api_cost_response"],
+                      wb_settings.api_cost_response(self.accounts))
+
+    # -- the route the panel posts to -----------------------------------
+
+    def _save(self, payload):
+        """Run the real handler against this suite's temp accounts dir."""
+
+        class _Request(object):
+            _handle_settings_save = wb_proxy.Handler._handle_settings_save
+
+            def __init__(self, body):
+                self.payload = body
+                self.replies = []
+
+            def _payload_or_error(self, allow_list=False):
+                return self.payload
+
+            def _error(self, status, message, kind=""):
+                self.replies.append(("error", status, message))
+                return status, message
+
+            def _json(self, status, payload, extra_headers=None):
+                self.replies.append(("json", status, payload))
+                return status, payload
+
+        request = _Request(payload)
+        with mock.patch.multiple(wb_proxy, POOL=None, SCHEDULER=None, PRICING=None):
+            request._handle_settings_save()
+        self.settings()  # same content back, but with the read memos dropped
+        return request
+
+    def test_the_route_turns_the_switch_off_and_on(self):
+        self.assertIs(wb_pricing.api_cost_response(), True)
+        saved = self._save({"api_cost_response": False})
+        self.assertEqual(saved.replies[-1][0], "json")
+        self.assertIs(saved.replies[-1][2]["api_cost_response"], False)
+        self.assertIs(wb_pricing.api_cost_response(), False)
+        saved = self._save({"api_cost_response": True})
+        self.assertIs(saved.replies[-1][2]["api_cost_response"], True)
+        self.assertIs(wb_pricing.api_cost_response(), True)
+
+    def test_the_route_refuses_a_truthy_string(self):
+        # "false" is a truthy string: an operator who turned the field off must
+        # get a 400, not a cost field that keeps showing up.
+        saved = self._save({"api_cost_response": "false"})
+        self.assertEqual(saved.replies[-1][0], "error")
+        self.assertEqual(saved.replies[-1][1], 400)
+        self.assertIs(wb_pricing.api_cost_response(), True)
 
 
 if __name__ == "__main__":

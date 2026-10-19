@@ -1563,6 +1563,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '启动参数': 'Launcher args',
     '启用': 'Enable',
     '启用价估算': 'Enable estimate',
+    '响应里的花费': 'Cost in responses',
+    '每次响应带上花费': 'Cost on every response',
     '启用自动切换': 'Enable auto-switch',
     '允许切换的身份：': 'Allowed identities: ',
     '至少选择一个身份': 'Pick at least one identity',
@@ -2685,6 +2687,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "如 deepseek* 或 gpt-6-astra；多个用逗号分隔，支持 * 通配": "如 deepseek* 或 gpt-6-astra；多個用逗號分隔，支援 * 通配",
     "官方 VSCode 插件 (VSC)": "官方 VSCode 外掛 (VSC)",
     "定价刷新": "定價重新整理",
+    "响应里的花费": "回應裡的耗費",
+    "每次响应带上花费": "每次回應帶上耗費",
     "实时捕获反向代理请求、流式转发、调度巡检、任务打卡与异常告警 (内存保留最新 2000 条)": "實時捕獲反向代理請求、流式轉發、排程巡檢、任務打卡與異常告警 (記憶體保留最新 2000 條)",
     "密钥已回收，正在重新扫描": "金鑰已回收，正在重新掃描",
     "导入": "匯入",
@@ -4559,6 +4563,17 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
               </div>
               <div id="setPricingCurrent"></div>
               <div id="setPricingGaps"></div>
+            </div>
+            <div id="apiCostBlock" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+              <h3 style="margin:0;font-size:14px">响应里的花费 <em id="setApiCostResponseState"></em></h3>
+              <div style="font-size:12px;color:var(--dim);margin-top:4px">
+                每次回复的 <code>usage</code> 里带上 <code>cost</code> / <code>cost_cny</code> / <code>cost_details</code> / <code>pricing_known</code> 四个键；非流式回复的响应头再镜像一份 <code>X-Api-Cost-*</code>，流式回复只发 <code>X-Api-Cost-In-Stream: usage</code>、金额留在最后一帧的 <code>usage</code> 里。<b>默认开启</b>；关闭后这些键与响应头一并消失，API 回复与旧版本逐字节相同。它只管 API 回复，面板的「OpenRouter 价估算」列与「API 等价花费」卡片仍由上方的价估算开关控制。
+              </div>
+              <label class="switch" style="margin-top:10px">
+                <input id="setApiCostResponse" type="checkbox" onchange="saveApiCostResponse(this)">
+                <span class="switch-track"></span>
+                <span>每次响应带上花费</span>
+              </label>
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -10375,6 +10390,8 @@ async function loadSettings(showToast){
       const variantOn = data.pricing_variant_inherit !== false;
       const variantInput = document.getElementById('setPricingVariant');
       if(variantInput) variantInput.checked = variantOn;
+      // 响应里的花费与价估算独立：价估算关着也要把这个开关拨到真实状态。
+      applyApiCostResponse(data.api_cost_response);
       // 关闭时不去拉 /pricing：取价与未定价清单都没有意义，省掉这一趟。
       if(pricingOn){
         loadPricingStatus();
@@ -10837,6 +10854,37 @@ async function savePricingEnabled(btn){
     toast('保存失败: ' + e.message, 'bad');
   } finally {
     if(btn) btn.disabled = false;
+  }
+}
+
+/* 响应里的花费：每次回复的 usage 带 cost / cost_cny / cost_details /
+   pricing_known，非流式回复再把金额镜像到 X-Api-Cost-* 头。默认开；关掉后
+   这些键和头一并消失，API 回复与加这个功能之前逐字节相同。
+   与「价估算」总开关相互独立：那个管面板算不算钱，这个管 API 回复里带不带。 */
+function applyApiCostResponse(on){
+  const enabled = on !== false;
+  const input = document.getElementById('setApiCostResponse');
+  if(input) input.checked = enabled;
+  const state = document.getElementById('setApiCostResponseState');
+  if(state){
+    state.textContent = enabled ? '(已启用)' : '(已关闭)';
+    state.style.color = enabled ? 'var(--accent2)' : 'var(--dim)';
+  }
+}
+
+async function saveApiCostResponse(input){
+  const value = !!(input && input.checked);
+  if(input) input.disabled = true;
+  try {
+    await postJSON('/settings/save', {api_cost_response: value});
+    applyApiCostResponse(value);
+    toast(value ? '已开启：回复里带等价花费' : '已关闭：回复里不再带花费', 'ok');
+  } catch(e) {
+    // 点一下即生效，保存失败就拨回原位，别让界面和后端各说各话。
+    if(input) input.checked = !value;
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(input) input.disabled = false;
   }
 }
 

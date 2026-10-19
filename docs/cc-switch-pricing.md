@@ -186,11 +186,7 @@ curl.exe -s -H "X-Panel-Token: $($login.token)" `
 
 要点：文件名必须保持 `model-pricing.json`（cc-switch 只认这个名字）；这个路由不吃 API key，要的是面板 token。
 
-### 2.6 为什么加响应头不够，非得导入这张表
-
-网关现在也会把每次请求的花费写在响应头上（非流式 `X-Api-Cost-Usd` / `X-Api-Cost-Cny` / `X-Api-Cost-Known` / `X-Api-Pricing-Source` / `X-Api-Cost-Model`，流式 `X-Api-Cost-In-Stream: usage`，花在最后一帧的 `usage` 里），body 的 `usage` 里也有 `cost` / `cost_details`。这些是给别的客户端和网关、访问日志用的。
-
-cc-switch **不读上游响应里的任何金额**：它解析响应只取 token 数（`proxy/usage/parser.rs`），四行花费由它自己的 `model_pricing` 表加 `CostCalculator` 现算（`logger.rs`、`session_usage_dsh.rs`），表里查不到 `deepseek-v4.1-flash` 就显示「未定价」——哪怕上游说这次花了多少。DSH 会话日志导入时只写 `inputTokens` / `outputTokens` / `totalTokens` / `cacheReadTokens` 四个数，不会带价格，所以补价只能靠这张表。结论：要消掉「未定价」，导入 `model-pricing.json` 是唯一一步；响应头解决的是另一件事。
+另外说一句响应头：网关现在也会把每次请求的花费写进非流式回复的响应头（`X-Api-Cost-Usd` / `X-Api-Cost-Cny` / `X-Api-Cost-Known` / `X-Api-Pricing-Source` / `X-Api-Cost-Model`），流式回复只发 `X-Api-Cost-In-Stream: usage`、金额留在最后一帧的 `usage` 里。那是给网关、访问日志和别的客户端用的——cc-switch 不读上游响应里的金额（见 1.1），所以响应头替代不了本节这张表：让「未定价」消失的仍然是导入这一步。
 
 ## 3. 怎么验证真的生效了
 
