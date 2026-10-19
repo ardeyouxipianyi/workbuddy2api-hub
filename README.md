@@ -135,7 +135,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 172 个套件：127 个 Python + 45 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 174 个套件：129 个 Python + 45 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -203,6 +203,8 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 - **未定价可见**：`/pricing` 列出未定价模型及分类（别名 / OpenRouter 无对应 / 剥后缀后无唯一基准）与相似候选（仅建议，不自动采用），可在「设置 → 定价刷新」为某条手填 OpenRouter id 并登记（写 `pricing-overrides.json`，不改源码，登记后立即取价）。
 - **展示位置**：数据看板「API 等价花费」卡片、各账号用量透视与模型性能表**最后一列**、网关页「估算价格」卡片、最近请求**最后一列**（悬停可看完整定价链：三档原始单价、汇率、匹配证据、策略 id 与补算标记 `*`）。
 - **人民币 / 美元**一键切换（记在浏览器本地）；快照覆盖不到的模型显示 `—`，不猜数字。
+- **响应里的花费**（设置 →「模型价格估算」下的 `api_cost_response`，默认开启）：除看板之外，`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式都算）的 `usage` 里再追加 `cost`（美元）、`cost_cny`、`cost_details`（输入 / 输出 / 缓存读 / 缓存写分项、总价、汇率、命中的定价策略 id）与 `pricing_known` 四个字段，金额与看板同一套算法（都走 `wb_pricing`），客户端不必自己维护价表。未定价的模型这四项一律 `null` 配 `pricing_known:false`——不猜、不写 0；内部取价出错时同样降级成这组 `null`，不会让本次回复失败。关掉该键后响应与加这个功能之前逐字节相同。Anthropic 流式的 `message_start` 帧里 token 尚未开始计数，那一帧的金额是 `0.0`（`pricing_known` 仍为 `true`）——本次请求的最终金额请以最后一个 `message_delta` 的 `usage` 为准。
+- **给 cc-switch 的定价导出**：`GET /pricing/cc-switch.json` 把当前价表导出成 cc-switch 认识的 `model-pricing.json`（camelCase、每百万 token 的十进制字符串），在 cc-switch「设置 → 模型定价」里导入后，它就能按同一套价给请求算出金额，请求详情不再显示「未定价」。字段含义、导入步骤与显示精度说明见 [docs/cc-switch-pricing.md](docs/cc-switch-pricing.md)。
 
 ### 7. 本地网络工具（可选，默认关闭）
 
@@ -406,7 +408,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | POST | /v1/responses | Responses API 协议接口 |
 | POST | /v1/messages | 实验性 Anthropic Messages 适配，默认禁用（HTTP 400）；需显式启用并承担缓存风险 |
 | POST | /v1/messages/count_tokens | 实验性 Anthropic 计数估算接口，随 Messages 入口默认禁用 |
-| GET | /v1/models | 官方对齐模型列表（含能力与规格宣告） |
+| GET | /v1/models | 官方对齐模型列表（含能力与规格宣告；已定价的模型另带每 token 单价的 `pricing` 块，未定价则省略该键） |
 | GET | /u/\<ref\>/v1/models | 定址账号的模型清单：\<ref\> 支持完整 uid / uid 前 8 位 / 昵称，过滤该账号禁用模型 |
 | POST | /u/\<ref\>/v1/chat/completions | 定址调用：锁定该账号，不参与会话亲和 / 轮换 / 自动换号；账号不可用直接报错 |
 | POST | /u/\<ref\>/v1/responses | 定址 Responses API，语义同上 |
@@ -414,6 +416,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | GET | /pricing | 定价状态：当前生效策略、上次/下次取价时间、未定价清单（分类 + 候选） |
 | POST | /pricing/refresh | 立即取一次价（需面板会话） |
 | POST | /pricing/mapping | 手填 / 清除「模型 → OpenRouter id」运行期映射，随后自动取价（需面板会话） |
+| GET | /pricing/cc-switch.json | 导出 cc-switch 可导入的定价文件 `model-pricing.json`（需面板会话） |
 | GET | /agents | 客户端探测概览、支持的模型清单及网关连接地址 |
 | GET | /agents/cli | 智能体配置器源码（供远程机器直接 `curl` 取用，免面板鉴权；与仓库内 `wb_agents.py` 逐字节一致） |
 | POST | /agents/apply | 一键写入客户端配置并备份原件（需面板会话） |
@@ -434,6 +437,10 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 ### Unreleased
+
+- **响应侧 API 等价花费**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式）的 `usage` 追加 `cost` / `cost_cny` / `cost_details` / `pricing_known`；`/v1/models` 每项对已定价模型增加 `pricing` 块。新设置键 `api_cost_response` 默认开启，关掉后响应逐字节回到旧行为；未定价模型一律 `null` + `pricing_known:false`。
+- **`GET /pricing/cc-switch.json`**：把当前价表导出成 cc-switch 的 `model-pricing.json`，导入后 cc-switch 请求详情不再显示「未定价」。字段、导入步骤与 4 位小数显示精度说明见 [docs/cc-switch-pricing.md](docs/cc-switch-pricing.md)。
+- **测试**：新增 `_test_api_cost_response`（25 例）与 `_test_ccswitch_pricing_schema`（14 例）两个套件，总数变为 174 个套件：129 个 Python + 45 个 JS。
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.16，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 

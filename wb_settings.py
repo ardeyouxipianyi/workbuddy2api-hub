@@ -55,6 +55,11 @@ PRICING_VARIANT_INHERIT_KEY = "pricing_variant_inherit"
 # reads as on: an install that predates the setting behaves exactly as it did,
 # and only an explicit false turns the feature off.
 PRICING_ENABLED_KEY = "pricing_enabled"
+# Whether model-facing responses carry the API-equivalent cost fields
+# (usage.cost / cost_cny / cost_details / pricing_known). Missing key reads as
+# on: the fields are purely additive, so the operator's explicit request is a
+# visible default, and only an explicit false strips them again.
+API_COST_RESPONSE_KEY = "api_cost_response"
 # Whether the panel's account section is collapsed. Missing, or anything that is
 # not the boolean true, reads as expanded: a fresh install and a value a hand
 # edit or an older client left behind both keep the default view, and only an
@@ -1147,6 +1152,29 @@ def set_pricing_enabled(accounts_dir, enabled):
     with _lock:
         data = load(accounts_dir)
         data[PRICING_ENABLED_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
+def api_cost_response(accounts_dir):
+    """Whether responses quote the API-equivalent cost of a request.
+
+    On unless the operator turns it off. The fields this gates are pure
+    additions to `usage` (and to /v1/models), so an install that predates the
+    setting kept the behaviour it always had; turning it off restores a
+    response identical to the pre-feature bytes, which is what a client that
+    rejects unknown keys needs.
+    """
+    value = load(accounts_dir).get(API_COST_RESPONSE_KEY)
+    return True if value is None else value is True
+
+
+def set_api_cost_response(accounts_dir, enabled):
+    """Persist the response-cost switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[API_COST_RESPONSE_KEY] = enabled
         save(accounts_dir, data)
     return enabled
 

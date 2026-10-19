@@ -1189,6 +1189,9 @@ _variant_lock = threading.Lock()
 # 每次去解析 settings.json。
 _enabled_cache = {"key": None, "value": True}
 _enabled_lock = threading.Lock()
+# 响应侧的附加字段开关同样在热路径上（每个响应问一次），单独一份缓存。
+_api_cost_cache = {"key": None, "value": True}
+_api_cost_lock = threading.Lock()
 
 
 def set_settings_dir(path):
@@ -1263,6 +1266,17 @@ def pricing_enabled(accounts_dir=None):
     import wb_settings
     return _cached_switch(_enabled_cache, _enabled_lock,
                           wb_settings.pricing_enabled, accounts_dir, True)
+
+
+def api_cost_response(accounts_dir=None):
+    """响应里是否附带「API 等价花费」字段。默认打开；读不到设置按打开处理。
+
+    关掉之后响应侧一个键都不追加（与改动前逐字节一致），所以这个开关必须
+    在热路径上问，走与总开关同一套按 (path, mtime, size) 的缓存。
+    """
+    import wb_settings
+    return _cached_switch(_api_cost_cache, _api_cost_lock,
+                          wb_settings.api_cost_response, accounts_dir, True)
 
 
 def variant_bases(hub_id):
@@ -2285,6 +2299,301 @@ def cost_for_row(row, details=True, enabled=None):
     if details:
         cost.update(_details_for(cost, entry, doc.get("meta"), model))
     return cost
+
+
+# ---- API 等价花费（响应侧） ---------------------------------------------------
+# 看板读的是 cost_for_row 的中文侧金额；客户端（OpenRouter 生态、LiteLLM、
+# Helicone、自建账单）读的是响应 usage 上的 cost 字段。这里把同一个
+# cost_for_row 决定好的价摊成「USD 分量 + 总计」，口径与 compute_row 逐项相同：
+# CNY 侧算完再除汇率，所以四个分量之和恒等于 total。
+
+# usage 里同一件事的两套键名：OpenAI 兼容口径与 Anthropic 口径。两种都要认，
+# 否则 /v1/messages 的 usage（input_tokens / output_tokens）会被当成 0 token。
+_PROMPT_TOKEN_KEYS = ("prompt_tokens", "input_tokens")
+_COMPLETION_TOKEN_KEYS = ("completion_tokens", "output_tokens")
+
+
+def _usage_tokens(usage, keys):
+    """usage 里第一个能解析的计数字段，非负整数；没有就 0。"""
+    for key in keys:
+        value = usage.get(key)
+        if value is None:
+            continue
+        try:
+            return max(0, int(float(value)))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _usage_cached_tokens(usage):
+    """缓存命中 token。
+
+    顺序照契约 A 写死的四个别名（`prompt_tokens_details.cached_tokens` →
+    `cache_read_input_tokens` → `cached_tokens` → `prompt_cache_hit_tokens`），
+    后面两个是 /v1/responses 那套形状（Anthropic 的 `input_tokens_details`、
+    OpenAI 的 `completion_tokens_details`）。零不算命中，所以排在后面的真值
+    不会被一个写着 0 的别名压掉。
+    """
+    prompt_details = usage.get("prompt_tokens_details")
+    if not isinstance(prompt_details, dict):
+        prompt_details = {}
+    input_details = usage.get("input_tokens_details")
+    if not isinstance(input_details, dict):
+        input_details = {}
+    completion_details = usage.get("completion_tokens_details")
+    if not isinstance(completion_details, dict):
+        completion_details = {}
+    for value in (prompt_details.get("cached_tokens"),
+                  usage.get("cache_read_input_tokens"),
+                  usage.get("cached_tokens"),
+                  usage.get("prompt_cache_hit_tokens"),
+                  input_details.get("cached_tokens"),
+                  completion_details.get("cached_tokens")):
+        try:
+            number = int(float(value or 0))
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return 0
+
+
+def cost_payload(model, usage, at=None, requested_model=None):
+    """一次请求的 API 等价花费，字段永久齐全（未定价时值为 None，不编 0）。
+
+    `usage` 是响应里客户端看到的那一块（OpenAI 的 prompt_tokens /
+    completion_tokens / cached_tokens，或 Anthropic 的 input_tokens /
+    output_tokens / cache_read_input_tokens），只读不改。
+
+    价由 `cost_for_row` 决定——与看板逐行花费同一条路径，所以响应里的
+    cost 与看板上的金额永远一致，不存在第二套定价规则。`requested_model`
+    是客户端原样请求的模型名：只有当实际执行的 `model` 一个价都查不到时
+    才拿它兜底（客户端的别名可能正是价表里的键），查得到就绝不混用。
+
+    分区里 `input`/`output`/`cache_read`/`cache_write` 都是 USD，四者之和
+    等于 `total`；`total_cny` = `total` × 汇率。上游没有缓存写入的计数，
+    所以 `cache_write` 恒为 0.0（未定价时 None）——与看板口径一致。
+    """
+    usage = usage if isinstance(usage, dict) else {}
+    prompt = _usage_tokens(usage, _PROMPT_TOKEN_KEYS)
+    completion = _usage_tokens(usage, _COMPLETION_TOKEN_KEYS)
+    cached = min(_usage_cached_tokens(usage), prompt)
+    # 总开关关着时价估算整块停摆，这里透传 disabled，响应侧据此按未定价输出。
+    rate = usd_cny()
+    if not rate or rate <= 0:
+        rate = 1.0
+
+    def payload_for(name):
+        row = {"model": name, "at": time.time() if at is None else at,
+               "prompt_tokens": prompt, "completion_tokens": completion,
+               "cached_tokens": cached}
+        return cost_for_row(row)
+
+    cost = payload_for(model)
+    if (not cost.get("known")) and requested_model and requested_model != model:
+        # 别名兜底：只在执行模型查不到价时才试客户端要的那个名字。
+        alt = payload_for(requested_model)
+        if alt.get("known"):
+            cost = alt
+
+    out = {
+        "known": bool(cost.get("known")),
+        "currency": "USD",
+        "unit": "USD",
+        "input": None,
+        "output": None,
+        "cache_read": None,
+        "cache_write": None,
+        "total": None,
+        "total_cny": None,
+        "usd_cny": rate,
+        "pricing_model": cost.get("or_id") or None,
+        # 未定价时「价从哪来」这回事不存在：`source` 一般仍写着 "builtin"
+        # （出厂快照那条路径），原样透传会让客户端以为命中了内置价表。
+        "pricing_source": cost.get("source") if cost.get("known") else None,
+        "band": cost.get("band"),
+    }
+    if cost.get("disabled"):
+        out["disabled"] = True
+        return out
+    if not out["known"]:
+        return out
+
+    rates = cost.get("rates") or {}
+    unit = _as_float(cost.get("unit")) or 1000000.0
+    # factor 是「这一档把 USD 单价折成 CNY」的系数（CNY 计价的条目为 1.0），
+    # 与 _rate_for 的算法逐字相同；除汇率后回到 USD，所以 total 与 cost["cny"]
+    # 只差一次同源换算。
+    factor = 1.0
+    if str(cost.get("currency") or "").upper() == "USD":
+        factor = _as_float(cost.get("usd_cny"), 1.0) or 1.0
+    uncached = prompt - cached
+    output_tokens = completion
+    miss = _pick(rates, "input_cache_miss")
+    hit = _pick(rates, "input_cache_hit", "input_cache_miss")
+    out_rate = _pick(rates, "output")
+    cny_input = uncached * miss / unit * factor
+    cny_output = output_tokens * out_rate / unit * factor
+    cny_read = cached * hit / unit * factor
+    # 分量各自按 6 位小数落盘，total 取「已落盘分量之和」再一次四舍五入：
+    # 这样调用方把四个分量相加得到的数与 total 严格相等（不是约等于）。
+    out["input"] = round(cny_input / rate, 6)
+    out["output"] = round(cny_output / rate, 6)
+    out["cache_read"] = round(cny_read / rate, 6)
+    out["cache_write"] = 0.0
+    total = round(out["input"] + out["output"] + out["cache_read"]
+                  + out["cache_write"], 6)
+    out["total"] = total
+    out["total_cny"] = round(total * rate, 6)
+    return out
+
+
+def cost_details(payload):
+    """响应侧 cost_details 的内容：只取明细，不含开关标记与单位。"""
+    if not isinstance(payload, dict) or not payload.get("known"):
+        return None
+    return {key: payload.get(key) for key in
+            ("input", "output", "cache_read", "cache_write", "total",
+             "total_cny", "usd_cny", "pricing_model", "pricing_source", "band")}
+
+
+# ---- per-token 单价（/v1/models 的 pricing 块） --------------------------------
+# OpenRouter 生态的客户端从模型清单读「每 token 美元」来显示价格，而不是从
+# 一次响应里倒推。口径同上：价由 cost_for_row 决定（策略 > 出厂快照），
+# 每百万 ÷ 1e6，写成定点十进制字符串——浮点数的 1e-8 量级直接 dump 会是
+# "4.186e-08"，前端 toFixed 之后就是 0。
+
+def _usd_per_token(rates, unit, currency, usd):
+    """(未命中, 命中, 输出) 三个每 token USD 单价。"""
+    factor = 1.0
+    if str(currency or "USD").upper() == "CNY":
+        factor = 1.0 / (usd or 1.0)
+    unit = _as_float(unit) or 1000000.0
+    miss = _pick(rates, "input_cache_miss") * factor / unit
+    hit = _pick(rates, "input_cache_hit", "input_cache_miss") * factor / unit
+    out = _pick(rates, "output") * factor / unit
+    return miss, hit, out
+
+
+def per_token_pricing(model):
+    """一个模型当前生效价的 per-token 形式；没有价就返回 None（不编 0）。"""
+    cost = cost_for_row({"model": model, "at": time.time()})
+    if not cost.get("known"):
+        return None
+    usd = _as_float(cost.get("usd_cny")) or usd_cny() or 1.0
+    miss, hit, out = _usd_per_token(cost.get("rates") or {}, cost.get("unit"),
+                                    cost.get("currency"), usd)
+    return {
+        "prompt": _decimal_string(miss, 15),
+        "completion": _decimal_string(out, 15),
+        "input_cache_read": _decimal_string(hit, 15),
+        # 上游不报缓存写入的 token 数，等价计费里这一项恒为 0（与 cost_write 一致）。
+        "input_cache_write": "0",
+        "currency": "USD",
+        "unit": "per_token",
+        "pricing_model": cost.get("or_id"),
+        "pricing_source": cost.get("source"),
+    }
+
+
+# ---- cc-switch 定价导出 -------------------------------------------------------
+# cc-switch 自己的花费显示只认它的 model-pricing.json（每百万 USD，四个价格
+# 都是「十进制字符串」——Rust 侧是 String + normalize_decimal，写成 JSON 数字
+# 会在导入时被判非法），且它的 DSH 会话导入只读 token 数、不读我们的响应。
+# 所以「cc-switch 里显示未定价」只能靠这份导出解决。
+
+def _decimal_string(value, places=12):
+    """单价写成定点小数的字符串：去掉尾随 0，绝不出现科学计数法。
+
+    str(4.186e-08) 是 "4.186e-08"，而 per-token 单价必然落在这个量级；导入方
+    （Rust 的 Decimal / 前端 toFixed）都不认指数形式，所以一律格式化再裁零。
+    """
+    number = _as_float(value)
+    if number <= 0:
+        return "0"
+    text = (("%." + str(int(places)) + "f") % number).rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _usd_per_million(entry, usd):
+    """一条价目表的四个每百万 USD 单价（缓存写入无计数，恒 0）。"""
+    rates = (entry or {}).get("flat") or {}
+    if isinstance(entry, dict) and entry.get("bands") and not rates:
+        # 分时段计价：取第一档作为「代表价」，导出的是可导入的静态价表。
+        bands = entry.get("bands") or []
+        if bands and isinstance(bands[0], dict):
+            rates = bands[0].get("flat") or {}
+    factor = 1.0
+    if str((entry or {}).get("currency") or "USD").upper() == "CNY":
+        factor = 1.0 / (usd or 1.0)
+    # 价目表里的 flat 是「每 unit 个 token」，unit 一般是 1000000（价表与策略
+    # 行都这么写）；导出要的是每百万，所以按 unit 归一化——单位不是百万时
+    # （历史数据或人工写的策略）也不会把价差一百万倍写进去。
+    factor *= 1000000.0 / (_as_float((entry or {}).get("unit")) or 1000000.0)
+    miss = _pick(rates, "input_cache_miss") * factor
+    hit = _pick(rates, "input_cache_hit", "input_cache_miss") * factor
+    return {
+        # 键名逐字照抄 Rust 侧的 camelCase（#[serde(rename_all = "camelCase")]）：
+        # snake_case 会被当成未知字段，导入后四个价格全空。
+        "inputCostPerMillion": _decimal_string(miss),
+        "outputCostPerMillion": _decimal_string(_pick(rates, "output") * factor),
+        "cacheReadCostPerMillion": _decimal_string(hit),
+        # 上游没有缓存写入计数，本网关的等价计费里写入恒 0；导出 0 与响应里的
+        # cache_write 保持一致，cc-switch 导入后不会为不存在的项平白加价。
+        "cacheCreationCostPerMillion": "0",
+    }
+
+
+def cc_switch_pricing():
+    """把当前生效的价格表导成 cc-switch 的 model-pricing.json 结构。
+
+    结构取自 cc-switch 源码（src-tauri/src/services/model_pricing.rs）：
+    顶层 `version` / `modelsDevSync` / `models` / `deletedModelIds`，条目
+    `modelId` / `displayName` / 四个 `*CostPerMillion`，值一律是每百万 USD 的
+    十进制字符串。模型集合 = 出厂快照与「当前生效策略」的并集，策略优先
+    （与 cost_for_row 的取舍顺序一致）。
+
+    modelsDevSync 写的是 Rust 侧 ModelsDevSyncConfig::default() 的取值
+    （autoSyncEnabled / includeCommonModels 都是 true），也就是「与导入之前
+    一样」：这份文件只负责给价，不该顺手改掉对方 App 自己的同步开关。
+    """
+    doc = load_pricing()
+    usd = _as_float((doc.get("meta") or {}).get("usd_cny"), usd_cny()) or usd_cny()
+    entries = {}
+    for model, entry in (doc.get("models") or {}).items():
+        if isinstance(entry, dict):
+            entries[model] = entry
+    policies = load_policies()
+    _at, assignment = current_assignment()
+    for model, pid in assignment.items():
+        policy = policies.get(pid)
+        if policy:
+            entries[model] = policy_entry(policy)
+    models = []
+    for model in sorted(entries):
+        entry = entries[model]
+        item = {
+            "modelId": model,
+            "displayName": str(entry.get("display") or model),
+        }
+        item.update(_usd_per_million(entry, usd))
+        models.append(item)
+    return {
+        "version": 1,
+        "modelsDevSync": {
+            # 与 ModelsDevSyncConfig::default() 一致：导入一份价表不该静默关掉
+            # 用户原有的 models.dev 同步。
+            "autoSyncEnabled": True,
+            "includeCommonModels": True,
+            "selectedModelKeys": [],
+            "excludedCommonModelKeys": [],
+            "lastSyncAt": None,
+            "lastSyncError": None,
+        },
+        "models": models,
+        "deletedModelIds": [],
+    }
 
 
 def policy_label(policy):

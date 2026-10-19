@@ -619,6 +619,43 @@ def _extract_usage(usage):
         "total_tokens": usage.get("total_tokens") or 0,
         "credit": usage.get("credit") or 0,
     }
+
+
+# ---- API 等价花费（响应侧） ---------------------------------------------------
+# 价在哪里决定、怎么摊：全在 wb_pricing.cost_payload 里（它走 cost_for_row，
+# 也就是看板逐行花费的那一条路径）。这里只负责把结果挂到客户端真正看得到的那块
+# usage 上。开关关掉时一个键都不碰——响应与加这个功能之前逐字节相同。
+
+def attach_api_cost(usage, model, requested_model=None, accounts_dir=None):
+    """把 API 等价花费挂进这块 usage（原地），返回它。
+
+    `model` 是实际计价的模型（上游真正执行的那个），`requested_model` 是客户端
+    请求时写的名字，只在前者查不到价时才用来兜底——两者的取舍与 usage 记账
+    (record_upstream_usage) 完全一致，响应里的花费和账本里的行不会打架。
+
+    只加四个键：cost（USD 总额）、cost_cny、cost_details（明细整块）、
+    pricing_known。未定价时前三个是 null、pricing_known=false：不编 0，也不
+    假装免费。计算本身出任何意外都退化成「未知」而不是让响应 500。
+    """
+    if not isinstance(usage, dict):
+        return usage
+    try:
+        if not wb_pricing.api_cost_response(
+                ACCOUNTS_DIR if accounts_dir is None else accounts_dir):
+            return usage
+        payload = wb_pricing.cost_payload(
+            model, usage, requested_model=requested_model)
+    except Exception as exc:
+        log("api cost attach failed: %s" % exc)
+        payload = None
+    payload = payload if isinstance(payload, dict) else {}
+    usage["cost"] = payload.get("total")
+    usage["cost_cny"] = payload.get("total_cny")
+    usage["cost_details"] = wb_pricing.cost_details(payload)
+    usage["pricing_known"] = bool(payload.get("known"))
+    return usage
+
+
 def row_realm(row):
     """The realm a log row belongs to.
 
@@ -10003,6 +10040,7 @@ def runtime_settings_view():
         "ui_language": wb_settings.ui_language(ACCOUNTS_DIR),
         "pricing_variant_inherit": wb_settings.pricing_variant_inherit(ACCOUNTS_DIR),
         "pricing_enabled": wb_settings.pricing_enabled(ACCOUNTS_DIR),
+        "api_cost_response": wb_settings.api_cost_response(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "auto_switch_products": wb_settings.auto_switch_products(ACCOUNTS_DIR),
         "free_model_credit_fallback": wb_settings.free_model_credit_fallback(ACCOUNTS_DIR),
@@ -10684,6 +10722,17 @@ def model_entry(mid, meta):
     tags = [t for t in (meta.get("tags") or []) if isinstance(t, str) and not t.startswith("badge:")]
     if tags:
         item["tags"] = tags
+    # ---- pricing (API 等价花费) ----
+    # OpenRouter 生态的客户端从清单读「每 token 美元」来显示价签，所以有价的模型
+    # 才带这一块；没有价的模型整块不出现（不编 0.0，也不假装免费）——这与响应
+    # usage 上「未定价就全 null」是同一套口径。开关关掉时同样不出现。
+    if wb_pricing.api_cost_response(ACCOUNTS_DIR):
+        try:
+            pricing = wb_pricing.per_token_pricing(mid)
+        except Exception:
+            pricing = None
+        if pricing:
+            item["pricing"] = pricing
     return item
 def read_product_config_models(realm=None):
     """Read the desktop app's cached catalog: [(id, meta), ...].
@@ -15843,9 +15892,12 @@ def stream_messages_events(raw_iter, model, holder=None):
         "tool_order": [],
         "usage": None,
     }
+    # 计价用上游真正执行的那个模型（客户端可能请求的是别名）。
+    billed = getattr(raw_iter, "_wb_billed_model", None) or model
 
     def usage_payload():
-        return _anthropic_usage(state.get("usage"))
+        return attach_api_cost(_anthropic_usage(state.get("usage")), billed,
+                               requested_model=model)
 
     def ensure_start(chunk=None):
         if state["started"]:
@@ -15863,7 +15915,11 @@ def stream_messages_events(raw_iter, model, holder=None):
                 "model": state["model"],
                 "stop_reason": None,
                 "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
+                # 与 OpenAI 侧同一套四个字段（金额此处还是 0：真正的 token 数
+                # 在 message_delta 上），Anthropic 客户端读它来先建一条账。
+                "usage": attach_api_cost(
+                    {"input_tokens": 0, "output_tokens": 0}, billed,
+                    requested_model=model),
             }
         })
 
@@ -16174,6 +16230,11 @@ def stream_responses_events(upstream, model, holder):
         }
         u = _responses_usage(usage)
         if u:
+            # Responses 的 usage 自带一套键名（input_tokens_details.cached_tokens），
+            # 花费口径仍是同一条：挂在实际执行的那个模型上。开场那两帧没有
+            # usage（`u` 为 None），所以这里天然只落在带用量的收尾帧上。
+            attach_api_cost(u, getattr(upstream, "_wb_billed_model", None) or model,
+                            requested_model=model)
             obj["usage"] = u
         if ns_map:
             obj["output"], _nsf = apply_namespace_to_calls(obj.get("output") or [], ns_map)
@@ -17394,6 +17455,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_scheduler()
         if path == "/pricing":
             return self._get_pricing()
+        if path == "/pricing/cc-switch.json":
+            return self._get_pricing_cc_switch()
         if path == "/settings":
             return self._get_settings()
         if path == "/updates":
@@ -17797,6 +17860,24 @@ class Handler(BaseHTTPRequestHandler):
             "policies_file": wb_pricing.policies_path(),
             "timeline": wb_pricing.timeline_path(), "msg": "未运行",
         })
+
+    def _get_pricing_cc_switch(self):
+        """当前价表的 cc-switch 导出：下载成它自己的 model-pricing.json。
+
+        cc-switch 的花费显示只认这份文件，所以「在 cc-switch 里也能看到等价
+        花费」＝把网关已经生效的价（策略优先、出厂快照兜底）导成它的格式。
+        走 /pricing* 同一道鉴权（面板会话；`/pricing` 前缀在 `_is_panel_route`
+        里，API key 过不了那道门禁），文件名固定，便于浏览器直接落盘成
+        cc-switch 需要的名字。
+        """
+        if not self._authorized():
+            return
+        try:
+            payload = wb_pricing.cc_switch_pricing()
+        except Exception as exc:
+            return self._error(500, "pricing export failed: %s" % exc,
+                               "api_error")
+        return self._download("model-pricing.json", payload)
 
     def _get_settings(self):
         if not self._authorized():
@@ -18311,6 +18392,16 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=PRICING.run_once, daemon=True,
                                  name="price-refresh-inherit").start()
                 reply["pricing_refresh_started"] = True
+        if "api_cost_response" in payload:
+            # Strictly a JSON boolean, for the same reason as its neighbours:
+            # the string "false" is truthy, and an operator who turned the
+            # field off must not keep leaking cost into responses.
+            raw = payload.get("api_cost_response")
+            if not isinstance(raw, bool):
+                return self._error(400, "api_cost_response must be true or false",
+                                   "invalid_request_error")
+            wb_settings.set_api_cost_response(ACCOUNTS_DIR, raw)
+            reply["api_cost_response"] = raw
         if "enable_anthropic_messages" in payload:
             raw = payload.get("enable_anthropic_messages")
             if not isinstance(raw, bool):
@@ -19997,6 +20088,13 @@ class Handler(BaseHTTPRequestHandler):
                                   sources=sources)
         record_upstream_usage(upstream, model, chat_obj.get("usage"), stream=False, elapsed_ms=wall, fp=fp,
                      account=account.uid, key=self._key_id(), effort=effort)
+        # 与 /v1/chat/completions 同口径：usage 是 Responses 形状，价按实际执行
+        # 的模型算，客户端写的名字只在查不到价时兜底。
+        usage_obj = result.get("usage")
+        if isinstance(usage_obj, dict):
+            attach_api_cost(usage_obj,
+                            getattr(upstream, "_wb_billed_model", None) or model,
+                            requested_model=model)
         return self._json(200, result)
 
     def _handle_messages_count_tokens(self, payload):
@@ -20120,6 +20218,13 @@ class Handler(BaseHTTPRequestHandler):
             wall = int((time.time() - t_start) * 1000)
             record_upstream_usage(upstream, model, chat_obj.get("usage"), stream=False, elapsed_ms=wall,
                          fp=fp, account=account.uid, key=self._key_id(), effort=effort)
+            # 与流式 message_start.message.usage 同一份口径：非流式响应本身
+            # 就是一个 message 对象，客户端不该因为没走 SSE 就看不到花费。
+            usage = result.get("usage")
+            if isinstance(usage, dict):
+                attach_api_cost(usage,
+                                getattr(upstream, "_wb_billed_model", None) or model,
+                                requested_model=model)
             return self._json(200, result)
         except Exception as exc:
             wall = int((time.time() - t_start) * 1000)
@@ -20528,6 +20633,11 @@ class Handler(BaseHTTPRequestHandler):
                         if u:
                             if last_usage is None or (u.get("total_tokens") or 0) >= (last_usage.get("total_tokens") or 0):
                                 last_usage = u
+                            # API 等价花费：只挂在这帧上——它本来就是上游发 token 数
+                            # 的那一帧，别的帧一个字节都不动，也不额外多出一帧。
+                            attach_api_cost(
+                                u, getattr(upstream, "_wb_billed_model", None) or model,
+                                requested_model=model)
                         for ch in (maybe.get("choices") or []):
                             delta = ch.get("delta") or {}
                             if delta.get("reasoning_content"):
@@ -20630,6 +20740,12 @@ class Handler(BaseHTTPRequestHandler):
                      elapsed_ms=wall, ttft_ms=first_ms,
                      gen_ms=(wall - first_ms) if first_ms is not None else None,
                      fp=fp, account=account.uid, key=self._key_id(), effort=effort)
+        # API 等价花费：挂在这份响应自己那块 usage 上（没有 usage 就不新造一块——
+        # 客户端看不到 token 数时，凭空出现的花费只会让人以为账单多了）。
+        usage = result.get("usage")
+        if isinstance(usage, dict):
+            attach_api_cost(usage, getattr(upstream, "_wb_billed_model", None) or model,
+                            requested_model=model)
         return self._json(200, result)
 
 def running_version():
