@@ -392,7 +392,10 @@ class JsonHandler(FakeHandler):
         FakeHandler.__init__(self)
         self.json_body = None
 
-    def _json(self, status, payload):
+    def _json(self, status, payload, extra_headers=None):
+        # extra_headers carries the X-Api-Cost-* mirror when the cost switch is
+        # on; this stub stands in for the real writer, so it takes the same
+        # signature (and ignores the headers, which the cost suite covers).
         self.json_body = payload
         return status, payload
 

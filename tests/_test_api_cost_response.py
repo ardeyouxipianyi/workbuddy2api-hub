@@ -16,6 +16,8 @@ additive contract that closes the gap:
   E    `/v1/models` carries a per-token `pricing` block whose numbers are
        fixed-point strings - `0.00000004186`, never `4.186e-08`.
   F    the cc-switch export speaks that app's own field names and units.
+  G    the same amounts ride out as `X-Api-Cost-*` headers on non-streaming
+       replies; streaming replies only announce `X-Api-Cost-In-Stream`.
 
 Unpriced is never free. An unknown model reports null components and
 `pricing_known: false`, because a zero is a number somebody can bill against.
@@ -25,6 +27,7 @@ No network, no credentials. Every directory is a `tempfile` one and removed in
 `tearDown`, so the checkout stays clean.
 """
 import copy
+import io
 import json
 import os
 import shutil
@@ -399,6 +402,127 @@ class ResponseAttachTests(_CostTest):
         self.assertIsNone(usage["cost"])
         self.assertIs(usage["pricing_known"], False)
         self.assertIn("prompt_tokens", usage)
+
+
+class _FakeHandler(object):
+    """Just enough of the request handler for `_json` to write a reply."""
+
+    _json_etag = None
+
+    def __init__(self):
+        self.code = None
+        self.headers_sent = []
+        self.path = "/v1/chat/completions"
+        self.close_connection = False
+        self.wfile = io.BytesIO()
+
+    def send_response(self, code):
+        self.code = code
+
+    def send_header(self, name, value):
+        self.headers_sent.append((name, value))
+
+    def end_headers(self):
+        pass
+
+
+class _ExplodingHandler(_FakeHandler):
+    """`send_header` fails for one name, the way a socket error would."""
+
+    def send_header(self, name, value):
+        if name == "X-Api-Cost-Cny":
+            raise OSError("wire went away")
+        _FakeHandler.send_header(self, name, value)
+
+
+def _send_json(headers, handler_cls=_FakeHandler):
+    handler = handler_cls()
+    wb_proxy.Handler._json(handler, 200, {"ok": True}, headers)
+    return handler
+
+
+class ResponseHeaderTests(_CostTest):
+    """Contract G: the same numbers on the wire, for clients that read headers.
+
+    cc-switch does not use these (it prices from its own table), but a gateway,
+    an nginx access log or a `curl -i` show the request's cost without anyone
+    re-reading the body. Streaming replies cannot know the amount at header
+    time, so they only announce where it will arrive.
+    """
+
+    def test_a_priced_response_mirrors_the_body_numbers(self):
+        usage = wb_proxy.attach_api_cost(self.usage(), self.model)
+        headers = dict(wb_proxy.api_cost_headers(usage))
+        self.assertEqual(headers["X-Api-Cost-Usd"], "%.6f" % usage["cost"])
+        self.assertEqual(headers["X-Api-Cost-Cny"], "%.6f" % usage["cost_cny"])
+        self.assertEqual(headers["X-Api-Cost-Known"], "true")
+        self.assertEqual(headers["X-Api-Pricing-Source"],
+                         usage["cost_details"]["pricing_source"])
+        self.assertEqual(headers["X-Api-Cost-Model"],
+                         usage["cost_details"]["pricing_model"])
+
+    def test_the_header_amounts_are_decimal_strings_not_floats(self):
+        # `1e-05` in a header is a value half the log parsers read as zero.
+        usage = wb_proxy.attach_api_cost(
+            self.usage(prompt=1, completion=1, cached=0), self.model)
+        headers = dict(wb_proxy.api_cost_headers(usage))
+        for name in ("X-Api-Cost-Usd", "X-Api-Cost-Cny"):
+            self.assertIsInstance(headers[name], str)
+            self.assertNotIn("e", headers[name].lower(), headers[name])
+
+    def test_every_header_is_ascii_so_http_can_encode_it(self):
+        usage = wb_proxy.attach_api_cost(self.usage(), self.model)
+        for name, value in wb_proxy.api_cost_headers(usage):
+            name.encode("latin-1")
+            value.encode("latin-1")
+
+    def test_an_unpriced_response_sends_no_amount_only_known_false(self):
+        self.settings(api_cost_response=True)
+        usage = wb_proxy.attach_api_cost(
+            self.usage(), "no-such-model-in-the-card")
+        self.assertEqual(wb_proxy.api_cost_headers(usage),
+                         [("X-Api-Cost-Known", "false")],
+                         "an unpriced request must not report 0.000000")
+
+    def test_the_switch_off_sends_no_headers_at_all(self):
+        self.settings(api_cost_response=False)
+        usage = wb_proxy.attach_api_cost(self.usage(), self.model)
+        self.assertEqual(wb_proxy.api_cost_headers(usage), [])
+
+    def test_a_stream_announces_where_the_cost_arrives(self):
+        self.settings(api_cost_response=True)
+        self.assertEqual(wb_proxy.api_cost_stream_headers(),
+                         [("X-Api-Cost-In-Stream", "usage")])
+
+    def test_the_switch_off_sends_no_stream_header_either(self):
+        self.settings(api_cost_response=False)
+        self.assertEqual(wb_proxy.api_cost_stream_headers(), [])
+
+    def test_the_body_writer_emits_the_headers_it_is_handed(self):
+        usage = wb_proxy.attach_api_cost(self.usage(), self.model)
+        handler = _send_json(wb_proxy.api_cost_headers(usage))
+        self.assertIn(("X-Api-Cost-Known", "true"), handler.headers_sent)
+        self.assertIn(("X-Api-Cost-Usd", "%.6f" % usage["cost"]),
+                      handler.headers_sent)
+        self.assertIn(b'"ok"', handler.wfile.getvalue())
+
+    def test_a_plain_json_reply_gains_no_cost_headers(self):
+        # Everything else on the panel shares `_json`; only cost replies grow.
+        handler = _send_json(None)
+        self.assertEqual(
+            [name for name, _ in handler.headers_sent
+             if name.lower().startswith("x-api-cost")], [])
+
+    def test_one_unwritable_header_does_not_take_the_reply_down(self):
+        usage = wb_proxy.attach_api_cost(self.usage(), self.model)
+        handler = _send_json(wb_proxy.api_cost_headers(usage),
+                            handler_cls=_ExplodingHandler)
+        self.assertIn(b'"ok"', handler.wfile.getvalue())
+        self.assertIn(("X-Api-Cost-Usd", "%.6f" % usage["cost"]),
+                      handler.headers_sent)
+        self.assertIn(("X-Api-Cost-Known", "true"), handler.headers_sent)
+        self.assertNotIn("X-Api-Cost-Cny",
+                         [name for name, _ in handler.headers_sent])
 
 
 class ModelsPricingTests(_CostTest):

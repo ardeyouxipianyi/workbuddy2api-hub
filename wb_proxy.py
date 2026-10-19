@@ -656,6 +656,70 @@ def attach_api_cost(usage, model, requested_model=None, accounts_dir=None):
     return usage
 
 
+def api_cost_headers(usage):
+    """把这块 usage 里的花费镜像成响应头，给只读头、不读 body 的客户端与网关。
+
+    只在 attach_api_cost 真的挂过花费时才产出：开关关掉的响应里没有
+    pricing_known 这个键，于是一个头都不多——与加这个功能之前完全一致。
+
+    金额写成 6 位小数定点串（与 body 同一份精度），永远不是 "1e-05" 这种
+    科学计数法：curl -i、nginx 日志、只读头的客户端都能直接用。未定价时只发
+    X-Api-Cost-Known: false，不发金额——0 会被当成"免费"，和 JSON 里的 null
+    同一个理由。pricing_source 的取值与 body 的 cost_details 一致（builtin 或
+    12 位策略 id），好让"这个数用哪张价表算的"在响应头上也能对上。
+    """
+    if not isinstance(usage, dict) or "pricing_known" not in usage:
+        return []
+    headers = []
+    if usage.get("pricing_known"):
+        for name, key in (("X-Api-Cost-Usd", "cost"),
+                          ("X-Api-Cost-Cny", "cost_cny")):
+            value = usage.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            headers.append((name, "%.6f" % value))
+        details = usage.get("cost_details")
+        if isinstance(details, dict):
+            source = details.get("pricing_source")
+            if isinstance(source, str) and source:
+                headers.append(("X-Api-Pricing-Source", source))
+            priced_model = details.get("pricing_model")
+            if isinstance(priced_model, str) and priced_model:
+                headers.append(("X-Api-Cost-Model", priced_model))
+        headers.append(("X-Api-Cost-Known", "true"))
+    else:
+        headers.append(("X-Api-Cost-Known", "false"))
+    return headers
+
+
+def api_cost_stream_headers():
+    """流式响应能提前发的部分：金额要等最后一帧的 usage 才算得出来。
+
+    这里只声明"花费在流里、读最后的 usage"，不臆造一个数。开关关掉时一个头
+    都不发。
+    """
+    try:
+        if wb_pricing.api_cost_response(ACCOUNTS_DIR):
+            return [("X-Api-Cost-In-Stream", "usage")]
+    except Exception:
+        pass
+    return []
+
+
+def send_cost_headers(handler, headers):
+    """把 api_cost_headers() 产出的头顶到线上；某个头发不出去也不许影响响应。
+
+    写成模块级函数而不是 Handler 的方法：响应头的产生与发送跟具体 handler
+    实例无关，测试里的假 handler 只要实现了 send_header 就能复用同一段逻辑
+    （`_json` 和三个 SSE 发送器都走这里）。
+    """
+    for name, value in headers or ():
+        try:
+            handler.send_header(name, str(value))
+        except Exception as exc:
+            log("api cost header %s dropped: %s" % (name, exc))
+
+
 def row_realm(row):
     """The realm a log row belongs to.
 
@@ -16874,11 +16938,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         log(fmt % args)
-    def _json(self, code, obj):
+    def _json(self, code, obj, extra_headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        send_cost_headers(self, extra_headers)
         # 只有 _json_cached() 覆盖的只读接口才有校验符；其余调用点保持原样，
         # 一个头都不多发。
         etag = self._json_etag
@@ -19966,6 +20031,7 @@ class Handler(BaseHTTPRequestHandler):
     def _responses_stream_response(self, upstream, model, custom_names, request_meta, fp, account, t_start, namespace_map=None, base_body=None, session_key=None, realm=None, effort=None):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        send_cost_headers(self, api_cost_stream_headers())
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         if cors_origin_allowed(self.path):
@@ -20095,7 +20161,7 @@ class Handler(BaseHTTPRequestHandler):
             attach_api_cost(usage_obj,
                             getattr(upstream, "_wb_billed_model", None) or model,
                             requested_model=model)
-        return self._json(200, result)
+        return self._json(200, result, api_cost_headers(usage_obj))
 
     def _handle_messages_count_tokens(self, payload):
         """Best-effort Anthropic count_tokens endpoint.
@@ -20225,7 +20291,7 @@ class Handler(BaseHTTPRequestHandler):
                 attach_api_cost(usage,
                                 getattr(upstream, "_wb_billed_model", None) or model,
                                 requested_model=model)
-            return self._json(200, result)
+            return self._json(200, result, api_cost_headers(usage))
         except Exception as exc:
             wall = int((time.time() - t_start) * 1000)
             record_error(model, 502, "messages upstream error: %s" % exc,
@@ -20242,6 +20308,7 @@ class Handler(BaseHTTPRequestHandler):
                                   session_meta=None, effort=None):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        send_cost_headers(self, api_cost_stream_headers())
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         if cors_origin_allowed(self.path):
@@ -20574,6 +20641,7 @@ class Handler(BaseHTTPRequestHandler):
     def _chat_stream_response(self, upstream, model, fp, account, t_start, effort=None):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            send_cost_headers(self, api_cost_stream_headers())
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             if cors_origin_allowed(self.path):
@@ -20746,7 +20814,7 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(usage, dict):
             attach_api_cost(usage, getattr(upstream, "_wb_billed_model", None) or model,
                             requested_model=model)
-        return self._json(200, result)
+        return self._json(200, result, api_cost_headers(usage))
 
 def running_version():
     """The version this process reports, e.g. "1.6.19".

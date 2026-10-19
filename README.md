@@ -204,6 +204,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 - **展示位置**：数据看板「API 等价花费」卡片、各账号用量透视与模型性能表**最后一列**、网关页「估算价格」卡片、最近请求**最后一列**（悬停可看完整定价链：三档原始单价、汇率、匹配证据、策略 id 与补算标记 `*`）。
 - **人民币 / 美元**一键切换（记在浏览器本地）；快照覆盖不到的模型显示 `—`，不猜数字。
 - **响应里的花费**（设置 →「模型价格估算」下的 `api_cost_response`，默认开启）：除看板之外，`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式都算）的 `usage` 里再追加 `cost`（美元）、`cost_cny`、`cost_details`（输入 / 输出 / 缓存读 / 缓存写分项、总价、汇率、命中的定价策略 id——直接命中出厂快照时是 `builtin`，命中一条价策略时是 12 位策略 id，可在看板悬停与 `/pricing` 里对上同一条）与 `pricing_known` 四个字段，金额与看板同一套算法（都走 `wb_pricing`），客户端不必自己维护价表。未定价的模型这四项一律 `null` 配 `pricing_known:false`——不猜、不写 0；内部取价出错时同样降级成这组 `null`，不会让本次回复失败。关掉该键后响应与加这个功能之前逐字节相同。Anthropic 流式的 `message_start` 帧里 token 尚未开始计数，那一帧的金额是 `0.0`（`pricing_known` 仍为 `true`）——本次请求的最终金额请以最后一个 `message_delta` 的 `usage` 为准。
+- **响应头里的花费**：同一个开关同时把金额镜像到非流式回复的响应头上——`X-Api-Cost-Usd`（美元，6 位小数定点串，不会出现 `1e-05`）、`X-Api-Cost-Cny`、`X-Api-Cost-Known`（`true`/`false`）、`X-Api-Pricing-Source`（`builtin` 或 12 位策略 id，与 body 的 `cost_details` 一致）、`X-Api-Cost-Model`（实际取价的模型 id）。给只读响应头、不读 body 的网关与访问日志用（`curl -i` 一眼就看到）；cc-switch 不看这些头，它按自己的 `model_pricing` 表算钱，要让它不再显示「未定价」请用下一项的导出。未定价只发 `X-Api-Cost-Known: false`、不发金额（0 会被当成免费）；流式回复在发头时还不知道金额，只发 `X-Api-Cost-In-Stream: usage` 声明「花费在流里、读最后一帧的 `usage`」，别把它当成缺字段。开关关掉时这些头一个都不发。
 - **给 cc-switch 的定价导出**：`GET /pricing/cc-switch.json` 把当前价表导出成 cc-switch 认识的 `model-pricing.json`（camelCase、每百万 token 的十进制字符串），在 cc-switch「设置 → 模型定价」里导入后，它就能按同一套价给请求算出金额，请求详情不再显示「未定价」。字段含义、导入步骤与显示精度说明见 [docs/cc-switch-pricing.md](docs/cc-switch-pricing.md)。
 
 ### 7. 本地网络工具（可选，默认关闭）
@@ -440,7 +441,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 - **响应侧 API 等价花费**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（流式与非流式）的 `usage` 追加 `cost` / `cost_cny` / `cost_details` / `pricing_known`；`/v1/models` 每项对已定价模型增加 `pricing` 块。新设置键 `api_cost_response` 默认开启，关掉后响应逐字节回到旧行为；未定价模型一律 `null` + `pricing_known:false`。
 - **`GET /pricing/cc-switch.json`**：把当前价表导出成 cc-switch 的 `model-pricing.json`，导入后 cc-switch 请求详情不再显示「未定价」。字段、导入步骤与 4 位小数显示精度说明见 [docs/cc-switch-pricing.md](docs/cc-switch-pricing.md)。
-- **测试**：新增 `_test_api_cost_response`（25 例）与 `_test_ccswitch_pricing_schema`（14 例）两个套件，总数变为 174 个套件：129 个 Python + 45 个 JS。
+- **响应头里的 API 等价花费**：非流式回复加 `X-Api-Cost-Usd` / `X-Api-Cost-Cny` / `X-Api-Cost-Known` / `X-Api-Pricing-Source` / `X-Api-Cost-Model`，流式回复加 `X-Api-Cost-In-Stream: usage`（金额在最后一帧的 `usage` 里）。与 body 里的花费同源同精度，开关仍由 `api_cost_response` 控制，关掉后一个头都不发。
+- **测试**：新增 `_test_api_cost_response`（35 例）与 `_test_ccswitch_pricing_schema`（14 例）两个套件，总数变为 174 个套件：129 个 Python + 45 个 JS。
 
 已发布版本的完整记录（v1.4.5 ~ v1.7.16，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
