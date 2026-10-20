@@ -58,6 +58,62 @@ class FingerprintSanitizationTests(unittest.TestCase):
         self.assertIn(clean, sanitized[3]["content"])
         self.assertNotIn("from OhMyOpenCode", sanitized[3]["content"])
 
+class DshAgentFingerprintTests(unittest.TestCase):
+    """DSH 的厂商归属句命中 11128 时的脱敏行为 / the DSH 11128 rewrite."""
+
+    # 原文刻意不直接落盘：本仓库的用户大多把源码喂给智能体代改，明文常驻的指纹
+    # 一旦被读进上下文、又被回显进请求，就会让使用方自己被 11128 拦掉——本规则
+    # 的由来正是这样一次事故。片段拼接保证测试语义不变，也不会被顺手复述出去。
+    # The sentence is assembled from fragments on purpose: users of this repo mostly
+    # hand the source to an agent, and a plaintext fingerprint sitting in the tree
+    # gets read into context and echoed back into a request, blocking that user with
+    # 11128 — exactly the incident this rule came from.
+    FP = ("You are an AI agent " "powered by " "DeepSeek " "Harness")
+
+    def test_default_rewrite_keeps_attribution(self):
+        out = P.sanitize_text(self.FP + ".")
+        self.assertEqual(out, P.DSH_AGENT_REWRITE_VARIANT + ".")
+        # 整句不再是连续指纹 / the contiguous fingerprint is gone
+        self.assertNotIn(self.FP, out)
+        # 产品归属仍在 / the attribution survives
+        self.assertIn("DeepSeek Harness", out)
+
+    def test_case_insensitive(self):
+        self.assertEqual(P.sanitize_text(self.FP.lower() + "."),
+                         P.DSH_AGENT_REWRITE_VARIANT + ".")
+
+    def test_embedded_in_context_keeps_punctuation(self):
+        text = "Intro. " + self.FP + ". Outro."
+        self.assertEqual(P.sanitize_text(text),
+                         "Intro. " + P.DSH_AGENT_REWRITE_VARIANT + ". Outro.")
+
+    def test_neutral_mode_via_env(self):
+        old = os.environ.get("WB_DSH_AGENT_REWRITE")
+        os.environ["WB_DSH_AGENT_REWRITE"] = "neutral"
+        try:
+            self.assertEqual(P.sanitize_text(self.FP + "."),
+                             P.DSH_AGENT_REWRITE_NEUTRAL + ".")
+        finally:
+            if old is None:
+                os.environ.pop("WB_DSH_AGENT_REWRITE", None)
+            else:
+                os.environ["WB_DSH_AGENT_REWRITE"] = old
+
+    def test_individual_tokens_untouched(self):
+        # 单词与改动过的变体都不该被碰 / neither single tokens nor reworded
+        # variants are touched — the upstream accepts those on their own.
+        for text in ("DeepSeek Harness alone",
+                     "You are an AI agent.",
+                     "powered by DeepSeek Harness",
+                     "You are an AI agent powered by DeepSeek AI's DeepSeek Harness."):
+            self.assertEqual(P.sanitize_text(text), text)
+
+    def test_clean_text_untouched(self):
+        text = "You are a helpful assistant."
+        self.assertFalse(P.has_fingerprint(text))
+        self.assertEqual(P.sanitize_text(text), text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

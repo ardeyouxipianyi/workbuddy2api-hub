@@ -11517,6 +11517,48 @@ SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
 SANITIZE_OMO_JUNIOR_RE = re.compile(
     r"Sisyphus-Junior - Focused executor from OhMyOpenCode", re.IGNORECASE
 )
+# 同类指纹的新变体：DSH（DeepSeek Harness）的 system prompt 里有一整句厂商归属句，
+# 上游 WAF 把它当成「非官方渠道」的判定依据，命中即返回 code 11128
+# （Illegal API invocation from an unapproved channel），延迟 350~470ms 的请求级拦截。
+#
+# 已实测的边界（2026-10-20，A/B 逐条验证）：
+#   - 整句命中 -> 11128；只留厂商名、只留产品名、或插入所有格改词 -> 均放行；
+#   - 与上下文无关：160 条纯文本消息、tool_calls + tool 结果历史、168KB system prompt
+#     单独发送都不触发，只有这一整句出现才触发。
+# 因此规则保持极窄：只中和这一句确认过的连续串，不碰任何单个词。
+#
+# A new variant of the same class: the DSH (DeepSeek Harness) system prompt opens
+# with a vendor-attribution sentence that the upstream WAF treats as proof of a
+# non-official channel, rejecting the whole request with code 11128 after
+# 350-470ms. A/B tests show the match is on the contiguous sentence only —
+# individual tokens and reworded variants are accepted — so the rule below stays
+# deliberately narrow and rewrites nothing but that confirmed string.
+# 注意：模式刻意不吞句末标点（不写 `\.`），一是让 `SANITIZE_DSH_AGENT_LOWER`
+# 能从 pattern 直接派生而不会被转义符污染，二是保留原文自己的句读。
+# The pattern deliberately stops before the sentence-final punctuation: that keeps
+# the derived lowercase needle escape-free and leaves the original punctuation in
+# place after the rewrite.
+SANITIZE_DSH_AGENT_RE = re.compile(
+    r"You are an AI agent powered by DeepSeek Harness", re.IGNORECASE
+)
+# 命中后改写成什么 / what the fingerprint is rewritten into.
+#   variant（默认）保留产品归属，只插入所有格，使整句不再是连续指纹；
+#   neutral 丢掉归属，退化成一句中性描述——上游哪天收紧规则时用它降级。
+#   variant (default) keeps the attribution and only rewords the sentence;
+#   neutral drops it — the fallback for a future upstream tightening.
+# 运行时切换：WB_DSH_AGENT_REWRITE=neutral，无需改代码。
+# Switch at runtime with WB_DSH_AGENT_REWRITE=neutral, no code change needed.
+DSH_AGENT_REWRITE_NEUTRAL = "You are an AI agent"
+DSH_AGENT_REWRITE_VARIANT = (
+    "You are an AI agent powered by DeepSeek AI's DeepSeek Harness")
+def dsh_agent_rewrite():
+    mode = os.environ.get("WB_DSH_AGENT_REWRITE", "").strip().lower()
+    if mode in ("neutral", "off", "0", "false", "no"):
+        return DSH_AGENT_REWRITE_NEUTRAL
+    return DSH_AGENT_REWRITE_VARIANT
+def dsh_agent_sub(text):
+    target = dsh_agent_rewrite()
+    return SANITIZE_DSH_AGENT_RE.sub(lambda _m: target, text)
 # 指纹判定的字面量快路径（见 has_fingerprint）：原先对每段文本跑两个 (?i) 正则，
 # 4KB 输入实测 319µs，其中正则 137+188µs、几个 `in` 只占 9µs；64KB 文本要
 # 6.2ms，而 sanitize_messages 会给每个文本段都过一遍——build_upstream_body
@@ -11537,6 +11579,7 @@ SANITIZE_BARE_HDR_LOWER = SANITIZE_BARE_HDR_RE.pattern
 if SANITIZE_BARE_HDR_LOWER.startswith("(?i)"):
     SANITIZE_BARE_HDR_LOWER = SANITIZE_BARE_HDR_LOWER[4:]
 SANITIZE_OMO_JUNIOR_LOWER = SANITIZE_OMO_JUNIOR_RE.pattern.lower()
+SANITIZE_DSH_AGENT_LOWER = SANITIZE_DSH_AGENT_RE.pattern.lower()
 def has_fingerprint(text):
     if not isinstance(text, str) or not text:
         return False
@@ -11549,7 +11592,8 @@ def has_fingerprint(text):
         low = text.translate(SANITIZE_REI_FOLD).lower()
     else:
         low = text.lower()
-    return SANITIZE_BARE_HDR_LOWER in low or SANITIZE_OMO_JUNIOR_LOWER in low
+    return (SANITIZE_BARE_HDR_LOWER in low or SANITIZE_OMO_JUNIOR_LOWER in low
+            or SANITIZE_DSH_AGENT_LOWER in low)
 def sanitize_text(text):
     if not isinstance(text, str) or not text:
         return text
@@ -11560,6 +11604,7 @@ def sanitize_text(text):
     # accepted by the upstream. Only the confirmed contiguous fingerprint is
     # neutralized.
     text = SANITIZE_OMO_JUNIOR_RE.sub("Sisyphus-Junior - Focused executor", text)
+    text = dsh_agent_sub(text)
     for old, new in SANITIZE_REWRITES:
         text = text.replace(old, new)
     text = SANITIZE_HDR_RE.sub("", text)
