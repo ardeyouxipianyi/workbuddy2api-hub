@@ -31,6 +31,20 @@ class FingerprintSanitizationTests(unittest.TestCase):
         self.assertEqual(P.sanitize_text("from OhMyOpenCode alone"), "from OhMyOpenCode alone")
         self.assertEqual(P.sanitize_text("Sisyphus master agent"), "Sisyphus master agent")
 
+    def test_dsh_harness_fingerprint_neutralized(self):
+        # WorkBuddy's WAF matches this identity sentence verbatim and answers
+        # 400 / code 11128 ("Illegal API invocation from an unapproved channel").
+        fp = "You are an AI agent powered by DeepSeek Harness."
+        self.assertEqual(P.sanitize_text(fp), "You are a helpful AI assistant.")
+        # No trailing period: the rewrite still covers it.
+        self.assertEqual(P.sanitize_text(fp[:-1]), "You are a helpful AI assistant")
+        # Embedded in a longer system prompt: only that sentence changes.
+        text = fp + "\nUse the read tool before editing."
+        self.assertEqual(P.sanitize_text(text),
+                         "You are a helpful AI assistant.\nUse the read tool before editing.")
+        # The bare product name is accepted upstream and must stay untouched.
+        self.assertEqual(P.sanitize_text("DeepSeek Harness"), "DeepSeek Harness")
+
     def test_sanitize_messages_covers_all_roles_and_tool_args(self):
         fp = "Sisyphus-Junior - Focused executor from OhMyOpenCode"
         clean = "Sisyphus-Junior - Focused executor"

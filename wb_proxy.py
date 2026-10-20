@@ -11493,8 +11493,11 @@ SANITIZE_FEATURES = (
     "You are a coding agent running in the Codex CLI",
     "github.com/anthropics/",
     "11128",
+    "You are an AI agent powered by DeepSeek Harness",
 )
 SANITIZE_REWRITES = (
+    ("You are an AI agent powered by DeepSeek Harness",
+     "You are a helpful AI assistant"),
     ("You are Claude Code, Anthropic's official CLI for Claude",
      "You are Claude Code, Anthropic's official CLI tool for Claude"),
     ("Main branch (you will usually use this for PRs)",
