@@ -10,10 +10,12 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
+import wb_proxy as proxy
 import wb_settings
 
 
@@ -103,6 +105,83 @@ class SchedulerFilterTests(unittest.TestCase):
         self.assertIsNotNone(account)
         self.assertEqual(account.uid, "uid-b")
         self.assertEqual(self.pool.affinity.recent("conv-1")[0], "uid-b")
+
+
+class FakeRequest(object):
+    """Just enough of the handler for a /settings/save round-trip."""
+
+    _handle_settings_save = proxy.Handler._handle_settings_save
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.answering = []
+
+    def _payload_or_error(self, allow_list=False):
+        return self.payload
+
+    def _error(self, status, message, kind=""):
+        self.answering.append(("error", status, message))
+        return status, message
+
+    def _json(self, status, payload):
+        self.answering.append(("json", status, payload))
+        return status, payload
+
+
+class SettingsSaveKeepsKeyFieldsTests(unittest.TestCase):
+    """/settings/save must not rebuild a key without its new fields.
+
+    2026-10-21: the handler assembled each key from a fixed field list and left
+    out `accounts` and `concurrency_limit`, so every save silently erased an
+    account whitelist and reset the per-key concurrency limit to 0 - while
+    dashboard.html kept posting both fields (13300-13301) and reading the limit
+    back for its input (11209). The panel therefore showed 0 for a key that had
+    one, and saving anything wrote that 0 through.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="key-save-fields-")
+        wb_settings.set_api_keys(self.directory, [{
+            "id": "k1", "name": "bound", "key": "sk-bound-secret",
+            "realm": "intl", "models": ["deepseek*"],
+            "accounts": ["uid-1", "uid-2"], "concurrency_limit": 4,
+        }])
+        patcher = mock.patch.multiple(
+            proxy, ACCOUNTS_DIR=self.directory, POOL=None, SCHEDULER=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def save(self, row):
+        proxy.Handler._handle_settings_save(FakeRequest({"api_keys": [row]}))
+        return wb_settings.api_keys(self.directory)[0]
+
+    def test_a_row_that_omits_both_fields_keeps_them(self):
+        kept = self.save({"id": "k1", "name": "bound", "key": "", "realm": "intl"})
+        self.assertEqual(kept["accounts"], ["uid-1", "uid-2"])
+        self.assertEqual(kept["concurrency_limit"], 4)
+        self.assertEqual(kept["key"], "sk-bound-secret")
+
+    def test_an_explicit_list_replaces_the_whitelist(self):
+        kept = self.save({"id": "k1", "key": "", "accounts": ["uid-3"]})
+        self.assertEqual(kept["accounts"], ["uid-3"])
+
+    def test_an_explicit_empty_list_removes_the_whitelist(self):
+        kept = self.save({"id": "k1", "key": "", "accounts": []})
+        self.assertEqual(kept["accounts"], [])
+        self.assertIsNone(wb_settings.key_allowed_accounts(kept))
+
+    def test_an_explicit_limit_replaces_the_stored_one(self):
+        kept = self.save({"id": "k1", "key": "", "concurrency_limit": 7})
+        self.assertEqual(kept["concurrency_limit"], 7)
+
+    def test_an_explicit_zero_removes_the_limit(self):
+        kept = self.save({"id": "k1", "key": "", "concurrency_limit": 0})
+        self.assertEqual(kept["concurrency_limit"], 0)
+
+    def test_the_view_returns_both_fields(self):
+        row = proxy.runtime_settings_view()["api_keys"][0]
+        self.assertEqual(row["accounts"], ["uid-1", "uid-2"])
+        self.assertEqual(row["concurrency_limit"], 4)
 
 
 if __name__ == "__main__":

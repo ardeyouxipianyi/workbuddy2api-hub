@@ -64,6 +64,30 @@ class ConcurrencySettingTests(unittest.TestCase):
         self.assertEqual(wb_settings.daily_chat_web_concurrency(d), 1)
 
 
+class RuntimeViewTests(unittest.TestCase):
+    """The panel reads /settings and posts it back on the next save.
+
+    `runtime_settings_view()` listed `daily_chat_web` and its retry/attempts/
+    timeout/fallback neighbours but not `daily_chat_web_concurrency`, so
+    dashboard.html fell back to 1 and posted 1 back - a configured concurrency
+    of 4 was flattened the first time any setting was saved.
+    """
+
+    def _view(self, directory):
+        with mock.patch.multiple(wb_proxy, ACCOUNTS_DIR=directory,
+                                 POOL=None, SCHEDULER=None):
+            return wb_proxy.runtime_settings_view()
+
+    def test_view_reports_the_stored_concurrency(self):
+        d = tempfile.mkdtemp(prefix="daily-conc-view-")
+        wb_settings.set_daily_chat_web_concurrency(d, 4)
+        self.assertEqual(self._view(d).get("daily_chat_web_concurrency"), 4)
+
+    def test_view_defaults_to_one_when_unset(self):
+        d = tempfile.mkdtemp(prefix="daily-conc-view-default-")
+        self.assertEqual(self._view(d).get("daily_chat_web_concurrency"), 1)
+
+
 class BatchTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="daily-conc-batch-")

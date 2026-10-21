@@ -10084,6 +10084,10 @@ def runtime_settings_view():
             "realm": entry.get("realm") or "",
             "models": list(entry.get("models") or []),
             "accounts": list(entry.get("accounts") or []),
+            # The panel reads this to prefill its per-key limit input and
+            # posts it back on save. Without it the panel always shows 0 and
+            # overwrites a stored limit with 0 the moment any key is saved.
+            "concurrency_limit": int(entry.get("concurrency_limit") or 0),
             "enabled": entry.get("enabled", True) is not False,
             "masked": (raw[:4] + "*" * 6 + raw[-4:]) if len(raw) > 8 else "*" * len(raw),
             "source": entry.get("source") or "panel",
@@ -10133,6 +10137,11 @@ def runtime_settings_view():
         "identity": wb_settings.identity_config(ACCOUNTS_DIR),
         "identity_version_defaults": wb_identity.default_versions(),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
+        # dashboard.html reads this from the settings payload; omitting it made
+        # the panel fall back to 1 and post 1 back on the next save, silently
+        # flattening a concurrency the user had configured.
+        "daily_chat_web_concurrency":
+            wb_settings.daily_chat_web_concurrency(ACCOUNTS_DIR),
         "daily_chat_web_retry": wb_settings.daily_chat_web_retry(ACCOUNTS_DIR),
         "daily_chat_web_attempts":
             wb_settings.daily_chat_web_attempts(ACCOUNTS_DIR,
@@ -18897,6 +18906,18 @@ class Handler(BaseHTTPRequestHandler):
                     models = item.get("models")
                 else:
                     models = stored.get("models")
+                # Same rule for the two fields the panel edits per key. They
+                # were rebuilt away below until this fix, so every save undid
+                # the account whitelist and reset the concurrency limit to 0 -
+                # even though dashboard.html posts both of them.
+                if "accounts" in item:
+                    accounts = item.get("accounts")
+                else:
+                    accounts = stored.get("accounts")
+                if "concurrency_limit" in item:
+                    concurrency_limit = item.get("concurrency_limit")
+                else:
+                    concurrency_limit = stored.get("concurrency_limit")
                 if "name" in item:
                     name = str(item.get("name") or "").strip()
                 else:
@@ -18912,6 +18933,8 @@ class Handler(BaseHTTPRequestHandler):
                     "key": value,
                     "realm": realm,
                     "models": models,
+                    "accounts": accounts,
+                    "concurrency_limit": concurrency_limit,
                     "enabled": enabled,
                     "created_at": created_at,
                 })
