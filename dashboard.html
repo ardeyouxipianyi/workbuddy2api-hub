@@ -7038,8 +7038,22 @@ function applyTableSort(id){
   // 把「表 → 登记项」接上，委托的点击监听才知道点的是哪张表。运行时挂，不进标记。
   table.setAttribute('data-sort-id', id);
   const rows = Array.from(tbody.children).filter(r => r.tagName === 'TR');
+  // 续行（模型冷却 / 达日限额的 cool-row）没有账号数据，不能当独立行排序：
+  // 缺值会沉底，续行就会与自己的账号行分开、堆到表尾。先按「主行 + 紧跟的
+  // 续行」分组，只对主行算排序键，重排时整组一起移动。
+  const groups = [];
+  rows.forEach(r => {
+    const isExtra = !!(r.classList && r.classList.contains('cool-row'));
+    if(isExtra && groups.length){
+      groups[groups.length - 1].extras.push(r);
+    } else {
+      groups.push({row: r, extras: []});
+    }
+  });
   const pinN = SORT_PIN_ROWS[id] || 0;
-  const body = rows.slice(pinN);
+  const pinnedGroups = groups.slice(0, pinN);
+  const bodyGroups = groups.slice(pinN);
+  const body = bodyGroups.map(g => g.row);
   const ths = Array.from(thead.querySelectorAll('th'));
   const kinds = ths.map((th, i) => colKind(id, i, body, ths.length));
   const st = SORT_STATE[id] || null;
@@ -7083,8 +7097,8 @@ function applyTableSort(id){
   if(!st || !kinds[st.col]) return;
   const kind = kinds[st.col];
   const dir = st.dir === 'asc' ? 1 : -1;
-  const sorted = body
-    .map((r, i) => [cellSortValue(r.children[st.col], kind), i, r])
+  const sortedGroups = bodyGroups
+    .map((g, i) => [cellSortValue(g.row.children[st.col], kind), i, g])
     .sort((a, b) => {
       const av = a[0], bv = b[0];
       if(av == null || bv == null){
@@ -7096,7 +7110,11 @@ function applyTableSort(id){
       return c ? c * dir : a[1] - b[1];   // 同值保持原序，表不会自己抖
     })
     .map(t => t[2]);
-  const ordered = rows.slice(0, pinN).concat(sorted);
+  const ordered = [];
+  pinnedGroups.concat(sortedGroups).forEach(g => {
+    ordered.push(g.row);
+    g.extras.forEach(r => ordered.push(r));
+  });
   /* 顺序没变就别碰 DOM：每一轮轮询都会走这里，白挪一遍行没有任何收益，只会多触发
      一轮 i18n 的 MutationObserver 重扫。 */
   if(ordered.some((r, i) => rows[i] !== r)){
