@@ -78,7 +78,9 @@ def build_backend(source, output, go="go"):
     if "module codearts2api" not in (source / "go.mod").read_text(encoding="utf-8"):
         raise ValueError("Expected the CodeArts2API source directory")
     output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(go), "build", "-o", str(output), "./cmd/server"],
+    from .backend_overlay import model_id_overlay
+    overlay = model_id_overlay(source, output.parent / "build-overlay")
+    subprocess.run([str(go), "build", "-overlay", str(overlay), "-o", str(output), "./cmd/server"],
                    cwd=str(source), check=True)
     return output
 

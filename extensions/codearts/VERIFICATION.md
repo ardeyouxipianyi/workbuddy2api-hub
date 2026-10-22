@@ -20,7 +20,7 @@
 | Real Huawei authorization page opens from login button | PASS | Real local CodeArts service, popup automatically reached auth.huaweicloud.com login form; no credentials submitted |
 | Native gateway model list | PASS | Real browser: WorkBuddy models and canonical `codeart/` names together on one listener |
 | Prefix stripping | PASS | Wire tests verify backend receives exact original `GLM-5.2` for both `codeart/` and legacy `codearts/` |
-| Real Huawei account login/model invocation | NOT_RUN | Human login has not been completed; backend currently has zero accounts |
+| Real Huawei account login/model invocation | PASS for GLM-5.3 | Human login persisted; corrected 8799 gateway returned HTTP 200 / OK, 57 tokens, 2.53 s. Other selected models were not individually validated in this follow-up |
 | Go backend build/test | PASS | Portable official Go 1.27.3, official archive SHA verified; `go test ./...` and real server build succeed; backend source unchanged |
 | Owned backend process lifecycle | PASS | Child-process test: even abrupt parent os._exit closes the Windows Job and backend port; verified-service reuse retains external ownership |
 
@@ -84,3 +84,29 @@ exact selection, cache invalidation and missing-model labels. Backend probes
 currently exclude six selected IDs as unregistered; retaining them is a user
 selection, not proof of callability. No sampling parameters or original Hub
 files were changed. Original 8788 remains untouched.
+
+## Registered model ID repair / 真实模型 ID 修复
+
+2026-10-23: the authenticated catalog declares display name GLM-5.3 but
+model_parameters.model_id=glm-5.3. The old backend selected the display name;
+uppercase requests failed as unregistered. A minimal direct lowercase request
+returned real reasoning/usage (16-token budget, finish=length, no final content).
+The corrected full gateway request then returned OK through 8800 (38 tokens,
+2.41 s) and deployed 8799 (57 tokens, 2.53 s). The same client-facing
+codeart/GLM-5.3 name is retained. This corrects the earlier account-unavailable
+interpretation; it did not establish that the account lacked GLM-5.3 access.
+
+Build-time Go overlays preserve the external source checkout. Resolution uses
+only the selected account's catalog, gives exact IDs priority and leaves ambiguous
+names unchanged. Cold managed requests discover the catalog even without an
+initial /v1/models request. Probes and benefit headers resolve the same ID.
+Embedded handlers without an auth directory retain their existing discovery flow.
+The Hub log's upstream_model remains the name sent to the CodeArts backend;
+that backend can then resolve its display alias to the real Huawei ID.
+
+The new Go contract failed against unpatched source and passed with the overlay.
+The disposable-copy runner passed all external Go packages. Python extension
+38 tests and native Hub 222 suites passed; real WorkBuddy still returned OK.
+Independent review additionally tested account collisions, exact-ID priority,
+ambiguous aliases, missing-account catalogs, build guards and a real httptest
+outbound benefit header. No Critical/Important issue remained after fixes.

@@ -30,6 +30,10 @@ python start-codearts-bridge.py --codearts-source ..\codearts2api-main
 ```
 
 构建需要 Go（版本以该源码 `go.mod` 为准）；可用 `--go-executable <go路径>`。
+构建会以 Go overlay 修正后端模型 ID 解析：使用账号目录的真实 `model_id`，
+展示名仅作为同账号内的唯一别名。原始源码不被写入；不识别的源码结构会明确失败。
+后台探测与真实请求使用同一解析结果，福利头也按真实 ID 判断。
+已构建的旧后端二进制需从源码重新构建一次，才会包含此修复。
 有已构建的程序时无需 Go：
 
 ```powershell
@@ -138,6 +142,7 @@ enforce per-Huawei-account restrictions inside that separate service.
 
 ```powershell
 python -m unittest discover -s extensions/codearts/tests -v
+python extensions/codearts/tests/run_backend_tests.py --source ../codearts2api-main --go go
 python tests/run_all.py --jobs 4
 python scripts/check_clean_checkout.py
 node --check extensions/codearts/dashboard.js

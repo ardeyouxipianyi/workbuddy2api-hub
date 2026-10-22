@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复后端将 GLM-5.3 展示名当作真实 ID 的问题，通过构建 overlay 保留原源码。
+- 按账号目录解析唯一别名，后台探测和福利路由使用同一真实 ID，避免错误判为不可用。
+- Fix backend display-name/model-ID confusion with source-preserving Go overlays.
+- Resolve unique aliases per account; use the same ID for requests, probes and benefit routing.
+
 - 支持精确筛选模型目录，排除未选择的别名与兜底项，不改写出站模型名称。
 - Support exact catalog selection without changing outbound model IDs.
 
