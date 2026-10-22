@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "base_url": "http://127.0.0.1:7866",
+  "api_key": "",
+  "api_key_env": "CODEARTS_API_KEY",
+  "timeout_seconds": 120,
+  "models_ttl_seconds": 60
+}
