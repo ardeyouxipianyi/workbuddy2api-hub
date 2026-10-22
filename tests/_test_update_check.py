@@ -35,6 +35,7 @@ _TMP = isolated_data_dirs("wb-update-check-")
 
 import wb_proxy as proxy  # noqa: E402
 import wb_settings  # noqa: E402
+import wb_update_request  # noqa: E402
 import wb_updates  # noqa: E402
 
 CURRENT = "1.6.17"
@@ -262,6 +263,68 @@ class CheckBehaviourTests(unittest.TestCase):
             self.assertFalse(revived.due())
             self.assertEqual(revived.status()["latest_version"], "1.6.18")
             self.assertTrue(revived.status()["update_available"])
+
+
+class RestartContinuityTests(unittest.TestCase):
+    """A restart must not strand the install path.
+
+    Only the version number is persisted (see the module header), so the tag and
+    the release page have to be rebuilt from it. Without that, the panel reports
+    an available update while the install button insists on a manual check
+    first - which is exactly the state every restart lands in, including the one
+    each finished update performs, and the 24h gate will not fix it on its own.
+    """
+
+    def _checked(self, directory):
+        wb_settings.set_update_check_enabled(directory, True)
+        checker(directory, FakeFetcher([release("v1.6.18")])).check()
+
+    def test_a_restart_rebuilds_the_tag_and_the_release_page(self):
+        with tempfile.TemporaryDirectory(prefix="upd-restart-") as d:
+            self._checked(d)
+            status = checker(d, FakeFetcher([release("v1.6.18")])).status()
+            self.assertEqual(status["latest_version"], "1.6.18")
+            self.assertEqual(status["latest_tag"], "v1.6.18")
+            self.assertEqual(status["release_url"], tag_url("v1.6.18"))
+            self.assertTrue(status["update_available"])
+
+    def test_the_rebuilt_tag_is_what_the_install_route_queues(self):
+        # /updates/install hands latest_tag to request_install, which only
+        # accepts a bare vX.Y.Z tag.
+        with tempfile.TemporaryDirectory(prefix="upd-restart-") as d:
+            self._checked(d)
+            tag = checker(d, FakeFetcher([])).status()["latest_tag"]
+            self.assertTrue(wb_update_request.TAG_RE.fullmatch(tag))
+            self.assertEqual(wb_updates.parse_version(tag), (1, 6, 18))
+
+    def test_rebuilding_writes_nothing_back(self):
+        # The three-field contract in settings.json is unchanged: the rebuild is
+        # in-memory only.
+        with tempfile.TemporaryDirectory(prefix="upd-restart-") as d:
+            self._checked(d)
+            before = wb_settings.update_check_state(d)
+            checker(d, FakeFetcher([]))
+            self.assertEqual(wb_settings.update_check_state(d), before)
+            self.assertEqual(sorted(before),
+                             ["last_attempt", "last_success", "latest_version"])
+
+    def test_an_unparseable_stored_version_invents_nothing(self):
+        with tempfile.TemporaryDirectory(prefix="upd-restart-") as d:
+            wb_settings.record_update_check(d, at=time.time(), success=True,
+                                            latest_version="nightly")
+            status = checker(d, FakeFetcher([])).status()
+            self.assertEqual(status["latest_tag"], "")
+            self.assertEqual(status["release_url"], "")
+            self.assertFalse(status["update_available"])
+
+    def test_the_rebuilt_page_follows_the_configured_repository(self):
+        with tempfile.TemporaryDirectory(prefix="upd-restart-") as d:
+            wb_settings.record_update_check(d, at=time.time(), success=True,
+                                            latest_version="1.6.18")
+            with mock.patch.dict(os.environ, {"WB_UPDATE_REPO": "someone/fork"}):
+                status = checker(d, FakeFetcher([])).status()
+            self.assertEqual(status["release_url"],
+                             "https://github.com/someone/fork/releases/tag/v1.6.18")
 
 
 class FailureHandlingTests(unittest.TestCase):

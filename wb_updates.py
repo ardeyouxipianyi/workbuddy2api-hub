@@ -93,6 +93,28 @@ def safe_url(value):
     return text[:300]
 
 
+def release_tag(version):
+    """vX.Y.Z 对应的发布 tag；版本号不可解析就返回 ""。
+
+    落盘只留版本号（模块头第 3 条：URL、请求头、响应体一律不落），所以重启后
+    tag 与发布页必须能从版本号重建。不重建的话，面板会显示「有新版本」而安装
+    按钮要求操作员先手动检查一次——每次重启（含每次升级自身的那次重启）都会
+    回到这个状态，而后台的 24h 节流又不会自己补上。
+    """
+    parsed = parse_version(version)
+    if not parsed:
+        return ""
+    return "v%d.%d.%d" % parsed
+
+
+def release_page(version):
+    """该版本在配置仓库里的发布页；版本号不可解析就返回 ""（不猜 URL）。"""
+    tag = release_tag(version)
+    if not tag:
+        return ""
+    return "https://github.com/%s/releases/tag/%s" % (configured_repository(), tag)
+
+
 def pick_latest(releases, current_version):
     """从一份 releases 文档里挑出最新的稳定版，没有就返回 None。
 
@@ -228,7 +250,13 @@ class UpdateChecker(threading.Thread):
 
     # ---- 状态 -----------------------------------------------------------
     def _load_state(self):
-        """把上次的记账读回来，重启后面板立刻有东西可看。"""
+        """把上次的记账读回来，重启后面板立刻有东西可看。
+
+        落盘的只有版本号，所以 tag 与发布页在这里按版本号重建：面板的安装按钮
+        与 `/updates/install` 都要求这两个字段非空，缺了就得先手动检查一次。
+        重建只是把「同一个版本号」翻译成 tag 形状，安装前执行者仍会重新校验
+        tag、版本高于当前、并从固定仓库下载后核对 SHA256SUMS。
+        """
         try:
             state = wb_settings.update_check_state(self.settings_dir)
         except Exception:
@@ -238,7 +266,10 @@ class UpdateChecker(threading.Thread):
         version = state.get("latest_version") or ""
         if version:
             self._latest = {
-                "version": version, "tag": "", "url": "", "published_at": "",
+                "version": version,
+                "tag": release_tag(version),
+                "url": release_page(version),
+                "published_at": "",
                 "newer": is_newer(version, self.current_version),
             }
 
