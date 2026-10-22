@@ -99,6 +99,22 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.config.ready()
 
+    def test_catalog_selection_is_exact_and_can_change_without_stale_cache(self):
+        self.config.update({'enabled': True, 'api_key': 'test', 'catalog_models': ['GLM-5.2']})
+        client = CodeArtsClient(self.config)
+        data = {'data': [{'id': 'GLM-5.2'}, {'id': 'glm-5.2'}, {'id': 'Kimi-K3'}]}
+        with patch.object(client, '_json', return_value=data):
+            self.assertEqual([m['id'] for m in client.models()], ['codeart/GLM-5.2'])
+            self.config.update({'catalog_models': ['Kimi-K3']})
+            self.assertEqual([m['id'] for m in client.models()], ['codeart/Kimi-K3'])
+            self.config.update({'catalog_models': []})
+            self.assertEqual(len(client.models()), 3)
+            self.config.update({'catalog_models': ['Not-Listed']})
+            selected = client.models()
+            self.assertEqual(selected[0]['id'], 'codeart/Not-Listed')
+            self.assertFalse(selected[0]['backend_listed'])
+            self.assertNotIn('context_length', selected[0])
+
     def test_saved_secret_never_appears_in_view_and_blank_preserves_it(self):
         self.config.update({"api_key": "secret-123", "base_url": "http://localhost:7866/v1/"})
         self.config.update({"api_key": "", "enabled": True})

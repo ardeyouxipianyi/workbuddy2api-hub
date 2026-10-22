@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 支持精确筛选模型目录，排除未选择的别名与兜底项，不改写出站模型名称。
+- Support exact catalog selection without changing outbound model IDs.
+
 - 修复华为登录按钮：先同步打开窗口再等待授权地址，弹窗被拦截时保留可点击链接。
 - 统一客户端入口到 Hub 默认 8788；原模型表及智能体选择器加入 `codeart/` 模型。
 - `codeart/` 只用于网关，转发前还原真实模型 ID；旧 `codearts/` 请求保持兼容。

@@ -216,10 +216,12 @@
         accounts.append(row);
       }
       const heading = document.createElement('h3');
-      heading.textContent = t('可用模型', 'Available models', '可用模型');
+      heading.textContent = t('模型目录（以实际调用结果为准）', 'Model catalog (availability requires a real request)', '模型目錄（以實際呼叫結果為準）');
       models.append(heading);
       for (const model of catalog.data || []) {
-        const line = document.createElement('div'); line.textContent = model.id; models.append(line);
+        const line = document.createElement('div');
+        line.textContent = model.id + (model.backend_listed === false ? t(' · 已保留，后端未列出', ' · retained, not listed by backend', ' · 已保留，後端未列出') : '');
+        models.append(line);
         const option = document.createElement('option'); option.value = model.id; option.textContent = model.id; select.append(option);
       }
       if (typeof window.loadModels === 'function') await window.loadModels();

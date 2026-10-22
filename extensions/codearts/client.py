@@ -141,7 +141,7 @@ class CodeArtsClient:
 
     def models(self):
         cfg = self.config.ready()
-        identity = (cfg["base_url"], cfg["api_key"])
+        identity = (cfg["base_url"], cfg["api_key"], tuple(cfg["catalog_models"]))
         with self.lock:
             if self.cache_identity == identity and time.monotonic() - self.cache_at < cfg["models_ttl_seconds"]:
                 return copy.deepcopy(self.cached_models)
@@ -153,11 +153,20 @@ class CodeArtsClient:
             for entry in obj["data"]:
                 if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"].strip():
                     continue
+                if cfg["catalog_models"] and entry["id"] not in cfg["catalog_models"]:
+                    continue
                 mid = PREFIX + entry["id"]
                 if mid in seen:
                     continue
                 seen.add(mid)
                 models.append({**entry, "id": mid, "owned_by": "codearts", "provider": "codearts", "realm": "codearts"})
+            if cfg["catalog_models"]:
+                indexed = {entry["id"]: entry for entry in models}
+                models = [indexed.get(PREFIX + mid, {
+                    "id": PREFIX + mid, "object": "model", "owned_by": "codearts",
+                    "provider": "codearts", "realm": "codearts", "backend_listed": False,
+                    "availability_note": "Configured selection; not listed by backend",
+                }) for mid in cfg["catalog_models"]]
             self.cached_models = models
             self.cache_at = time.monotonic()
             self.cache_identity = identity

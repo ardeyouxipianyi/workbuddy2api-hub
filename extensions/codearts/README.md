@@ -57,6 +57,15 @@ No Huawei credentials or backend executable are included in the repository.
 
 ## 配置与密钥 / Configuration and secrets
 
+`catalog_models` 可配置精确的后端模型 ID 列表，空列表默认展示全部。该项只筛选
+模型目录（含原生选择器），不改变真实请求模型名称或替代 API Key 的权限规则。
+例如 `["GLM-5.2", "Kimi-K3"]` 不会额外展示小写别名或静态福利项。
+显式选择但后端未列出的名称仍保留，标记 `backend_listed=false`，不补造参数或保证可用。
+`catalog_models` optionally filters the catalog by exact upstream IDs. Empty means
+all models; request routing and key authorization remain unchanged.
+Selected IDs missing from the backend remain explicitly marked as not listed;
+no parameters or availability claims are invented.
+
 - 默认关闭。普通 Hub 启动器完全不会加载此扩展。
 - 默认配置文件为 `accounts/codearts/bridge.json`，该目录自带忽略规则。
   `--accounts-dir` 改变时，配置随账号目录移动。

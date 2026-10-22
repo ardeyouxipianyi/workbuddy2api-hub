@@ -15,6 +15,7 @@ DEFAULTS = {
     "api_key_env": "CODEARTS_API_KEY",
     "timeout_seconds": 120,
     "models_ttl_seconds": 60,
+    "catalog_models": [],
 }
 
 
@@ -38,6 +39,11 @@ class BridgeConfig:
             raise ValueError("unknown CodeArts setting")
         if not isinstance(data["enabled"], bool):
             raise ValueError("enabled must be true or false")
+        selection = data["catalog_models"]
+        if (not isinstance(selection, list) or any(not isinstance(mid, str) or
+                not mid.strip() or mid != mid.strip() for mid in selection)):
+            raise ValueError("catalog_models must be a list of exact upstream model IDs")
+        data["catalog_models"] = list(dict.fromkeys(selection))
         for key in ("base_url", "api_key", "api_key_env"):
             if not isinstance(data[key], str):
                 raise ValueError(key + " must be a string")

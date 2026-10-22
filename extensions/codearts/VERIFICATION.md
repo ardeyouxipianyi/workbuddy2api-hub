@@ -7,7 +7,7 @@
 
 | Check | Result | Boundary |
 |---|---|---|
-| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 37 tests | Real loopback Hub listener, controlled HTTP/SSE backend and child processes; not Huawei inference acceptance |
+| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 38 tests | Real loopback Hub listener, controlled HTTP/SSE backend and child processes; not Huawei inference acceptance |
 | `python tests/run_all.py --jobs 4` | PASS: 222 suites, 0 failed, 0 skipped | Existing suite inventory and assertions unchanged |
 | `node --check extensions/codearts/dashboard.js` | PASS | Syntax only |
 | `node extensions/codearts/tests/test_login.js` | PASS | Popup opens before asynchronous OAuth; blocked popup fallback, unsafe URL rejection and error cleanup |
@@ -74,3 +74,13 @@ credentials, screenshots and fixture processes are not part of the commit.
 These checks establish the tested bridge mechanisms and WorkBuddy regression
 boundary. They do not establish real Huawei account availability or every model's
 capabilities, quotas or pricing.
+
+## Exact catalog selection / 精确目录保留
+
+2026-10-23: 38 extension tests and 222 native suites pass. Real isolated browser
+login and seven selected catalog IDs verified on 8800, then applied to 8799.
+A real WorkBuddy request returned HTTP 200 / OK. Independent review confirmed
+exact selection, cache invalidation and missing-model labels. Backend probes
+currently exclude six selected IDs as unregistered; retaining them is a user
+selection, not proof of callability. No sampling parameters or original Hub
+files were changed. Original 8788 remains untouched.
