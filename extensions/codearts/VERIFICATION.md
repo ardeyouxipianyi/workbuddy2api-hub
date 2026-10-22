@@ -81,9 +81,10 @@ capabilities, quotas or pricing.
 login and seven selected catalog IDs verified on 8800, then applied to 8799.
 A real WorkBuddy request returned HTTP 200 / OK. Independent review confirmed
 exact selection, cache invalidation and missing-model labels. Backend probes
-currently exclude six selected IDs as unregistered; retaining them is a user
-selection, not proof of callability. No sampling parameters or original Hub
-files were changed. Original 8788 remains untouched.
+initially misclassified six selected display names as unregistered. The
+following registered-model-ID repair and live connectivity run supersede that
+catalog-only result. No sampling parameters or original Hub files were changed.
+Original 8788 remains untouched.
 
 ## Registered model ID repair / 真实模型 ID 修复
 
@@ -110,3 +111,23 @@ The disposable-copy runner passed all external Go packages. Python extension
 Independent review additionally tested account collisions, exact-ID priority,
 ambiguous aliases, missing-account catalogs, build guards and a real httptest
 outbound benefit header. No Critical/Important issue remained after fixes.
+
+## Remaining selected models / 其余已选模型连通性
+
+2026-10-23: after the account-scoped model-ID overlay was deployed to isolated
+8799, each of the other six selected models received one non-streaming text
+chat request through the Hub gateway. All returned HTTP 200, a non-empty `OK`
+reply and normal completion. The display-name aliases resolved to these IDs:
+
+| Hub model | CodeArts model ID | Result | Seconds |
+|---|---|---|---:|
+| `codeart/GLM-5.2` | `GLM-5.2` | HTTP 200 / OK | 7.03 |
+| `codeart/OpenPangu-2.0-Flash` | `openpangu-2.0-flash` | HTTP 200 / OK | 36.62 |
+| `codeart/OpenPangu-2.0-Pro` | `openpangu-2.0-pro` | HTTP 200 / OK | 35.03 |
+| `codeart/GLM-5.2-ArkTS-SPARK` | `glm-5.2-sft-harmony` | HTTP 200 / OK | 6.70 |
+| `codeart/DeepSeek-V4.1-Flash` | `deepseek-v4.1-flash` | HTTP 200 / OK | 21.20 |
+| `codeart/Kimi-K3` | `kimi-k3` | HTTP 200 / OK | 23.95 |
+
+Together with the GLM-5.3 result above, all seven selected models have passed
+one real basic text-chat request. This run does not establish streaming, tools,
+image input, concurrency, or sustained availability for every model.
