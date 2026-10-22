@@ -9,7 +9,7 @@ import threading
 import urllib.error
 from urllib.parse import parse_qs, urlsplit
 
-from .client import ADMIN_ACTIONS, CodeArtsClient, PREFIX, is_codearts
+from .client import ADMIN_ACTIONS, CodeArtsClient, is_codearts, upstream_model
 from .config import BridgeConfig
 
 
@@ -120,7 +120,7 @@ def install(hub, config_path):
         if is_codearts(row.get("model")):
             row["provider"] = "codearts"
             row["realm"] = "codearts"
-            row["upstream_model"] = row["model"][len(PREFIX):]
+            row["upstream_model"] = upstream_model(row["model"])
             row["account"] = "codearts:pool"
         return original_persist(row, fail_label)
 
@@ -161,12 +161,21 @@ def install(hub, config_path):
                     return self._bridge_error(exc)
             return super()._get_v1_models()
 
+        def _agents_models(self):
+            models = super()._agents_models()
+            try:
+                extra = runtime.client.models()
+            except Exception:
+                extra = []
+            known = {m.get("id") for m in models}
+            return models + [m for m in extra if m["id"] not in known]
+
         def _json(self, code, obj):
             path = urlsplit(getattr(self, "path", "")).path
             explicit = self._request_realm() if path in ("/v1/models", "/models") else None
             if (code == 200 and path in ("/v1/models", "/models") and
                     isinstance(obj, dict) and isinstance(obj.get("data"), list) and
-                    explicit in (None, "all") and not self._key_realm() and
+                    (explicit in (None, "all") or self._panel_ok()) and not self._key_realm() and
                     self._key_allowed_accounts() is None and not hub.pinned_account()):
                 try:
                     extra = runtime.client.models()
@@ -207,7 +216,7 @@ def install(hub, config_path):
                      b'(!new URL(location.href).searchParams.has("tab")&&'
                      b'localStorage.getItem("wb-proxy-main-tab")==="codearts");}catch(e){}</script>')
             body = body.replace(b"<head>", b"<head>" + early, 1)
-            body = body.replace(b"</body>", b'<script src="/codearts/dashboard.js" defer></script></body>')
+            body = body.replace(b"</body>", b'<script src="/codearts/login.js" defer></script><script src="/codearts/dashboard.js" defer></script></body>')
             etag = '"codearts-%s"' % hashlib.sha256(body).hexdigest()[:24]
             return self._send_asset(body, "text/html; charset=utf-8", etag)
 
@@ -230,8 +239,8 @@ def install(hub, config_path):
 
         def do_GET(self):
             path = urlsplit(self.path).path
-            if path == "/codearts/dashboard.js":
-                body = (Path(__file__).parent / "dashboard.js").read_bytes()
+            if path in ("/codearts/dashboard.js", "/codearts/login.js"):
+                body = (Path(__file__).parent / path.rsplit("/", 1)[-1]).read_bytes()
                 return self._send_asset(body, "text/javascript; charset=utf-8")
             if not path.startswith("/codearts/"):
                 return super().do_GET()

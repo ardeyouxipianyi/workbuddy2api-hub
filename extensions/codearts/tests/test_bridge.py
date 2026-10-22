@@ -62,6 +62,8 @@ class Backend(BaseHTTPRequestHandler):
         if self.status != 200:
             return self.respond(self.status, b'{"error":{"message":"backend unavailable"}}')
         time.sleep(self.delay)
+        if self.path == "/admin/api/oauth/start":
+            return self.respond(200, b'{"ok":true,"session_id":"oauth-test","auth_url":"https://auth.example.test/authorize"}')
         if self.path.startswith("/admin/"):
             return self.respond(200, b'{"ok":true,"status":"pending"}')
         if self.stream_error:
@@ -93,6 +95,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_new_install_is_disabled(self):
         self.assertFalse(self.config.view()["enabled"])
+        self.assertEqual(self.config.view()["model_prefix"], "codeart/")
         with self.assertRaises(ValueError):
             self.config.ready()
 
@@ -319,12 +322,43 @@ class GatewayTests(unittest.TestCase):
     def test_catalog_merges_and_backend_outage_preserves_native_models(self):
         status, _, raw = self.request("GET", "/v1/models")
         self.assertEqual(status, 200, raw)
-        self.assertTrue({"native-model", "codearts/GLM-5.2"}.issubset({m["id"] for m in json.loads(raw)["data"]}))
+        self.assertTrue({"native-model", "codeart/GLM-5.2"}.issubset({m["id"] for m in json.loads(raw)["data"]}))
         Backend.status = 503
         self.runtime.client.invalidate()
         status, _, raw = self.request("GET", "/v1/models")
         self.assertEqual(status, 200, raw)
         self.assertIn("native-model", {m["id"] for m in json.loads(raw)["data"]})
+
+    def test_codeart_prefix_and_legacy_alias_share_one_listener(self):
+        for model in ("codeart/GLM-5.2", "codearts/GLM-5.2"):
+            status, _, raw = self.chat(model=model)
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(json.loads(raw)["model"], model)
+            self.assertEqual(Backend.requests[-1][2]["model"], "GLM-5.2")
+            row = json.loads(Path(self.hub.USAGE_LOG).read_text().splitlines()[-1])
+            self.assertEqual(row["upstream_model"], "GLM-5.2")
+            self.assertEqual(row["realm"], "codearts")
+
+    def test_native_panel_and_agent_picker_include_namespaced_models(self):
+        status, _, raw = self.request("GET", "/v1/models?realm=intl", panel=True)
+        self.assertEqual(status, 200, raw)
+        ids = {m["id"] for m in json.loads(raw)["data"]}
+        self.assertIn("native-model", ids)
+        self.assertIn("codeart/GLM-5.2", ids)
+        handler = self.hub.Handler.__new__(self.hub.Handler)
+        self.assertIn("codeart/GLM-5.2", {m["id"] for m in handler._agents_models()})
+
+    def test_explicit_workbuddy_client_view_does_not_bypass_key_scope(self):
+        status, _, raw = self.request("GET", "/v1/models?realm=intl")
+        self.assertEqual(status, 200, raw)
+        self.assertNotIn("codeart/GLM-5.2", {m["id"] for m in json.loads(raw)["data"]})
+
+    def test_oauth_start_is_returned_through_same_panel_port(self):
+        status, _, raw = self.request("POST", "/codearts/admin/oauth/start", {}, panel=True)
+        self.assertEqual(status, 200, raw)
+        obj = json.loads(raw)
+        self.assertEqual(obj["auth_url"], "https://auth.example.test/authorize")
+        self.assertEqual(obj["session_id"], "oauth-test")
 
     def test_native_request_uses_original_v2_path(self):
         status, _, raw = self.chat(model="native-model")

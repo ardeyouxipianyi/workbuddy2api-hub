@@ -11,7 +11,7 @@
   the original launcher never imports or enables the extension.
 - Bridge configuration is separate, disabled by default, and stores secrets only
   in the ignored accounts directory or reads them from an environment variable.
-- Public models use `codearts/<upstream-id>`. Native WorkBuddy names keep their
+- Public models use `codeart/<upstream-id>`. Native WorkBuddy names keep their
   original routing. There is no cross-provider fallback.
 - Reuse native authentication, per-key concurrency, model restrictions, SSE
   handling and Chat/Responses translation. Keep Anthropic's existing opt-in gate.
@@ -46,3 +46,15 @@ Branch: `codex/codearts-bridge`, based on the fork's main at implementation star
 Ship extension sources, tests, examples, launchers and operation instructions.
 Keep the original running service and client/provider configuration untouched.
 All secrets and test artifacts stay untracked. No merge or upstream publication.
+
+## Login and unified-port follow-up / 登录及统一端口跟进
+
+The client gateway stays on the native default 8788; 8799 is for isolated tests.
+Canonical model IDs use codeart/ only for routing and display; the prefix is
+removed before forwarding the exact upstream model ID. Legacy codearts/ requests
+remain supported. Login opens a window synchronously before awaiting OAuth.
+Optional explicit backend management builds or starts CodeArts2API on loopback,
+enables the bridge after readiness, and binds only owned children to gateway exit.
+
+客户端统一使用默认 8788，8799 仅用于隔离验收；前缀不进入真实后端模型名称。
+登录弹窗、托管后端及进程回收已纳入本轮回归，真实华为推理仍待人工登录后验证。

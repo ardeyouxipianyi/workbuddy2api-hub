@@ -8,27 +8,52 @@ Hub launcher and all pre-existing tracked files remain unchanged.
 
 ## 启动 / Start
 
-1. 先启动并登录自己的 CodeArts2API 服务。其 `/healthz`、`/v1/models` 和
-   `/v1/chat/completions` 应正常工作。默认地址是 `http://127.0.0.1:7866`。
-   服务端 `CA2A_API_KEY` 必须设置；桥接面板中填写的是同一服务密钥。
-2. 在本仓库目录运行：
+客户端统一使用 **`http://127.0.0.1:8788/v1`** 和原 Hub API Key。
+CodeArts 的 7866 只是环回后端端口，客户端切换模型不需要切换端口。
+普通 Hub 启动器不加载扩展，统一入口需要运行本扩展启动器。
 
-   ```powershell
-   python start-codearts-bridge.py --port 8799
-   ```
+已有可用后端时：
 
-   Windows 也可运行 `start-codearts-bridge.bat --port 8799`；Linux/macOS 使用
-   `./start-codearts-bridge.sh --port 8799`。支持原 Hub 的 `--host`、`--accounts-dir`、
-   `--usage-dir`、`--api-key` 等参数。已有 8788 服务时保留它，用 8799 验证。
-3. 打开 `http://127.0.0.1:8799/`，使用该实例的原生面板密码登录。
-4. 进入 **CodeArts**，填写服务地址和服务密钥，勾选启用后保存。也可让桥接进程
-   从 `CODEARTS_API_KEY` 环境变量读取密钥；环境变量存在时优先于保存的值。
-5. 刷新状态，确认账号和模型列表；选择模型后发送测试请求。
+```powershell
+python start-codearts-bridge.py
+```
 
-Start and authenticate CodeArts2API first, then start this launcher on an unused
-port. Sign in to the existing Hub panel, open CodeArts, set its service URL/key,
-enable it, and verify the models and a real response. No CodeArts account or
-backend binary is bundled in this extension.
+面板默认地址 `http://127.0.0.1:8788/`。在 CodeArts 页填写后端地址和
+`CA2A_API_KEY` 对应的服务密钥，启用并保存，然后点击 **登录华为账号**。
+按钮会立即打开授权窗口；弹窗被拦截时可点击返回的授权链接。
+在华为页面完成登录后，回面板点击 **检查登录结果**、**刷新状态**。
+
+还没有部署后端时，可从自己的 CodeArts2API 源码构建并托管：
+
+```powershell
+python start-codearts-bridge.py --codearts-source ..\codearts2api-main
+```
+
+构建需要 Go（版本以该源码 `go.mod` 为准）；可用 `--go-executable <go路径>`。
+有已构建的程序时无需 Go：
+
+```powershell
+python start-codearts-bridge.py --codearts-backend <CodeArts2API程序路径>
+```
+
+托管模式显式启用桥接，自动生成独立密钥、仅监听 `127.0.0.1:7866`，
+就绪检查成功后才保存连接。凭证和二进制放在桥接配置旁的 `backend/`。
+`--codearts-backend-port` 只改变内部端口。网关退出时只关闭自己启动的后端；
+已有端口服务必须通过身份和密钥验证才能复用，复用服务不会被关闭。
+Windows 使用 Job Object 保证网关被直接终止时也能回收自建后端。
+
+Windows/Linux 启动脚本仍支持原 Hub 的 `--host`、`--accounts-dir`、
+`--usage-dir`、`--api-key` 等参数。**8788 已有运行中的服务时不要直接停它**，
+先用 `--port 8799` 隔离验收，确认切换时机后再用扩展实例替换原端口服务。
+启动器不会把扩展热注入已有进程，也不会自动停止占用端口的进程。
+
+Clients share the original Hub gateway and keys. The default client endpoint is
+`http://127.0.0.1:8788/v1`; 7866 is an internal loopback service only. An external
+backend can be configured in the panel. Alternatively, explicitly opt into local
+management with `--codearts-source` (requires Go) or `--codearts-backend` (compiled
+executable). This generates a private backend key and enables the bridge only
+after readiness succeeds. Only owned children are stopped on gateway exit.
+No Huawei credentials or backend executable are included in the repository.
 
 ## 配置与密钥 / Configuration and secrets
 
@@ -40,9 +65,14 @@ backend binary is bundled in this extension.
   会原子创建文件。文件权限使用操作系统当前用户目录权限；建议存放在专用私有目录。
 - 后端密钥仅保存在服务端。浏览器只能看到“已设置”；密钥输入留空表示保留原值。
   清除保存值可向配置接口发送 `{"clear_api_key":true}`；环境变量仍需在启动环境中清除。
-- **模型必须使用 `codearts/<模型 ID>`**，例如 `codearts/GLM-5.2`。
+- **客户端模型使用 `codeart/<模型 ID>`**，例如 `codeart/GLM-5.2`。
+  前缀仅用于网关路由；转发前去除，后端收到的仍是原始 `GLM-5.2`，大小写和剩余内容不变。
+  旧版 `codearts/` 请求仍兼容，新模型清单只返回 `codeart/`。
   真实模型以服务返回为准；不在代码中复制一份静态华为目录。
 - 禁止自动跟随后端重定向，避免服务密钥被发送到其他地址。
+
+The `codeart/` prefix is removed before forwarding: the original upstream model
+ID is preserved exactly. Old `codearts/` request names remain accepted.
 
 The backend key never appears in settings responses or dashboard source. Use the
 same server-side secret as CodeArts2API, not a Huawei access/refresh token. Keep
@@ -50,7 +80,7 @@ custom configuration paths out of Git. Original Hub API keys remain client keys.
 
 ## 客户端 / Clients
 
-使用此扩展实例的 `/v1` 地址和 Hub API Key，模型增加 `codearts/` 前缀。
+使用此扩展实例的 `/v1` 地址和 Hub API Key，模型增加 `codeart/` 前缀。
 支持 Chat Completions 流式与非流式，以及原 Hub 的 Responses 转换。
 Responses 工具声明和命名 tool_choice 在出站时转为 CodeArts 需要的 Chat 格式。
 工具接口使用现代 `tools` / `tool_choice`；旧客户端的 `functions` /
@@ -59,7 +89,7 @@ Anthropic Messages 沿用 Hub 自身的默认关闭开关与现有能力边界�
 
 ```json
 {
-  "model": "codearts/GLM-5.2",
+  "model": "codeart/GLM-5.2",
   "messages": [{"role": "user", "content": "Reply with OK."}],
   "stream": false
 }
@@ -67,10 +97,11 @@ Anthropic Messages 沿用 Hub 自身的默认关闭开关与现有能力边界�
 
 `GET /v1/models` 将可访问的 CodeArts 模型加入原模型列表；
 `GET /v1/models?realm=codearts` 只获取 CodeArts 模型。
-显式选择 WorkBuddy 国内版/国际版时仍只列相应 WorkBuddy 模型。
+面板国内版/国际版视图的模型表和智能体配置选择器也列出 CodeArts 模型，便于统一切换。
+普通 API 客户端显式选择 WorkBuddy 区域时仍只列相应区域模型。
 CodeArts 后端失败不会把其模型调用转发给 WorkBuddy。
 
-Use an unbound Hub key, optionally limited to `codearts/*` in the native model
+Use an unbound Hub key, optionally limited to `codeart/*` in the native model
 allowlist. A key bound to WorkBuddy's international/domestic realm, a key with
 WorkBuddy account restrictions, or a `/u/<account>/...` pinned route is refused
 for CodeArts. This bridge addresses the CodeArts **service pool**; it cannot
@@ -101,6 +132,7 @@ python -m unittest discover -s extensions/codearts/tests -v
 python tests/run_all.py --jobs 4
 python scripts/check_clean_checkout.py
 node --check extensions/codearts/dashboard.js
+node extensions/codearts/tests/test_login.js
 ```
 
 新增测试位于扩展目录，独立运行；原测试清单和套件数量未修改。

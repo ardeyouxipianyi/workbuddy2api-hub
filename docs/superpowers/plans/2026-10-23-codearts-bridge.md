@@ -15,7 +15,7 @@ talks to CodeArts2API; a dashboard extension uses authenticated management route
 ## Global Constraints
 
 - Add files only; original tracked Hub files and launch behavior remain unchanged.
-- Default disabled; use `codearts/` model names; no provider fallback.
+- Default disabled; use `codeart/` model names; no provider fallback.
 - No secrets, local absolute paths, runtime data or test outputs in commits.
 - Respect native key concurrency/model/account/realm restrictions.
 - Commit/push only after the repository's mandatory smoke checks pass.
@@ -81,3 +81,15 @@ talks to CodeArts2API; a dashboard extension uses authenticated management route
 - Real WorkBuddy upstream returned HTTP 200 / OK.
 - User explicitly accepted real Huawei login/inference as NOT_RUN for this delivery.
 - Publication targets only the new fork branch; verify its SHA after pushing.
+
+## Login and unified-port follow-up / 登录及统一端口跟进
+
+The client gateway stays on the native default 8788; 8799 is for isolated tests.
+Canonical model IDs use codeart/ only for routing and display; the prefix is
+removed before forwarding the exact upstream model ID. Legacy codearts/ requests
+remain supported. Login opens a window synchronously before awaiting OAuth.
+Optional explicit backend management builds or starts CodeArts2API on loopback,
+enables the bridge after readiness, and binds only owned children to gateway exit.
+
+客户端统一使用默认 8788，8799 仅用于隔离验收；前缀不进入真实后端模型名称。
+登录弹窗、托管后端及进程回收已纳入本轮回归，真实华为推理仍待人工登录后验证。

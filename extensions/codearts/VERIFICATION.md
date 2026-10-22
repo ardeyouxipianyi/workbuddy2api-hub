@@ -7,17 +7,22 @@
 
 | Check | Result | Boundary |
 |---|---|---|
-| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 27 tests | Real loopback Hub listener and controlled HTTP/SSE backend; not Huawei acceptance |
+| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 37 tests | Real loopback Hub listener, controlled HTTP/SSE backend and child processes; not Huawei inference acceptance |
 | `python tests/run_all.py --jobs 4` | PASS: 222 suites, 0 failed, 0 skipped | Existing suite inventory and assertions unchanged |
 | `node --check extensions/codearts/dashboard.js` | PASS | Syntax only |
+| `node extensions/codearts/tests/test_login.js` | PASS | Popup opens before asynchronous OAuth; blocked popup fallback, unsafe URL rejection and error cleanup |
 | Python compilation of extension and launcher | PASS | Syntax only |
 | Native panel login, settings save, secret preservation | PASS | Real browser, isolated instance on 8799 |
 | CodeArts panel model list and test reply `bridge-ok` | PASS | Controlled backend; no real Huawei account |
 | CodeArts navigation reload/deep-link and scoped scrolling | PASS | Real browser; native async initialization and bounded-card scrolling checked |
 | Browser error/warning console after tested flow | PASS: none observed | Tested flow only |
 | Gateway → real WorkBuddy upstream | PASS: HTTP 200, reply `OK`, 17 tokens | `deepseek-v4.1-flash`, isolated extension launcher, about 3 seconds |
-| Real Huawei login/model invocation | NOT_RUN | User confirmed no deployed/logged-in backend and requested branch delivery first |
-| Go backend build/test | NOT_RUN | Separate backend source is not changed or bundled; Go not available on PATH |
+| Real Huawei authorization page opens from login button | PASS | Real local CodeArts service, popup automatically reached auth.huaweicloud.com login form; no credentials submitted |
+| Native gateway model list | PASS | Real browser: WorkBuddy models and canonical `codeart/` names together on one listener |
+| Prefix stripping | PASS | Wire tests verify backend receives exact original `GLM-5.2` for both `codeart/` and legacy `codearts/` |
+| Real Huawei account login/model invocation | NOT_RUN | Human login has not been completed; backend currently has zero accounts |
+| Go backend build/test | PASS | Portable official Go 1.27.3, official archive SHA verified; `go test ./...` and real server build succeed; backend source unchanged |
+| Owned backend process lifecycle | PASS | Child-process test: even abrupt parent os._exit closes the Windows Job and backend port; verified-service reuse retains external ownership |
 
 ## Regression evidence
 
@@ -38,6 +43,20 @@ fragmented UTF-8/CRLF SSE, delayed errors, missing terminal markers, final marke
 without a newline, namespace tools and streaming Responses. No Critical or
 Important finding remained after fixes. Legacy `functions`/`function_call`
 compatibility is explicitly outside the documented modern-tools contract.
+
+The login/port follow-up added canonical prefix and picker wire tests, popup
+behavior tests, and process ownership tests. A second review reproduced a native
+panel-shutdown child-process leak (native shutdown calls os._exit and skips
+finally). The managed launcher now binds owned Windows children to a kill-on-close
+Job Object and hooks native hard-exit cleanup; reused services are never assigned
+to that job. The abrupt-exit regression test failed before this fix and passed
+afterwards. Real WorkBuddy smoke was repeated: HTTP 200, reply OK, 17 tokens,
+about 1.3 seconds. Native 222 suites passed again.
+
+Final independent review reran all 37 extension tests and the original native
+shutdown probe: the owned child port closed after the parent exited. A separate
+cross-process reuse probe confirmed that shutting down a second Hub left the
+existing external backend alive. No Critical or Important finding remained.
 
 ## Environment and isolation
 

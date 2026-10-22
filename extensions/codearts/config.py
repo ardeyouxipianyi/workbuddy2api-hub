@@ -83,7 +83,7 @@ class BridgeConfig:
     def view(self):
         data = self.snapshot()
         data["has_api_key"] = bool(data.pop("api_key"))
-        data["model_prefix"] = "codearts/"
+        data["model_prefix"] = "codeart/"
         return data
 
     def update(self, patch):

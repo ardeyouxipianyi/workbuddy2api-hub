@@ -7,7 +7,8 @@ import time
 import urllib.error
 import urllib.request
 
-PREFIX = "codearts/"
+PREFIX = "codeart/"
+LEGACY_PREFIX = "codearts/"
 ADMIN_ACTIONS = frozenset((
     "credits", "checkin", "keepalive", "reload", "accounts/enable",
     "accounts/disable", "accounts/clear-cooldown", "oauth/start", "oauth/poll",
@@ -21,7 +22,14 @@ CHAT_FIELDS = frozenset((
 
 
 def is_codearts(model):
-    return isinstance(model, str) and model.startswith(PREFIX)
+    return isinstance(model, str) and model.startswith((PREFIX, LEGACY_PREFIX))
+
+
+def upstream_model(model):
+    for prefix in (PREFIX, LEGACY_PREFIX):
+        if isinstance(model, str) and model.startswith(prefix):
+            return model[len(prefix):]
+    raise ValueError("CodeArts model must be codeart/<upstream model id>")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -158,10 +166,10 @@ class CodeArtsClient:
 
     def chat(self, payload, session_key=None):
         model = payload.get("model")
-        if not is_codearts(model) or not model[len(PREFIX):].strip():
-            raise ValueError("CodeArts model must be codearts/<upstream model id>")
+        if not is_codearts(model) or not upstream_model(model).strip():
+            raise ValueError("CodeArts model must be codeart/<upstream model id>")
         body = {key: copy.deepcopy(value) for key, value in payload.items() if key in CHAT_FIELDS}
-        body["model"] = model[len(PREFIX):]
+        body["model"] = upstream_model(model)
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
         # Hub's Responses translator deliberately leaves ordinary functions in

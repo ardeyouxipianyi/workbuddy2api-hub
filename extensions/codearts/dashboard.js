@@ -28,9 +28,9 @@
   card.append(title);
   const description = document.createElement('p');
   description.textContent = t(
-    '连接独立 CodeArts2API 服务，模型使用 codearts/ 前缀。华为账号登录、轮转与续期由该服务负责。',
-    'Connect a separate CodeArts2API service. Models use the codearts/ prefix. Huawei account login, rotation and refresh belong to that service.',
-    '連接獨立 CodeArts2API 服務，模型使用 codearts/ 前綴。華為帳號登入、輪轉與續期由該服務負責。');
+    '与 WorkBuddy 共用当前网关端口，模型使用 codeart/ 前缀。华为账号登录、轮转与续期由 CodeArts2API 服务负责。',
+    'Use the same gateway port as WorkBuddy. Models use the codeart/ prefix; Huawei login, rotation and refresh belong to CodeArts2API.',
+    '與 WorkBuddy 共用目前網關埠號，模型使用 codeart/ 前綴。華為帳號登入、輪轉與續期由 CodeArts2API 服務負責。');
   card.append(description);
   const form = document.createElement('form');
   form.style.cssText = 'display:grid;gap:14px;max-width:720px;margin-top:20px';
@@ -99,16 +99,21 @@
   let session = '';
   const admin = (name, body = {}) => window.postJSON('/codearts/admin/' + name, body);
   action(actions, t('登录华为账号', 'Sign in to Huawei', '登入華為帳號'), async () => {
-    const result = await admin('oauth/start');
-    const url = new URL(result.auth_url);
-    if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Invalid authorization URL');
-    session = result.session_id;
+    status.textContent = t('正在打开华为登录窗口…', 'Opening Huawei sign-in…', '正在開啟華為登入視窗…');
+    const result = await window.CodeArtsLogin.start(
+      () => window.open('about:blank', '_blank'), () => admin('oauth/start'));
+    session = result.sessionId;
     const link = document.createElement('a');
-    link.href = url.href;
+    link.href = result.authUrl;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.textContent = t('打开华为授权页面', 'Open Huawei authorization page', '開啟華為授權頁面');
     status.replaceChildren(link);
+    if (!result.popupOpened) {
+      const hint = document.createElement('span');
+      hint.textContent = t('（浏览器阻止了弹窗，请点击此链接）', ' (popup blocked; use this link)', '（瀏覽器封鎖了彈出視窗，請點擊此連結）');
+      status.append(hint);
+    }
   });
   action(actions, t('检查登录结果', 'Check sign-in result', '檢查登入結果'), async () => {
     if (!session) throw new Error(t('请先发起登录', 'Start sign-in first', '請先發起登入'));
@@ -189,7 +194,7 @@
       fields.enabled.checked = cfg.enabled;
       for (const name of ['base_url', 'api_key_env', 'timeout_seconds']) fields[name].value = cfg[name];
       secretState.textContent = cfg.has_api_key ? t('服务密钥已设置', 'Service API key is set', '服務金鑰已設定') : t('尚未设置服务密钥', 'Service API key is missing', '尚未設定服務金鑰');
-      status.textContent = cfg.enabled ? t('正在读取服务状态…', 'Loading service status…', '正在讀取服務狀態…') : t('CodeArts 已关闭。保存地址和密钥并启用后可连接服务。', 'CodeArts is disabled. Save the service URL and key, then enable it.', 'CodeArts 已關閉。儲存位址和金鑰並啟用後可連接服務。');
+      status.textContent = cfg.enabled ? t('正在读取服务状态…', 'Loading service status…', '正在讀取服務狀態…') : t('CodeArts 已关闭。先启动后端服务，再保存地址和密钥并启用。', 'CodeArts is disabled. Start its backend, then save the service URL/key and enable it.', 'CodeArts 已關閉。先啟動後端服務，再儲存位址和金鑰並啟用。');
       accounts.replaceChildren(); models.replaceChildren(); select.replaceChildren();
       if (!cfg.enabled) return;
       const [overview, catalog, usage] = await Promise.all([
@@ -217,6 +222,7 @@
         const line = document.createElement('div'); line.textContent = model.id; models.append(line);
         const option = document.createElement('option'); option.value = model.id; option.textContent = model.id; select.append(option);
       }
+      if (typeof window.loadModels === 'function') await window.loadModels();
     } catch (error) { status.textContent = t('连接失败：', 'Connection failed: ', '連接失敗：') + error.message; }
   }
   if (window.__CODEARTS_REQUESTED__) {
