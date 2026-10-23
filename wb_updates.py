@@ -52,7 +52,10 @@ TAG_RE = re.compile(r"/releases/tag/([^/?#]+)")
 # （模块头第 3 条）。
 TOKEN_ENV = "GITHUB_TOKEN"
 USER_AGENT = "wb2api-hub-update-check"
-REQUEST_TIMEOUT = 5
+# 回退路径是 302 跳转 + 对象存储下载，代理出口下实测 4.2~10s；5s 会把
+# 本可成功的回退请求掐掉，两条路径全挂才报「更新检查失败」。10s 留足
+# 余量又不至于让坏响应挂住面板（检查本身有 24h 节流，失败下个窗口重试）。
+REQUEST_TIMEOUT = 10
 # 一份 releases 文档几十 KB；给足余量但设上限，坏响应不能把内存拉满。
 MAX_BODY = 2 * 1024 * 1024
 
