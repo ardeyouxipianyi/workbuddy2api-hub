@@ -244,6 +244,9 @@ class LogEgressTest(unittest.TestCase):
         with mock.patch.object(sys, "stderr", stream):
             wb_proxy.log("[任务福利] 账号 [%s] 网页通道打卡: OK" % PHONE,
                          tag="tasks")
+            # 写 stderr 由后台线程承担（#642 之前的写法会在请求线程里同步写）：
+            # 等这一行真正落下去再断言，否则读到的是「还没写」的空串。
+            wb_proxy.flush_log_channel(1.0)
         written = stream.getvalue()
         self.assertNotIn(PHONE, written)
         self.assertIn(PHONE_MASKED, written)

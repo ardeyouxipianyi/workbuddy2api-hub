@@ -26,8 +26,10 @@ import io
 import ipaddress
 from collections import deque
 import re
+import atexit
 import json
 import os
+import queue
 import random
 # 单请求体上限。默认值从 50MB 收紧到 16MB，是「内存护栏」：body 先整体读成 bytes、
 # 再 decode 成 str、再 json.loads 成对象，实测 50MB body 的 decode+parse 峰值约
@@ -264,6 +266,10 @@ def install_console_close_handler():
             if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
                 try:
                     sys.stdout.flush()
+                except Exception:
+                    pass
+                try:
+                    flush_log_channel(0.5)   # 已入队的行尽力落盘，卡住也不拖延退出
                 except Exception:
                     pass
                 os._exit(0)
@@ -10568,16 +10574,129 @@ def add_log_entry(msg, level=None, tag=None):
         LOG_STORE.append(entry)
     return entry
 
-def log(msg, level=None, tag=None):
-    # 控制台 stderr 与看板 buffer 同源脱敏；写失败一律吞掉。
-    # 日志通道绝不能打死请求。send_response() 会先调 log_request()，所以 stderr 写
-    # 失败一旦抛出，异常发生在响应头发出之前：客户端只看到连接被掐、日志库里一条
-    # 不留，而 /health /realm /panel/status 因为在 log_message 静默白名单里照常
-    # 200，看起来"服务健在"（2026-10-19 线上网关的启动终端被回收后实测只剩这
-    # 三个端点能答，其余全部空响应）。
+# ---------------------------------------------------------------------------
+# stderr 日志通道：请求线程只入队，真正的 stderr 写入交给唯一的后台线程。
+#
+# #489 处理的是「写 stderr 会抛异常」（启动终端被回收 → OSError）。还有一种形态它
+# 盖不住：stderr 接到「有人建、没人读」的管道时，写满约 64KB 后 write() 会**永久
+# 阻塞且不抛异常**，try/except 拦不住。而 send_response() 会先调 log_request()，
+# 于是所有不在 log_message 静默白名单里的端点一起停摆，/health /realm /panel/status
+# 却照常 200 —— 外部看起来「服务健在、只有面板坏了」，实际请求线程全停在 log()。
+#
+# Request threads only enqueue; a single daemon thread owns stderr. If that write ever
+# blocks, only the writer parks: requests keep flowing and the queue drops lines (with a
+# counter surfaced through the panel log buffer) instead of wedging every endpoint.
+# ---------------------------------------------------------------------------
+_LOG_QUEUE_MAX = 2000
+_LOG_QUEUE = queue.Queue(maxsize=_LOG_QUEUE_MAX)
+_LOG_WRITER = None
+_LOG_WRITER_LOCK = threading.Lock()
+_LOG_DROPPED = 0
+_LOG_STREAM_CLOSED = False
+_LOG_SHUTTING_DOWN = False
+_LOG_ATEXIT_REGISTERED = False
+
+
+def _log_writer_loop():
+    """唯一的 stderr 写者：阻塞也只阻塞它自己（daemon，随进程退出）。"""
+    global _LOG_STREAM_CLOSED
+    while True:
+        line = _LOG_QUEUE.get()
+        try:
+            if line is None:
+                return
+            if _LOG_STREAM_CLOSED:
+                continue
+            stream = sys.stderr
+            if stream is None:
+                # pythonw / 无控制台时并不总是可写对象，别再逐行试
+                _LOG_STREAM_CLOSED = True
+                continue
+            try:
+                stream.write(line)
+                stream.flush()
+            except Exception:
+                # 读端消失 / 终端被回收：放弃控制台通道，buffer 与日志库照常
+                _LOG_STREAM_CLOSED = True
+        finally:
+            _LOG_QUEUE.task_done()
+
+
+def _ensure_log_writer():
+    global _LOG_WRITER, _LOG_ATEXIT_REGISTERED
+    writer = _LOG_WRITER
+    if writer is not None and writer.is_alive():
+        return writer
+    with _LOG_WRITER_LOCK:
+        if _LOG_WRITER is None or not _LOG_WRITER.is_alive():
+            worker = threading.Thread(target=_log_writer_loop, name="log-writer",
+                                      daemon=True)
+            worker.start()
+            _LOG_WRITER = worker
+            if not _LOG_ATEXIT_REGISTERED:
+                # 解释器退出前先让写线程收手。daemon 线程在 finalize 阶段还攥着
+                # stderr 的缓冲锁时，CPython 会以 `_enter_buffered_busy` 直接中止
+                # 进程 —— 套件里表现为「测试全 OK、退出码非零」，短命的 CLI 进程
+                # （例如 console_tail）也会踩到。实测：不加这一层，60 行日志后立刻
+                # 退出连续 6/6 次中止；加上后 10/10 干净退出。
+                atexit.register(_stop_log_writer)
+                _LOG_ATEXIT_REGISTERED = True
+    return _LOG_WRITER
+
+
+def _stop_log_writer(timeout=0.5):
+    """atexit：尽力写完已入队的行，再让写线程自己退出（不让它拖住 finalize）。"""
+    global _LOG_SHUTTING_DOWN
+    flush_log_channel(timeout)
+    _LOG_SHUTTING_DOWN = True
+    writer = _LOG_WRITER
+    if writer is None or not writer.is_alive():
+        return
     try:
-        sys.stderr.write(f"[wb-proxy] {time.strftime('%H:%M:%S')} {_mask_text(str(msg))}\n")
-        sys.stderr.flush()
+        _LOG_QUEUE.put_nowait(None)          # 叫醒它：写线程见到 None 就返回
+    except queue.Full:
+        pass                                 # 队列满＝它正卡在写里，join 会超时
+    try:
+        writer.join(max(0.05, float(timeout)))
+    except Exception:
+        pass
+
+
+def flush_log_channel(timeout=0.5):
+    """退出前尽力把已入队的行写完；写卡住时最多等 timeout 秒，绝不为日志拖延退出。
+
+    判据用 `unfinished_tasks`（入队 +1、写完 -1）而不是 `empty()`：写线程 `get()`
+    取下最后一行后队列就已经空了，但它可能还在 `write()` 里 —— 退出时漏掉那一行
+    的正是这个窗口。卡住的管道同样只让这里等到 timeout。
+    """
+    try:
+        deadline = time.time() + max(0.0, float(timeout))
+    except (TypeError, ValueError):
+        return
+    while time.time() < deadline:
+        if _LOG_STREAM_CLOSED or not _LOG_QUEUE.unfinished_tasks:
+            return
+        time.sleep(0.01)
+
+
+def log(msg, level=None, tag=None):
+    # 控制台 stderr 与看板 buffer 同源脱敏。写入交给后台线程（见 _log_writer_loop）：
+    # 队列满只丢行并计数，绝不在请求线程里阻塞，也绝不让日志通道打死请求。
+    global _LOG_DROPPED
+    if _LOG_SHUTTING_DOWN:
+        # 退出途中写线程已收手：只进 buffer / 日志库，不再往队列里放
+        add_log_entry(msg, level=level, tag=tag)
+        return
+    _ensure_log_writer()
+    line = f"[wb-proxy] {time.strftime('%H:%M:%S')} {_mask_text(str(msg))}\n"
+    try:
+        _LOG_QUEUE.put_nowait(line)
+    except queue.Full:
+        _LOG_DROPPED += 1
+        if _LOG_DROPPED == 1 or _LOG_DROPPED % 1000 == 0:
+            # 只进 buffer / 日志库，不再走 stderr：那条路已经堵住了
+            add_log_entry("stderr log channel is blocked; %d line(s) dropped so far"
+                          % _LOG_DROPPED, level="WARN", tag="system")
     except Exception:
         pass
     add_log_entry(msg, level=level, tag=tag)
@@ -18769,6 +18888,10 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(0.4)
             try:
                 sys.stdout.flush()
+            except Exception:
+                pass
+            try:
+                flush_log_channel(0.5)   # 已入队的行尽力落盘，卡住也不拖延退出
             except Exception:
                 pass
             os._exit(0)
