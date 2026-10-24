@@ -303,6 +303,7 @@ const posts = () => calls.filter(c => c.method === 'POST');
   element('setDailyChatWebConcurrency').value = '2';
   element('setDailyChatWebRetryBackoff').value = '7';
   element('setDailyChatStartupCatchup').checked = false;
+  element('setDailyChatActivityFallback').checked = true;
   await api.saveDailyChatModule({disabled: false});
   await settled();
   let moduleSave = posts().filter(c => c.url === '/settings/save');
@@ -313,6 +314,8 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('提交并发数与建会话退避', body.daily_chat_web_concurrency === 2 &&
         body.daily_chat_web_retry_backoff === 7, JSON.stringify(body));
   check('提交启动补跑开关', body.daily_chat_startup_catchup === false, JSON.stringify(body));
+  check('提交证书失败改走活跃上报开关',
+        body.daily_chat_web_fallback_activity === true, JSON.stringify(body));
   check('候选序列与时段随模块一起提交',
         Array.isArray(body.daily_chat_models) && body.schedule &&
         Array.isArray(body.schedule.daily_chat), JSON.stringify(body));
@@ -335,7 +338,11 @@ const posts = () => calls.filter(c => c.method === 'POST');
         Array.isArray(resetBody.daily_chat_models) && resetBody.daily_chat_models.length === 0 &&
         resetBody.schedule && resetBody.schedule.daily_chat.length === 0,
         JSON.stringify(resetBody));
+  check('推荐值关闭证书失败改走活跃上报',
+        resetBody.daily_chat_web_fallback_activity === false, JSON.stringify(resetBody));
   check('恢复推荐值后输入框写回 600', element('setDailyChatBudget').value === '600');
+  check('恢复推荐值后回退开关被取消勾选',
+        element('setDailyChatActivityFallback').checked === false);
 
   // 存失败时给出失败提示，不静默。
   saveStatus = 500;

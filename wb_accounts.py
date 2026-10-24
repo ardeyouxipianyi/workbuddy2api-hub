@@ -203,6 +203,18 @@ def tls_verify_hint(exc=None):
     return "%s 原始错误：%s" % (TLS_VERIFY_HINT, exc)
 
 
+def is_tls_verify_text(text):
+    """True when an already-stringified error carries a certificate failure.
+
+    wb_webagent.run_turn 把 live 的异常折成「<类型>: <消息>」文本，调用方拿不到
+    异常对象，所以 is_tls_verify_error 够不着它。标记表是同一份，只是换成判
+    字符串：网页通道沙箱入口证书挂掉（#645）走的正是这条路径。
+    """
+    if not text:
+        return False
+    return is_tls_verify_error(TLSVerifyError(str(text)))
+
+
 def _retryable(exc):
     """Transient network faults worth another attempt (TLS resets, timeouts, 5xx)."""
     if is_tls_verify_error(exc):
@@ -1263,7 +1275,7 @@ class Account(object):
             "lastActivityReport": self.last_activity_report,
             "canCheckin": self.realm == "cn" and not self.uses_enterprise_billing(),
             "canDailyChat": self.realm == "intl",
-            "canReportActivity": (self.realm == "cn"
+            "canReportActivity": (self.realm in ("cn", "intl")
                                   and not self.uses_enterprise_billing()),
             "machineId": derive_id(self.uid, "machine"),
             "sessionId": session_id(self.uid),
@@ -2016,8 +2028,11 @@ class Account(object):
         return not str(self.last_daily_chat).startswith(today_str)
 
     def can_report_activity(self):
-        """国内版每天一次的对话活跃上报（点亮 growth 连登）是否还没做过。"""
-        if self.realm != "cn":
+        """每天一次的对话活跃上报（点亮 growth 连登）是否还没做过。
+
+        国内版与国际版都有这套成长体系，只是上报端点不同（见 report_activity）。
+        """
+        if self.realm not in ("cn", "intl"):
             return False
         if self.uses_enterprise_billing():
             return False
@@ -2632,6 +2647,22 @@ class Account(object):
                     result["error"] = "网页通道失败：%s%s" % (res.get("error"), suffix)
                     result["msg"] = "每日活跃对话未完成（网页通道失败：%s%s）" % (
                         res.get("error"), suffix)
+                    # 沙箱入口证书校验失败（#645）不属于「这一轮没跑完」，重试同一轮
+                    # 永远不会成功；而成长连登只需要一条 POST /v2/report 就能点亮。
+                    # 开关打开时改走活跃上报，把当天算完成（默认关，行为不变）。
+                    fallback_on = (bool(self.path)
+                                   and wb_settings.daily_chat_web_fallback_activity(
+                                       os.path.dirname(self.path)))
+                    if fallback_on and is_tls_verify_text(res.get("error")):
+                        fb = self.report_activity()
+                        result["web_fallback"] = fb
+                        if fb.get("ok"):
+                            web_ok = True
+                            result["ok"] = True
+                            result.pop("error", None)
+                            result["msg"] = (
+                                "每日活跃对话：网页通道证书校验失败，已回退对话活跃上报（%s）"
+                                % (fb.get("msg") or ""))
             # 只有真正计入官方「每日活跃」的网页通道成功了才算今天做过：网页腿失败时
             # 若照写 lastDailyChat，当天后续巡检会直接跳过该账号，那天的 30/50 积分静默
             # 丢掉且不再重试。web=False（没开网页通道）时维持原语义：桌面腿成功即算完成。
@@ -2711,17 +2742,19 @@ class Account(object):
         上游口径：必须带 userId，否则服务端 200 但静默丢弃；每号每天一次即可，
         不做多时点高频上报（风控口径）。成功后记 lastActivityReport 并落盘，再读
         一次 /activity/growth/streak 把连登天数带回去——读失败不影响上报本身的
-        结论。只有国内版有这套成长体系，国际版直接拒绝。
+        结论。国内版与国际版都有这套成长体系，只是 base 不同：国际版走
+        chat_base_url()（www.workbuddy.ai），国内版走 wb_tasks 的默认国内 base。
         """
-        if self.realm != "cn":
-            return {"ok": False, "error": "activity report is only for CN realm accounts"}
+        if self.realm not in ("cn", "intl"):
+            return {"ok": False, "error": "activity report is only for CN/Intl realm accounts"}
         if self.is_api_key:
             return {"ok": False, "error": "API key accounts have no activity programme"}
         if self.is_enterprise():
             return {"ok": False, "error": "enterprise accounts do not support activity report"}
         import wb_tasks
         event = wb_tasks.build_event(self, "chat")
-        if not wb_tasks.report_events(self, [event]):
+        base = None if self.realm == "cn" else self.chat_base_url()
+        if not wb_tasks.report_events(self, [event], base=base):
             return {"ok": False, "error": "活跃上报被上游拒绝（未返回 code=0）"}
         self.last_activity_report = time.strftime("%Y-%m-%d %H:%M:%S")
         if self.path and os.path.exists(os.path.dirname(self.path)):

@@ -1,9 +1,9 @@
-"""国内版每日对话活跃上报与连登（issue #250 / 连续打卡）。
+"""每日对话活跃上报与连登（issue #250 / 连续打卡，issue #645 加入国际版）。
 
 包含行为级测试：
-1. can_report_activity 判定：仅限 cn 账号，按本地日期闸门（当天做过则不重复）。
+1. can_report_activity 判定：cn 与 intl 都适用，按本地日期闸门（当天做过则不重复）。
 2. report_activity 行为：
-   - 非 cn 账号直接拒绝；
+   - 非法 realm 直接拒绝；国际版按自己的 base（chat_base_url）上报；
    - 构造 chat 事件上报并校验上游 code=0；
    - 上报成功后更新 last_activity_report 并落盘；
    - 只读读取 streak days 带回 msg / streak_days 结构；
@@ -57,8 +57,12 @@ class CanReportActivityTests(unittest.TestCase):
         self.assertFalse(res.get("ok"))
         self.assertIn("enterprise", res.get("error", ""))
 
-    def test_intl_account_never_reports(self):
+    def test_intl_account_can_report(self):
+        # issue #645：国际版也有 growth 连登（www.workbuddy.ai 的 /activity/growth/streak），
+        # 只是上报端点不同，所以它同样算「今天还没做过活跃上报」。
         acc = make_account(realm="intl")
+        self.assertTrue(acc.can_report_activity(), acc.realm)
+        acc.last_activity_report = time.strftime("%Y-%m-%d %H:%M:%S")
         self.assertFalse(acc.can_report_activity())
 
     def test_cn_account_without_record_can_report(self):
@@ -75,11 +79,41 @@ class CanReportActivityTests(unittest.TestCase):
 
 
 class ReportActivityTests(unittest.TestCase):
-    def test_rejects_intl_realm(self):
-        acc = make_account(realm="intl")
+    def test_rejects_unknown_realm(self):
+        acc = make_account(realm="other")
         res = acc.report_activity()
         self.assertFalse(res.get("ok"))
         self.assertIn("only for CN", res.get("error", ""))
+
+    def test_intl_reports_against_its_own_base(self):
+        """国际版必须打到 www.workbuddy.ai；用国内 base 上报只会静默失败。"""
+        acc = make_account(uid="intl-base", realm="intl")
+        seen = []
+
+        def fake_report_events(account, events, base=None):
+            seen.append((account.uid, base))
+            return True
+
+        with mock.patch.object(wb_tasks, "report_events", fake_report_events), \
+             mock.patch.object(wb_tasks, "fetch_streak_days", return_value=3):
+            res = acc.report_activity()
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(seen, [("intl-base", acc.chat_base_url())])
+        self.assertIn("workbuddy.ai", seen[0][1])
+
+    def test_cn_keeps_the_default_base(self):
+        acc = make_account(uid="cn-base", realm="cn")
+        seen = []
+
+        def fake_report_events(account, events, base=None):
+            seen.append(base)
+            return True
+
+        with mock.patch.object(wb_tasks, "report_events", fake_report_events), \
+             mock.patch.object(wb_tasks, "fetch_streak_days", return_value=None):
+            res = acc.report_activity()
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(seen, [None])  # None 让 wb_tasks 走默认国内 base
 
     def test_fails_when_report_events_rejected(self):
         acc = make_account(realm="cn")

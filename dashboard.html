@@ -2632,6 +2632,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。': 'Once the credit spend of an account for the day reaches this, only free models are allowed (those marked x0.00 in the catalog) and models that cost credits switch to other accounts; it recovers after local midnight. 0 turns it off (default).',
     '账号，之后相关请求都会走该账号': 'account; requests will then go through it',
     '走网页通道': 'use the web channel',
+    '证书失败改走活跃上报': 'report activity when the certificate fails',
     '活跃使用的模型': 'Model for the daily activity',
     '(已指定)': '(set)',
     '（免费 0.00x）': ' (free 0.00x)',
@@ -3031,6 +3032,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "已启用：429 时自动切换出站身份": "已啟用：429 時自動切換出站身份",
     "已启用：余额低于": "已啟用：餘額低於",
     "已启用：国际版打卡走网页通道": "已啟用：國際版打卡走網頁通道",
+    "证书失败改走活跃上报": "憑證失敗改走活躍上報",
     "失败重试": "失敗重試",
     "最多尝试次数": "最多嘗試次數",
     "首轮等待": "首輪等待",
@@ -5153,6 +5155,11 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
             <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
               <input id="setDailyChatWeb" type="checkbox" style="width:16px;height:16px">
               走网页通道
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setDailyChatActivityFallback" type="checkbox" style="width:16px;height:16px">
+              证书失败改走活跃上报
+              <em id="setDailyChatActivityFallbackState" style="font-style:normal;font-size:12px;color:var(--dim)"></em>
             </label>
           </div>
         </div>
@@ -11754,6 +11761,14 @@ async function loadSettings(showToast){
         dailyChatCatchupState.textContent = dailyChatCatchup ? '(已启用)' : '(关闭)';
         dailyChatCatchupState.style.color = dailyChatCatchup ? 'var(--accent2)' : 'var(--dim)';
       }
+      const dailyChatActivityFallback = data.daily_chat_web_fallback_activity === true;
+      const dailyChatActivityFallbackInput = document.getElementById('setDailyChatActivityFallback');
+      if(dailyChatActivityFallbackInput) dailyChatActivityFallbackInput.checked = dailyChatActivityFallback;
+      const dailyChatActivityFallbackState = document.getElementById('setDailyChatActivityFallbackState');
+      if(dailyChatActivityFallbackState){
+        dailyChatActivityFallbackState.textContent = dailyChatActivityFallback ? '(已启用)' : '(关闭)';
+        dailyChatActivityFallbackState.style.color = dailyChatActivityFallback ? 'var(--accent2)' : 'var(--dim)';
+      }
       const dailyWebRandomPrompt = data.daily_chat_web_random_prompt === true;
       const dailyWebRandomPromptInput = document.getElementById('setDailyChatRandomPrompt');
       if(dailyWebRandomPromptInput) dailyWebRandomPromptInput.checked = dailyWebRandomPrompt;
@@ -12803,6 +12818,7 @@ async function saveDailyChatModule(btn){
   const concEl = document.getElementById('setDailyChatWebConcurrency');
   const backoffEl = document.getElementById('setDailyChatWebRetryBackoff');
   const catchupEl = document.getElementById('setDailyChatStartupCatchup');
+  const fallbackEl = document.getElementById('setDailyChatActivityFallback');
   const payload = {
     daily_chat_web: !!(webEl && webEl.checked),
     daily_chat_models: DAILY_CHAT_MODEL_SELECTED.slice(),
@@ -12811,6 +12827,7 @@ async function saveDailyChatModule(btn){
     daily_chat_web_concurrency: Number((concEl && concEl.value) || 1),
     daily_chat_web_retry_backoff: Number((backoffEl && backoffEl.value) || 0),
     daily_chat_startup_catchup: !!(catchupEl && catchupEl.checked),
+    daily_chat_web_fallback_activity: !!(fallbackEl && fallbackEl.checked),
     schedule: {daily_chat: DAILY_CHAT_TIMES_SELECTED.slice()}
   };
   if(btn) btn.disabled = true;
@@ -12834,11 +12851,13 @@ async function resetDailyChatModule(btn){
   const concEl = document.getElementById('setDailyChatWebConcurrency');
   const backoffEl = document.getElementById('setDailyChatWebRetryBackoff');
   const catchupEl = document.getElementById('setDailyChatStartupCatchup');
+  const fallbackEl = document.getElementById('setDailyChatActivityFallback');
   if(budgetEl) budgetEl.value = '600';
   if(turnEl) turnEl.value = '120';
   if(concEl) concEl.value = '1';
   if(backoffEl) backoffEl.value = '5';
   if(catchupEl) catchupEl.checked = true;
+  if(fallbackEl) fallbackEl.checked = false;
   renderDailyChatModelList([]);
   renderDailyChatTimes([]);
   if(btn) btn.disabled = true;
@@ -12850,6 +12869,7 @@ async function resetDailyChatModule(btn){
       daily_chat_web_concurrency: 1,
       daily_chat_web_retry_backoff: 5,
       daily_chat_startup_catchup: true,
+      daily_chat_web_fallback_activity: false,
       schedule: {daily_chat: []}
     });
     toast('已恢复推荐值：随机两个时段、自动候选、预算 600 秒', 'ok');

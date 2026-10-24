@@ -10203,6 +10203,8 @@ def runtime_settings_view():
         "daily_chat_budget_max": wb_settings.DAILY_CHAT_BUDGET_MAX,
         "daily_chat_startup_catchup":
             wb_settings.daily_chat_startup_catchup(ACCOUNTS_DIR),
+        "daily_chat_web_fallback_activity":
+            wb_settings.daily_chat_web_fallback_activity(ACCOUNTS_DIR),
         "local_web_tools": wb_settings.local_web_tools(ACCOUNTS_DIR),
         "remaining_priority_enabled":
             wb_settings.remaining_priority_enabled(ACCOUNTS_DIR),
@@ -20013,6 +20015,14 @@ class Handler(BaseHTTPRequestHandler):
                     "invalid_request_error")
             wb_settings.set_daily_chat_startup_catchup(ACCOUNTS_DIR, raw)
             reply["daily_chat_startup_catchup"] = raw
+        if "daily_chat_web_fallback_activity" in payload:
+            raw = payload.get("daily_chat_web_fallback_activity")
+            if not isinstance(raw, bool):
+                return self._error(
+                    400, "daily_chat_web_fallback_activity must be true or false",
+                    "invalid_request_error")
+            wb_settings.set_daily_chat_web_fallback_activity(ACCOUNTS_DIR, raw)
+            reply["daily_chat_web_fallback_activity"] = raw
         if "local_web_tools" in payload:
             raw = payload.get("local_web_tools")
             if not isinstance(raw, bool):

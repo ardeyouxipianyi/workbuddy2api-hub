@@ -2386,6 +2386,7 @@ DAILY_CHAT_RANDOM_HOURS = (6, 11)
 DAILY_CHAT_RANDOM_MINUTES = (5, 55)
 DAILY_CHAT_RANDOM_KEY = "daily_chat_random"
 DAILY_CHAT_STARTUP_CATCHUP_KEY = "daily_chat_startup_catchup"
+DAILY_CHAT_WEB_FALLBACK_ACTIVITY_KEY = "daily_chat_web_fallback_activity"
 
 
 def _clean_models(value):
@@ -2550,6 +2551,32 @@ def set_daily_chat_startup_catchup(accounts_dir, enabled):
     with _lock:
         data = load(accounts_dir)
         data[DAILY_CHAT_STARTUP_CATCHUP_KEY] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
+def daily_chat_web_fallback_activity(accounts_dir):
+    """Whether a web-channel TLS failure falls back to the activity report.
+
+    Off unless the operator turns it on. The web channel is the only leg that
+    actually earns the daily reward, so its failure is reported as a failure -
+    otherwise the day looks done and the credits silently never arrive. The
+    exception is a certificate failure on the sandbox endpoint (#645): that is
+    an upstream/network configuration fault, retrying the same turn cannot
+    fix it, and leaving the whole day failed while the streak can be lit by a
+    plain POST /v2/report costs the operator the streak too. With this switch
+    on, a TLS failure on the web leg reports activity instead of failing the
+    round. Every other web failure keeps its old meaning.
+    """
+    return load(accounts_dir).get(DAILY_CHAT_WEB_FALLBACK_ACTIVITY_KEY) is True
+
+
+def set_daily_chat_web_fallback_activity(accounts_dir, enabled):
+    """Persist the web-leg fallback switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data[DAILY_CHAT_WEB_FALLBACK_ACTIVITY_KEY] = enabled
         save(accounts_dir, data)
     return enabled
 
