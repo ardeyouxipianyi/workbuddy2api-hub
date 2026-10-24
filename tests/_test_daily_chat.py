@@ -6,6 +6,7 @@ pinned here so it cannot drift from what the web app actually sends.
 """
 import io
 import json
+import tempfile
 import urllib.error, os, sys, unittest, time
 from unittest import mock
 
@@ -39,6 +40,13 @@ class DailyChatTests(unittest.TestCase):
         acc.last_daily_chat = "2020-01-01 10:00:00"
         self.assertTrue(acc.can_daily_chat())
 
+        # An upstream 11140 restriction suppresses later scheduler slots until
+        # its persisted window expires.
+        acc.restricted_until = time.time() + 3600
+        self.assertFalse(acc.can_daily_chat())
+        acc.restricted_until = time.time() - 1
+        self.assertTrue(acc.can_daily_chat())
+
     def test_cn_account_ineligible(self):
         acc = wb_accounts.Account({
             "uid": "test_cn_1",
@@ -47,6 +55,39 @@ class DailyChatTests(unittest.TestCase):
         })
         self.assertFalse(acc.can_daily_chat())
         self.assertTrue(acc.can_checkin())
+
+    def test_daily_chat_11140_persists_restriction_and_stops_retry(self):
+        body = json.dumps({"code": 11140, "msg": "request illegal"}).encode("utf-8")
+        with tempfile.TemporaryDirectory(prefix="daily-chat-11140-") as directory:
+            acc = wb_accounts.Account({
+                "uid": "test_intl_restricted",
+                "realm": "intl",
+                "accessToken": "dummy",
+                "lastDailyChat": None,
+            })
+            acc.save(directory)
+            err = urllib.error.HTTPError(
+                "https://www.workbuddy.ai/chat", 403, "Forbidden", {}, io.BytesIO(body))
+            before = time.time()
+            with mock.patch.object(wb_accounts, "urlopen", side_effect=err):
+                res = acc._daily_chat_upstream(web=False)
+
+            self.assertFalse(res["ok"])
+            self.assertTrue(res["restricted"])
+            self.assertGreater(acc.restricted_until, before)
+            self.assertFalse(acc.can_daily_chat())
+            with open(acc.path, "r", encoding="utf-8") as handle:
+                saved = json.load(handle)
+            self.assertEqual(saved["restrictedUntil"], acc.restricted_until)
+
+            # A manual retry during the restriction window must not pretend the
+            # day is complete and must not touch the upstream again.
+            with mock.patch.object(acc, "_daily_chat_upstream",
+                                   side_effect=AssertionError("must not retry")):
+                skipped = acc.daily_chat(web=False, trigger="manual")
+            self.assertFalse(skipped["ok"])
+            self.assertTrue(skipped["skipped"])
+            self.assertTrue(skipped["restricted"])
 
 class WebChannelTests(unittest.TestCase):
     UID = "c90a4e93-edad-42fe-aa3a-133fb27cf6b6"

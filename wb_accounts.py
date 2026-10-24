@@ -2022,6 +2022,12 @@ class Account(object):
     def can_daily_chat(self):
         if self.realm != "intl":
             return False
+        # 403 / code 11140 is an account-level restriction. Scheduled daily
+        # activity must respect the same persisted restriction window as normal
+        # chat dispatch, otherwise every later activity slot probes the account
+        # again even though the upstream already told us to stop.
+        if self.restricted_until > time.time():
+            return False
         if not self.last_daily_chat:
             return True
         today_str = time.strftime("%Y-%m-%d")
@@ -2575,6 +2581,11 @@ class Account(object):
         """
         if self.realm != "intl":
             return {"ok": False, "error": "daily chat is only for international accounts"}
+        # 11140 的限制窗口要和普通 chat 一样先挡住；这里单独返回失败形状，
+        # 不能把「账号受限」伪装成「今日活跃已完成」。
+        if self.restricted_until > time.time():
+            return {"ok": False, "skipped": True, "restricted": True,
+                    "error": "账号处于上游风控限制窗口，跳过每日活跃"}
         # 当日活跃成功后再触发（下一个定时点、手动补跑、并发重复调度）直接
         # 跳过，连桌面腿也不发：这一天的 30/50 积分已经拿到了。
         if not self.can_daily_chat():
@@ -2676,6 +2687,22 @@ class Account(object):
                 err = exc.read().decode("utf-8", "replace")
             except Exception:
                 err = str(exc)
+            # Normal chat already treats 403/code 11140 as an account-level
+            # restriction and persists restrictedUntil. Daily activity used to
+            # bypass that path and therefore retried the same restricted account
+            # at later scheduler slots. Mirror the existing governance here.
+            upstream_code = None
+            try:
+                body = json.loads(err or "{}")
+                upstream_code = body.get("code") if isinstance(body, dict) else None
+            except Exception:
+                pass
+            if exc.code == 403 and upstream_code == 11140:
+                self.note_restricted(detail=err)
+                if self.path and os.path.exists(os.path.dirname(self.path)):
+                    self.save(os.path.dirname(self.path))
+                return {"ok": False, "restricted": True,
+                        "error": f"HTTP 403 / 11140: {err[:100]}"}
             return {"ok": False, "error": f"HTTP {exc.code}: {err[:100]}"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
