@@ -16,6 +16,7 @@ DEFAULTS = {
     "timeout_seconds": 120,
     "models_ttl_seconds": 60,
     "catalog_models": [],
+    "catalog_include_images": False,
 }
 
 
@@ -39,6 +40,8 @@ class BridgeConfig:
             raise ValueError("unknown CodeArts setting")
         if not isinstance(data["enabled"], bool):
             raise ValueError("enabled must be true or false")
+        if not isinstance(data["catalog_include_images"], bool):
+            raise ValueError("catalog_include_images must be true or false")
         selection = data["catalog_models"]
         if (not isinstance(selection, list) or any(not isinstance(mid, str) or
                 not mid.strip() or mid != mid.strip() for mid in selection)):

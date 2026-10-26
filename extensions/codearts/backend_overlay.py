@@ -77,9 +77,12 @@ func (c *Client) ChatStreamForAccount(ctx context.Context, accountID, chatID str
         '"model":    upstream.RegisteredModelForAccount(acct.UID, model),')
     probes = _replace(probes, 'upstream.IsBenefitModel(acct.UID, model))',
         'upstream.IsBenefitModel(acct.UID, upstream.RegisteredModelForAccount(acct.UID, model)))')
+    from .multimodal_overlay import apply
+    text, server, request = apply(source, text, server, _replace)
     replacements = {}
     for name, original, body in (("models.go", models, text), ("handler.go", handler, server),
-                                  ("availability.go", availability, probes)):
+                                  ("availability.go", availability, probes),
+                                  ("request.go", source / "internal/server/request.go", request)):
         output = directory / name
         output.write_text(body, encoding="utf-8")
         replacements[str(original)] = str(output)

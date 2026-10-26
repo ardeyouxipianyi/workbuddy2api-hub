@@ -55,5 +55,46 @@ class NoteErrorTests(unittest.TestCase):
         self.assertTrue(account.ready())
 
 
+class NoteSuccessTests(unittest.TestCase):
+    """A served request is proof the token is alive, so it lifts the park.
+
+    Regression: the panel's "test" returned a real model reply while the badge
+    still read 「凭证失效」 and the account stayed out of rotation, because
+    `note_success()` cleared every other penalty but not `token_expired`.
+    """
+
+    def test_success_clears_the_credential_park(self):
+        account = make_account()
+        account.note_error("HTTP 401")
+        self.assertTrue(account.token_expired)
+        self.assertFalse(account.ready())
+
+        account.note_success()
+
+        self.assertFalse(account.token_expired)
+        self.assertTrue(account.ready())
+        view = account.public()
+        self.assertFalse(view["tokenExpired"])
+        self.assertFalse(view["needRelogin"])
+        self.assertNotEqual(view["expiresIn"], "expired")
+
+    def test_success_clears_the_park_for_one_model_only_call(self):
+        # The panel test and the real dispatch path both pass a model name.
+        account = make_account()
+        account.note_error("HTTP 401")
+        account.note_success(model="deepseek-v4.1-flash")
+        self.assertFalse(account.token_expired)
+        self.assertTrue(account.ready(model="deepseek-v4.1-flash"))
+
+    def test_success_cannot_resurrect_a_tokenless_account(self):
+        # No credential means no credential: clearing the flag must not make an
+        # account without an access token dispatchable, and the badge stays red.
+        account = wb_accounts.Account({"uid": "uid-no-token"})
+        account.token_expired = True
+        account.note_success()
+        self.assertFalse(account.ready())
+        self.assertTrue(account.public()["tokenExpired"])
+
+
 if __name__ == "__main__":
     unittest.main()

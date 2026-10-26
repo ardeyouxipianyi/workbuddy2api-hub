@@ -93,8 +93,8 @@ try {
       installUpdateNow: installUpdateNow,
       saveUpdateCheckEnabled: saveUpdateCheckEnabled,
       applyUpdateStatus: applyUpdateStatus,
-      saveDailyChatWebRetry: saveDailyChatWebRetry,
-      saveDailyChatWebTuning: saveDailyChatWebTuning,
+      saveDailyChatModule: saveDailyChatModule,
+      resetDailyChatModule: resetDailyChatModule,
     };`)();
 } catch(e) {
   console.log = realLog;
@@ -294,66 +294,64 @@ const posts = () => calls.filter(c => c.method === 'POST');
         JSON.stringify(toasts));
   updatesStatus = 200;
 
-  // ---- 8. 每日活跃网页通道的重试开关、尝试次数与首轮等待 ----
-  // 开关自动保存（onchange），失败要把勾拨回去：否则界面显示一个没落盘的状态。
+  // ---- 8. 每日活跃模块：一次提交预算 / 候选序列 / 时段 ----
   calls.length = 0;
   toasts.length = 0;
-  element('setDailyChatWebRetry').checked = false;
-  await api.saveDailyChatWebRetry();
+  element('setDailyChatWeb').checked = true;
+  element('setDailyChatBudget').value = '900';
+  element('setDailyChatTurnTimeout').value = '45';
+  element('setDailyChatWebConcurrency').value = '2';
+  element('setDailyChatWebRetryBackoff').value = '7';
+  element('setDailyChatStartupCatchup').checked = false;
+  element('setDailyChatActivityFallback').checked = true;
+  await api.saveDailyChatModule({disabled: false});
   await settled();
-  let retrySave = posts().filter(c => c.url === '/settings/save');
-  check('重试开关保存走 POST /settings/save', retrySave.length === 1, urls().join(', '));
-  check('提交的是 daily_chat_web_retry 布尔值',
-        retrySave.length === 1 && JSON.parse(retrySave[0].body).daily_chat_web_retry === false,
-        retrySave.length ? retrySave[0].body : '(no save)');
-  check('关掉重试的提示是成功态',
+  let moduleSave = posts().filter(c => c.url === '/settings/save');
+  check('模块保存只发一次 POST /settings/save', moduleSave.length === 1, urls().join(', '));
+  let body = moduleSave.length ? JSON.parse(moduleSave[0].body) : {};
+  check('提交单账号预算为整数秒', body.daily_chat_budget === 900, JSON.stringify(body));
+  check('提交单轮最长为整数秒', body.daily_chat_web_timeout === 45, JSON.stringify(body));
+  check('提交并发数与建会话退避', body.daily_chat_web_concurrency === 2 &&
+        body.daily_chat_web_retry_backoff === 7, JSON.stringify(body));
+  check('提交启动补跑开关', body.daily_chat_startup_catchup === false, JSON.stringify(body));
+  check('提交证书失败改走活跃上报开关',
+        body.daily_chat_web_fallback_activity === true, JSON.stringify(body));
+  check('候选序列与时段随模块一起提交',
+        Array.isArray(body.daily_chat_models) && body.schedule &&
+        Array.isArray(body.schedule.daily_chat), JSON.stringify(body));
+  check('保存成功给出成功提示',
         toasts.length === 1 && toasts[0][1] === 'ok', JSON.stringify(toasts));
 
-  // 存失败时把开关拨回原位（checked 恢复成 true）。
+  // 恢复推荐值：把四个数值与开关写回默认，并提交一次。
+  calls.length = 0;
+  toasts.length = 0;
+  await api.resetDailyChatModule({disabled: false});
+  await settled();
+  let resetSave = posts().filter(c => c.url === '/settings/save');
+  check('恢复推荐值走 POST /settings/save', resetSave.length === 1, urls().join(', '));
+  let resetBody = resetSave.length ? JSON.parse(resetSave[0].body) : {};
+  check('推荐值 = 预算 600 / 单轮 120 / 并发 1 / 退避 5',
+        resetBody.daily_chat_budget === 600 && resetBody.daily_chat_web_timeout === 120 &&
+        resetBody.daily_chat_web_concurrency === 1 &&
+        resetBody.daily_chat_web_retry_backoff === 5, JSON.stringify(resetBody));
+  check('推荐值清空候选序列与时段（回到随机 + 自动）',
+        Array.isArray(resetBody.daily_chat_models) && resetBody.daily_chat_models.length === 0 &&
+        resetBody.schedule && resetBody.schedule.daily_chat.length === 0,
+        JSON.stringify(resetBody));
+  check('推荐值关闭证书失败改走活跃上报',
+        resetBody.daily_chat_web_fallback_activity === false, JSON.stringify(resetBody));
+  check('恢复推荐值后输入框写回 600', element('setDailyChatBudget').value === '600');
+  check('恢复推荐值后回退开关被取消勾选',
+        element('setDailyChatActivityFallback').checked === false);
+
+  // 存失败时给出失败提示，不静默。
   saveStatus = 500;
   calls.length = 0;
   toasts.length = 0;
-  element('setDailyChatWebRetry').checked = false;
-  await api.saveDailyChatWebRetry();
+  await api.saveDailyChatModule({disabled: false});
   await settled();
   saveStatus = 200;
-  check('保存失败时开关拨回原位', element('setDailyChatWebRetry').checked === true);
-  check('保存失败给出失败提示',
-        toasts.length === 1 && toasts[0][1] === 'bad', JSON.stringify(toasts));
-
-  // 次数与首轮等待一次提交；空值/小数/非数字就地拦下，不发请求。
-  calls.length = 0;
-  toasts.length = 0;
-  element('setDailyChatWebAttempts').value = '4';
-  element('setDailyChatWebTimeout').value = '45';
-  await api.saveDailyChatWebTuning({disabled: false});
-  await settled();
-  let tuningSave = posts().filter(c => c.url === '/settings/save');
-  check('次数与首轮等待一起走 POST /settings/save', tuningSave.length === 1, urls().join(', '));
-  check('提交的是整数次数与整数秒',
-        tuningSave.length === 1 &&
-        JSON.parse(tuningSave[0].body).daily_chat_web_attempts === 4 &&
-        JSON.parse(tuningSave[0].body).daily_chat_web_timeout === 45,
-        tuningSave.length ? tuningSave[0].body : '(no save)');
-
-  calls.length = 0;
-  toasts.length = 0;
-  element('setDailyChatWebAttempts').value = '4';
-  element('setDailyChatWebTimeout').value = '';
-  await api.saveDailyChatWebTuning({disabled: false});
-  await settled();
-  check('首轮等待空值不发请求', posts().length === 0, urls().join(', '));
-  check('首轮等待空值给出失败提示',
-        toasts.length === 1 && toasts[0][1] === 'bad', JSON.stringify(toasts));
-
-  calls.length = 0;
-  toasts.length = 0;
-  element('setDailyChatWebAttempts').value = '';
-  element('setDailyChatWebTimeout').value = '120';
-  await api.saveDailyChatWebTuning({disabled: false});
-  await settled();
-  check('次数空值不发请求', posts().length === 0, urls().join(', '));
-  check('次数空值给出失败提示',
+  check('模块保存失败给出失败提示',
         toasts.length === 1 && toasts[0][1] === 'bad', JSON.stringify(toasts));
 
   console.log = realLog;

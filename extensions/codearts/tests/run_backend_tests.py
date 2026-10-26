@@ -27,6 +27,8 @@ def main():
                 shutil.copy2(source / name, mirror / name)
         shutil.copy2(Path(__file__).with_name("backend-modelids_test.go"),
                      mirror / "internal/upstream/bridge_modelids_test.go")
+        shutil.copy2(Path(__file__).with_name("backend-images-server_test.go"),
+                     mirror / "internal/server/bridge_images_test.go")
         overlay = model_id_overlay(mirror, Path(temporary) / "overlay")
         subprocess.run([args.go, "test", "-overlay", str(overlay), "-count=1", "./..."],
                        cwd=str(mirror), check=True)

@@ -753,8 +753,22 @@ def _apply_opencode(paths, ctx):
     models = {}
     for entry in ctx.get("models") or []:
         mid = entry.get("id")
-        if mid:
-            models[mid] = {}
+        if not mid:
+            continue
+        limits = {}
+        try:
+            context = int(entry.get("context_window") or 0)
+        except (TypeError, ValueError):
+            context = 0
+        try:
+            output = int(entry.get("max_output") or 0)
+        except (TypeError, ValueError):
+            output = 0
+        if context > 0:
+            limits["context"] = context
+        if output > 0:
+            limits["output"] = output
+        models[mid] = {"limit": limits} if limits else {}
     provider = {
         "npm": "@ai-sdk/openai-compatible",
         "name": PROVIDER_NAME,

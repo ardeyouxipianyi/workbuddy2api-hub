@@ -8,10 +8,12 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_identity
+import wb_accounts
 import wb_proxy
 import wb_settings
 
@@ -137,6 +139,94 @@ class PasswordGateTests(unittest.TestCase):
         self.assertEqual(wb_settings.identity_versions(self.dir),
                          {"desktop_cn": "9.9.9"})
         self.assertEqual(wb_identity.desktop_version("cn"), "9.9.9")
+
+
+class DesktopChatProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        os.environ.pop("WB_DESKTOP_CHAT_COMPAT", None)
+        wb_identity.configure_versions({})
+        self.token = mock.patch.object(wb_accounts.Account, "_device_token", return_value="")
+        self.token.start()
+        self.addCleanup(self.env.stop)
+        self.addCleanup(self.token.stop)
+        self.addCleanup(wb_identity.configure_versions, {})
+
+    def account(self, product="workbuddy", realm="cn"):
+        return wb_accounts.Account({"uid": "desktop-fixture", "accessToken": "fixture",
+                                    "product": product, "realm": realm}, path=None)
+
+    def test_default_retains_legacy_profile(self):
+        headers = self.account().headers()
+        self.assertIn("Origin", headers)
+        self.assertNotIn("x-stainless-runtime", headers)
+        self.assertNotIn("X-B3-ParentSpanId", headers)
+
+    def test_only_explicit_one_enables_profile(self):
+        for value in ("0", "false", "true", "yes", ""):
+            with self.subTest(value=value):
+                os.environ["WB_DESKTOP_CHAT_COMPAT"] = value
+                self.assertFalse(wb_identity.desktop_chat_compat_enabled())
+        os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+        self.assertTrue(wb_identity.desktop_chat_compat_enabled())
+
+    def test_desktop_realms_use_sdk_not_browser_headers(self):
+        os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+        for realm in ("cn", "intl"):
+            with self.subTest(realm=realm):
+                headers = self.account(realm=realm).headers()
+                self.assertEqual(headers["Accept"], "application/json")
+                self.assertEqual(headers["Authorization"], "Bearer fixture")
+                self.assertEqual(headers["X-User-Id"], "desktop-fixture")
+                for name in ("Origin", "Referer", "Accept-Language", "X-Requested-With",
+                             "X-CodeBuddy-Request", "X-Machine-ID", "X-Session-ID"):
+                    self.assertNotIn(name, headers)
+
+    def test_sdk_headers_respect_existing_runtime_overrides(self):
+        os.environ.update(WB_DESKTOP_CHAT_COMPAT="1", WB_IDENTITY_OS="Linux",
+                          WB_IDENTITY_ARCH="arm64")
+        wb_identity.configure_versions({"sdk": "9.1.0", "node": "v23.0.0"})
+        headers = self.account().headers()
+        for name, value in {"lang": "js", "package-version": "9.1.0", "os": "Linux",
+                            "arch": "arm64", "runtime": "node", "runtime-version": "v23.0.0",
+                            "retry-count": "0"}.items():
+            self.assertEqual(headers["x-stainless-" + name], value)
+        self.assertNotIn("x-stainless-timeout", headers)
+
+    def test_b3_relationships_and_parent_are_consistent(self):
+        os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+        headers = self.account().headers()
+        trace, span, sampled, parent = headers["b3"].split("-")
+        self.assertEqual(headers["X-B3-TraceId"], trace)
+        self.assertEqual(headers["X-B3-SpanId"], span)
+        self.assertEqual(headers["X-B3-ParentSpanId"], parent)
+        self.assertEqual((len(trace), len(span), len(parent), sampled), (32, 16, 16, "1"))
+        self.assertEqual(headers["traceparent"], "00-" + trace + "-" + span + "-01")
+
+    def test_other_products_and_billing_are_unchanged(self):
+        stable = ("Accept", "Origin", "Referer", "Accept-Language", "X-Requested-With",
+                  "User-Agent", "x-stainless-runtime", "x-stainless-timeout", "X-IDE-Type")
+        for product, purpose in (("cli", "chat"), ("vscode", "chat"), ("workbuddy", "billing")):
+            with self.subTest(product=product, purpose=purpose):
+                acc = self.account(product)
+                os.environ.pop("WB_DESKTOP_CHAT_COMPAT", None)
+                before = acc.headers(purpose=purpose)
+                os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+                after = acc.headers(purpose=purpose)
+                self.assertEqual({k: before.get(k) for k in stable},
+                                 {k: after.get(k) for k in stable})
+
+    def test_missing_device_token_is_not_invented(self):
+        os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+        self.assertNotIn("X-Device-Token", self.account().headers())
+        self.assertNotIn("X-Device-Token-Error", self.account().headers())
+
+    def test_real_device_token_preserves_realm_boundary(self):
+        os.environ["WB_DESKTOP_CHAT_COMPAT"] = "1"
+        with mock.patch.object(wb_accounts.Account, "_device_token", return_value="real-fixture"):
+            self.assertEqual(self.account().headers()["X-Device-Token"], "real-fixture")
+            self.assertNotIn("X-Device-Token", self.account(realm="intl").headers())
 
 
 if __name__ == "__main__":

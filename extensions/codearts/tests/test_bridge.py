@@ -115,6 +115,26 @@ class ConfigTests(unittest.TestCase):
             self.assertFalse(selected[0]['backend_listed'])
             self.assertNotIn('context_length', selected[0])
 
+    def test_image_catalog_requires_explicit_boolean_and_deduplicates_aliases(self):
+        self.config.update({'enabled': True, 'api_key': 'test', 'catalog_models': ['GLM-5.2']})
+        client = CodeArtsClient(self.config)
+        data = {'data': [{'id': 'GLM-5.2'},
+                         {'id': 'Vision Name', 'registered_id': 'vision-real', 'supports_images': True},
+                         {'id': 'vision-real', 'registered_id': 'vision-real', 'supports_images': True},
+                         {'id': 'text', 'supports_images': False}, {'id': 'unknown'},
+                         {'id': 'string-true', 'supports_images': 'true'},
+                         {'id': 'conflict', 'supports_images': True, 'capability_conflict': True}]}
+        with patch.object(client, '_json', return_value=data):
+            self.assertEqual([m['id'] for m in client.models()], ['codeart/GLM-5.2'])
+            self.config.update({'catalog_include_images': True})
+            models = client.models()
+            self.assertEqual([m['id'] for m in models], ['codeart/GLM-5.2', 'codeart/vision-real'])
+            self.assertTrue(models[-1]['supports_images'])
+            self.config.update({'catalog_include_images': False})
+            self.assertEqual(len(client.models()), 1)
+        with self.assertRaises(ValueError):
+            self.config.update({'catalog_include_images': 'true'})
+
     def test_saved_secret_never_appears_in_view_and_blank_preserves_it(self):
         self.config.update({"api_key": "secret-123", "base_url": "http://localhost:7866/v1/"})
         self.config.update({"api_key": "", "enabled": True})
@@ -287,6 +307,77 @@ class GatewayTests(unittest.TestCase):
                 self.assertTrue(row.get("error"), row)
                 self.assertNotEqual(row["outcome"], "completed")
 
+    def test_messages_stream_failure_keeps_terminal_error_after_heartbeat_close(self):
+        Backend.stream_error = True
+        with patch.object(self.hub, "_anthropic_messages_enabled", return_value=True):
+            status, _, raw = self.request("POST", "/v1/messages", {
+                "model": "codeart/GLM-5.2", "max_tokens": 32, "stream": True,
+                "messages": [{"role": "user", "content": "hello"}]})
+        self.assertEqual(status, 200)
+        self.assertIn(b"event: error", raw)
+        self.assertNotIn(b"event: message_stop", raw)
+        row = json.loads(Path(self.hub.USAGE_LOG).read_text().splitlines()[-1])
+        self.assertEqual(row["outcome"], "upstream_aborted")
+
+    def test_images_survive_chat_responses_and_anthropic_boundaries(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        cases = [('/v1/chat/completions', {'model': 'codeart/GLM-5.2', 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'}, image]}]}),
+                 ('/v1/responses', {'model': 'codeart/GLM-5.2', 'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': 'colour?'}, {'type': 'input_image', 'image_url': url, 'detail': 'high'}]}]}),
+                 ('/v1/messages', {'model': 'codeart/GLM-5.2', 'max_tokens': 32, 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'}, {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}}]}]})]
+        with patch.object(self.hub, '_anthropic_messages_enabled', return_value=True):
+            for path, payload in cases:
+                with self.subTest(path=path):
+                    status, _, raw = self.request('POST', path, payload)
+                    self.assertEqual(status, 200, raw)
+                    body = [b for p, h, b in Backend.requests if p == '/v1/chat/completions'][-1]
+                    self.assertEqual(body['model'], 'GLM-5.2')
+                    parts = body['messages'][-1]['content']
+                    got = next(p for p in parts if p.get('type') == 'image_url')
+                    self.assertEqual(got['image_url']['url'], url)
+                    if path != '/v1/messages':
+                        self.assertEqual(got['image_url']['detail'], 'high')
+
+    def test_unsupported_media_rejected_before_outbound(self):
+        with patch.object(self.hub, '_anthropic_messages_enabled', return_value=True):
+            for path in ('/v1/chat/completions', '/v1/responses', '/v1/messages'):
+                content = [{'type': 'input_audio', 'input_audio': {'data': 'x', 'format': 'wav'}}]
+                payload = {'model': 'codeart/GLM-5.2', 'max_tokens': 32}
+                payload['input' if path.endswith('responses') else 'messages'] = [{'role': 'user', 'content': content}]
+                before = len(Backend.requests)
+                status, _, raw = self.request('POST', path, payload)
+                self.assertEqual(status, 400, raw)
+                self.assertEqual(len(Backend.requests), before)
+
+    def test_responses_tool_output_media_is_validated(self):
+        for kind in ('input_audio', 'input_video', 'input_file'):
+            payload = {'model': 'codeart/GLM-5.2', 'input': [
+                {'role': 'user', 'content': 'inspect result'},
+                {'type': 'function_call', 'call_id': 'call-1', 'name': 'inspect', 'arguments': '{}'},
+                {'type': 'function_call_output', 'call_id': 'call-1', 'output': [{'type': kind}]}]}
+            before = len(Backend.requests)
+            status, _, raw = self.request('POST', '/v1/responses', payload)
+            self.assertEqual(status, 400, raw)
+            self.assertEqual(len(Backend.requests), before)
+
+    def test_terminal_heartbeat_fix_is_scoped_to_codearts(self):
+        runtime = self.hub._codearts_bridge
+        writes = []
+        runtime.local.codearts_stream = True
+        heartbeat = self.hub.SSEHeartbeat(writes.append, interval=3600)
+        runtime.local.codearts_stream = False
+        heartbeat.write(b'data: normal\n\n')
+        heartbeat.close()
+        heartbeat.write(b'data: after-close\n\n')
+        heartbeat.write(b'event: error\ndata: {}\n\n')
+        heartbeat.write(b'event: error\ndata: {}\n\n')
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(writes[-1].startswith(b'event: error'))
+        native = self.hub.SSEHeartbeat(writes.append, interval=3600)
+        native.close()
+        native.write(b'event: error\ndata: {}\n\n')
+        self.assertEqual(len(writes), 2, 'WorkBuddy post-close behavior must stay unchanged')
+
     def test_pinned_workbuddy_route_cannot_access_codearts(self):
         status, _, raw = self.request("POST", "/u/wb-test/v1/chat/completions", {
             "model": "codearts/GLM-5.2", "messages": [{"role": "user", "content": "hi"}]})
@@ -418,10 +509,16 @@ class GatewayTests(unittest.TestCase):
         status, headers, raw = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b'/codearts/dashboard.js', raw)
+        self.assertIn(b'/codearts/dashboard.css', raw)
         self.assertIn("codearts", headers.get("ETag", ""))
         status, _, raw = self.request("GET", "/codearts/dashboard.js")
         self.assertEqual(status, 200)
         self.assertNotIn(b"backend-test-key", raw)
+        status, headers, css = self.request("GET", "/codearts/dashboard.css")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers.get("Content-Type", "").startswith("text/css"))
+        self.assertIn(b"#pageCodearts", css)
+        self.assertNotIn(b"backend-test-key", css)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 import urllib.error
 
@@ -115,8 +116,6 @@ class CleanupTests(unittest.TestCase):
         if name is not None:
             directory = os.path.join(_TMP.name, name)
             os.makedirs(directory, exist_ok=True)
-            if retry is not None:
-                wb_settings.set_daily_chat_web_retry(directory, retry)
             acc.path = os.path.join(directory, "acc-intl.json")
         return acc
 
@@ -168,8 +167,13 @@ class CleanupTests(unittest.TestCase):
                                        "error": "会话在 120s 内没有跑完（状态=working）"},
                            acc=acc)
         self.assertFalse(res.get("ok"))
-        self.assertEqual(len(stub.actions("stop")), 1)
-        self.assertEqual(len(stub.actions("delete")), 1)
+        # 轮数由候选序列推出（至少两轮：第二轮留给「会话只是慢」），所以不再断言
+        # 「恰好一轮」；改断言不变量——建出来的每一条会话都必须被收尾。
+        # 失败的一轮是「先 stop 再 delete」，所以两者都该等于建出来的会话数。
+        self.assertEqual(len(stub.actions("stop")), len(stub.created()),
+                         "每建一条会话都必须 stop")
+        self.assertEqual(len(stub.actions("delete")), len(stub.created()),
+                         "失败的一轮 stop 之后还要 delete")
 
     def test_cleanup_runs_when_the_sandbox_lookup_fails(self):
         stub = WebStub(session_error=OSError("connection reset"))
@@ -177,7 +181,7 @@ class CleanupTests(unittest.TestCase):
         res = self.run_web(stub, acc=acc)
         self.assertFalse(res.get("ok"))
         self.assertIn("session 查询失败", res.get("error", ""))
-        self.assertEqual(len(stub.actions("delete")), 1,
+        self.assertEqual(len(stub.actions("delete")), len(stub.created()),
                          "会话已经建出来了，失败也必须收尾")
 
     def test_cleanup_runs_when_the_sandbox_has_no_link(self):
@@ -186,7 +190,8 @@ class CleanupTests(unittest.TestCase):
         res = self.run_web(stub, acc=acc)
         self.assertFalse(res.get("ok"))
         self.assertIn("沙箱", res.get("error", ""))
-        self.assertEqual(len(stub.actions("delete")), 1)
+        self.assertEqual(len(stub.actions("delete")), len(stub.created()),
+                         "建完就崩的分支也要收尾")
 
     # -- 10105：先清理再重试 -------------------------------------------------
     def leaked(self, count=10, name="Hi"):
@@ -222,10 +227,11 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(CREATE_URL + "old-00/stop", stopped)
 
     def test_pruning_does_nothing_below_the_limit(self):
-        stub = WebStub(creates=[active_limit_error()],
-                       conversations=self.leaked(3))
-        res = self.run_web(stub)
-        self.assertFalse(res.get("ok"))
+        """prune 只在撞到上限时才动手；低于上限时由按年龄的清扫兜底。"""
+        stub = WebStub(conversations=self.leaked(3))
+        acc = self.account("prune-below")
+        stopped = self._with_stub(stub, acc.web_conversation_prune)
+        self.assertEqual(stopped, 0)
         self.assertEqual(stub.actions("stop"), [])
 
     def test_the_limit_error_is_final_when_nothing_can_be_freed(self):
@@ -243,7 +249,6 @@ class CleanupTests(unittest.TestCase):
     def test_the_limit_error_is_not_retried_by_the_outer_loop(self):
         directory = os.path.join(_TMP.name, "limit-retry")
         os.makedirs(directory, exist_ok=True)
-        wb_settings.set_daily_chat_web_retry(directory, True)
         acc = self.account()
         acc.path = os.path.join(directory, "acc-intl.json")
         stub = WebStub(creates=[active_limit_error()],
@@ -269,6 +274,133 @@ class CleanupTests(unittest.TestCase):
         stub = WebStub(action_error=OSError("cleanup endpoint down"))
         res = self.run_web(stub)
         self.assertTrue(res.get("ok"), res)
+
+    # -- 卡死的一轮：finally 跑不到，由别的线程代收尾 ------------------------
+    def test_reclaim_releases_a_conversation_left_by_a_stuck_round(self):
+        """一轮卡在 socket 上时 finally 永远跑不到，登记表让别的线程替它收尾。"""
+        stub = WebStub()
+        acc = self.account()
+        wb_accounts.web_live_register(acc.uid, "conv-stuck", "m1")
+        try:
+            reclaimed = self._with_stub(stub, lambda: acc.web_conversation_reclaim(0))
+            self.assertEqual(reclaimed, 1)
+            self.assertEqual([r.full_url for r in stub.actions("stop")],
+                             [CREATE_URL + "conv-stuck/stop"])
+            self.assertEqual([r.full_url for r in stub.actions("delete")],
+                             [CREATE_URL + "conv-stuck/delete"])
+            self.assertEqual(wb_accounts.web_live_snapshot(acc.uid), [],
+                             "收过尾的会话要从登记表里摘掉，别被反复重收")
+        finally:
+            wb_accounts.web_live_unregister(acc.uid, "conv-stuck")
+
+    def test_failed_reclaim_keeps_the_entry_for_the_next_attempt(self):
+        """收尾请求失败不能先摘登记：那会把唯一的回收线索丢掉。"""
+        stub = WebStub(action_error=OSError("cleanup endpoint down"))
+        acc = self.account()
+        wb_accounts.web_live_register(acc.uid, "conv-retry", "m1")
+        try:
+            reclaimed = self._with_stub(stub, lambda: acc.web_conversation_reclaim(0))
+            self.assertEqual(reclaimed, 0)
+            self.assertEqual([i["conversation"] for i in
+                              wb_accounts.web_live_snapshot(acc.uid)],
+                             ["conv-retry"])
+
+            stub.action_error = None
+            reclaimed = self._with_stub(stub, lambda: acc.web_conversation_reclaim(0))
+            self.assertEqual(reclaimed, 1)
+            self.assertEqual(wb_accounts.web_live_snapshot(acc.uid), [])
+        finally:
+            wb_accounts.web_live_unregister(acc.uid, "conv-retry")
+
+    def test_reclaim_ignores_a_round_that_is_still_within_its_budget(self):
+        stub = WebStub()
+        acc = self.account()
+        wb_accounts.web_live_register(acc.uid, "conv-young", "m1")
+        try:
+            reclaimed = self._with_stub(stub, lambda: acc.web_conversation_reclaim(600))
+            self.assertEqual(reclaimed, 0, "还没跑过头的一轮不能被抢收")
+            self.assertEqual(stub.actions("stop"), [])
+        finally:
+            wb_accounts.web_live_unregister(acc.uid, "conv-young")
+
+    def test_reclaim_only_touches_the_given_account(self):
+        stub = WebStub()
+        acc = self.account()
+        wb_accounts.web_live_register("other-uid", "conv-other", "m1")
+        try:
+            reclaimed = self._with_stub(stub, lambda: acc.web_conversation_reclaim(0))
+            self.assertEqual(reclaimed, 0)
+            self.assertEqual(stub.calls, [])
+        finally:
+            wb_accounts.web_live_unregister("other-uid", "conv-other")
+
+    def test_sweep_orphans_stops_only_old_daily_activity_conversations(self):
+        """上一个进程留下的活跃会话：只停「我们建的」且够老的，别人的不碰。"""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        old = (now - datetime.timedelta(hours=2)).isoformat()
+        fresh = (now - datetime.timedelta(seconds=30)).isoformat()
+        prompt = wb_accounts.DAILY_CHAT_WEB_PROMPT
+        stub = WebStub(conversations=[
+            {"id": "old-mine", "name": prompt, "status": "working", "createdAt": old},
+            {"id": "fresh-mine", "name": prompt, "status": "working", "createdAt": fresh},
+            {"id": "old-user", "name": "我的季度报告", "status": "working", "createdAt": old},
+            {"id": "old-done", "name": prompt, "status": "completed", "createdAt": old},
+            {"id": "no-date", "name": prompt, "status": "working"},
+        ])
+        acc = self.account("sweep")
+        stopped = self._with_stub(stub, acc.web_conversation_sweep_orphans)
+        self.assertEqual(stopped, 1)
+        self.assertEqual([r.full_url for r in stub.actions("stop")],
+                         [CREATE_URL + "old-mine/stop"],
+                         "只停我们建的、够老的、还在跑的会话")
+
+    def test_the_round_starts_by_reclaiming_what_the_last_one_left(self):
+        """开跑前先收上一轮卡住留下的会话，别让它把活跃名额带走。"""
+        stub = WebStub()
+        acc = self.account("pre-reclaim")
+        self.register_stale(acc.uid, "conv-left")
+        try:
+            res = self.run_web(stub, acc=acc)
+        finally:
+            wb_accounts.web_live_unregister(acc.uid, "conv-left")
+        self.assertTrue(res.get("ok"), res)
+        self.assertIn(CREATE_URL + "conv-left/stop",
+                      [r.full_url for r in stub.actions("stop")])
+
+    def register_stale(self, uid, conversation, age=3600):
+        """登记一条「已经跑过头」的会话（模拟卡死那一路留下的登记）。"""
+        wb_accounts.web_live_register(uid, conversation, "m1")
+        with wb_accounts._WEB_LIVE_LOCK:
+            wb_accounts._WEB_LIVE[(str(uid), str(conversation))]["started"] = time.time() - age
+
+    def test_the_registry_cannot_grow_without_bound(self):
+        """没人调 reclaim 的部署里，登记表也不能无限长。"""
+        acc = self.account()
+        try:
+            self.register_stale(acc.uid, "conv-ancient",
+                                age=wb_accounts.WEB_LIVE_REGISTRY_TTL + 60)
+            wb_accounts.web_live_register(acc.uid, "conv-new", "m1")
+            kept = [i["conversation"] for i in wb_accounts.web_live_snapshot(acc.uid)]
+            self.assertEqual(kept, ["conv-new"],
+                             "超过 TTL 的旧条目在注册新条目时被丢掉")
+
+            for index in range(wb_accounts.WEB_LIVE_REGISTRY_MAX + 10):
+                wb_accounts.web_live_register("bulk-uid", "conv-%03d" % index, "m1")
+            self.assertLessEqual(len(wb_accounts.web_live_snapshot()),
+                                 wb_accounts.WEB_LIVE_REGISTRY_MAX,
+                                 "条数硬上限：再多也只留这么多")
+        finally:
+            with wb_accounts._WEB_LIVE_LOCK:
+                wb_accounts._WEB_LIVE.clear()
+
+    def _with_stub(self, stub, fn):
+        real_urlopen = wb_accounts.urlopen
+        wb_accounts.urlopen = stub
+        try:
+            return fn()
+        finally:
+            wb_accounts.urlopen = real_urlopen
 
 
 if __name__ == "__main__":

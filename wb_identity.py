@@ -115,6 +115,11 @@ def _identity_arch():
         machine, machine or "x64")
 
 
+def desktop_chat_compat_enabled():
+    """Opt in to desktop chat headers without changing billing or other products."""
+    return os.environ.get("WB_DESKTOP_CHAT_COMPAT", "").strip() == "1"
+
+
 def cli_stainless_headers():
     """官方 OpenAI Node SDK 6.25.0 的 x-stainless-* 指纹头。"""
     return {
@@ -518,7 +523,16 @@ def build_identity_headers(product, realm, uid, token,
             "X-Conversation-Message-ID": msg_id,
             "X-Request-ID": msg_id,
         }
-        headers.update(trace_headers())
+        compat = desktop_chat_compat_enabled()
+        headers.update(trace_headers(with_parent=compat))
+        if compat:
+            # Desktop profile reported by workbuddy2api-panel's headers.go
+            # (CN 5.8.3 / intl 5.8.4); shared SDK values remain configurable.
+            # Not a claim that Python's TLS stack matches the official client.
+            sdk_headers = cli_stainless_headers()
+            # Desktop request timeout is not verified; do not copy CLI's budget.
+            sdk_headers.pop("x-stainless-timeout", None)
+            headers.update(sdk_headers)
     elif product == PRODUCT_VSCODE:
         # 官方 VSCode 扩展 4.12.39997873 的 chat 请求头（解包源码实锤）：
         #   - 全局拦截器：UA / X-IDE-* / X-Product-Version（UserAgent +

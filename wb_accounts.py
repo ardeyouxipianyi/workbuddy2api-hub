@@ -1,5 +1,6 @@
 import re
 import base64
+import datetime
 import json
 import os
 import random
@@ -47,17 +48,23 @@ WEB_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
                   "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0")
 DAILY_CHAT_MODEL = "deepseek-v4.1-flash"
 DAILY_CHAT_WEB_PROMPT = "Hi"
-#: 回退组合在没配置时的候选：账号首选模型之外，再带上各区域的免费模型。
-#: 实际顺序按目录倍率排序（免费 → 低积分 → 高积分），见 _model_credit_rank。
-DAILY_CHAT_WEB_FREE_FALLBACK_INTL = ("hy3", "hy4-preview-f", "hy4-preview",
-                                     "glm-5.3-flash")
-DAILY_CHAT_WEB_FREE_FALLBACK_CN = ("hy3", "hy4-preview-f", "hy4-preview")
 #: 网页通道一轮最多等多久（秒）。实测一次「Hi」十几秒就跑完，留足余量。
 #: 没配 settings 的账号（如单测里手工构造的）用它兜底。
 WEB_TURN_TIMEOUT = int(os.environ.get("WB_WEB_TURN_TIMEOUT") or "120")
-#: 网页通道一共试几次（含第一轮）。第 N 轮的等待是首轮的 N 倍，所以
-#: 3 次 = 最多等 base×(1+2+4) 秒。设置页可改（见 wb_settings.daily_chat_web_attempts）。
+#: 网页通道至少跑几轮：第二轮留给「会话只是慢」（状态=working），一轮没跑完
+#: 不代表坏了。候选序列更长时按候选数量走（每个候选一轮）。
+WEB_MIN_ROUNDS = 2
+#: 兼容旧调用方：早期版本用它当「总尝试次数」。现在轮数由候选序列推出。
 WEB_TURN_ATTEMPTS = 3
+#: 单账号总预算（秒）的默认值；0 = 不限制。与 wb_settings 同值：没配 settings
+#: 的账号（单测里手工构造的）按它走。
+WEB_BUDGET_DEFAULT = 600
+#: 剩余预算低于这个值就不再开新的一轮：一轮至少要能等到会话真的跑起来。
+WEB_BUDGET_MIN_ROUND = 30
+#: 桌面腿（轻量对话）在首选模型冷却时顺延用的免费模型。网页腿不看这份名单 ——
+#: 那边的回退就是面板上的候选序列。
+DAILY_CHAT_DESKTOP_FALLBACKS = ("hy3", "hy4-preview-f", "hy4-preview",
+                                "glm-5.3-flash")
 #: 还没跑到 turn 就失败（建会话 5xx、取沙箱失败）时的退避基数（秒）。
 #: 那几轮只花掉几百毫秒、不消耗任何等待预算，背靠背重试等于把全部尝试挤进
 #: 同一个上游故障窗口（issue #558：8 个账号 × 6 次尝试全落进约 100 秒的抖动）。
@@ -89,6 +96,70 @@ WEB_CONVERSATION_ACTIVE_LIMIT = 10
 WEB_CONVERSATION_PRUNE_KEEP = 8
 #: 上游把「还在跑」的会话记成这些状态；只有它们占活跃名额。
 WEB_CONVERSATION_ACTIVE_STATUSES = ("working", "creating", "pending")
+#: 本进程记着的「已建未收尾」网页会话，超过这个时长就当跑过头了，由别的线程代收尾。
+#: 取值是单轮上限的两倍——正常一轮最多 turn_cap 秒，翻倍后仍没注销就一定是卡住了。
+WEB_LIVE_STALE_FACTOR = 2
+#: 清扫「上一个进程留下的活跃会话」时只动创建超过这么久的：一轮最多几分钟，
+#: 半小时还没结束的一定不是正在跑的本轮（也避免误杀另一个网关实例正在跑的会话）。
+WEB_ORPHAN_SWEEP_SECONDS = 1800
+#: 登记表里的条目最多留这么久。正常路径会注销，只有卡死的才会留到现在；万一某个
+#: 部署根本不跑调度器（没人调 reclaim），注册新条目时按这个年龄把老条目丢掉，
+#: 保证这张表不会无限长。
+WEB_LIVE_REGISTRY_TTL = 24 * 3600
+#: 登记表的硬上限（条）。TTL 之外的兜底：病态情况下也不会堆到几十万条。
+WEB_LIVE_REGISTRY_MAX = 128
+
+
+#: 本进程里「已经建出来、还没收尾」的网页会话：(uid, 会话 id) -> 登记信息。
+#:
+#: 正常路径靠 _daily_chat_web_once 的 finally 注销；但 finally 只有在那一轮**能
+#: 返回**时才跑得掉。getaddrinfo 不吃 socket 超时，服务端也可以一点一点滴数据，
+#: 于是存在「线程卡在 socket 上、永远走不到 finally」的窗口——那条会话就会一直
+#: 占着上游的活跃名额，直到进程重启。这张表让**别的线程**能在超时之后替它收尾：
+#: 收尾不能依赖那个卡住的线程本身。
+_WEB_LIVE = {}
+_WEB_LIVE_LOCK = threading.Lock()
+
+
+def web_live_register(uid, conversation, model=""):
+    """记下一条刚建出来、还没收尾的网页会话（供别的线程代收尾）。"""
+    if not uid or not conversation:
+        return
+    now = time.time()
+    with _WEB_LIVE_LOCK:
+        # 这张表不能无限长：正常路径会注销，卡死的条目按年龄和条数兜底清掉。
+        for key, item in list(_WEB_LIVE.items()):
+            if now - item.get("started", 0) > WEB_LIVE_REGISTRY_TTL:
+                _WEB_LIVE.pop(key, None)
+        while len(_WEB_LIVE) >= WEB_LIVE_REGISTRY_MAX:
+            oldest = min(_WEB_LIVE, key=lambda k: _WEB_LIVE[k].get("started", 0))
+            _WEB_LIVE.pop(oldest, None)
+        _WEB_LIVE[(str(uid), str(conversation))] = {
+            "uid": str(uid), "conversation": str(conversation),
+            "model": model or "", "started": now,
+        }
+
+
+def web_live_unregister(uid, conversation):
+    """这条会话已经收尾了，从登记表里去掉。"""
+    with _WEB_LIVE_LOCK:
+        _WEB_LIVE.pop((str(uid), str(conversation)), None)
+
+
+def web_live_snapshot(uid=None, min_age=0.0):
+    """还记着的未收尾会话；给了 uid 只看这个账号，min_age 只挑跑过头的。"""
+    now = time.time()
+    with _WEB_LIVE_LOCK:
+        items = [dict(item) for item in _WEB_LIVE.values()]
+    out = []
+    for item in items:
+        if uid and item["uid"] != str(uid):
+            continue
+        if min_age and now - item["started"] < min_age:
+            continue
+        out.append(item)
+    return out
+
 
 
 class TLSVerifyError(RuntimeError):
@@ -130,6 +201,18 @@ def tls_verify_hint(exc=None):
     if exc is None:
         return TLS_VERIFY_HINT
     return "%s 原始错误：%s" % (TLS_VERIFY_HINT, exc)
+
+
+def is_tls_verify_text(text):
+    """True when an already-stringified error carries a certificate failure.
+
+    wb_webagent.run_turn 把 live 的异常折成「<类型>: <消息>」文本，调用方拿不到
+    异常对象，所以 is_tls_verify_error 够不着它。标记表是同一份，只是换成判
+    字符串：网页通道沙箱入口证书挂掉（#645）走的正是这条路径。
+    """
+    if not text:
+        return False
+    return is_tls_verify_error(TLSVerifyError(str(text)))
 
 
 def _retryable(exc):
@@ -704,6 +787,25 @@ def degrade_backoff(fails):
                                 DEGRADE_THRESHOLD)
 
 
+def _clean_candidates(models):
+    """Order-preserving de-duplication of a candidate list.
+
+    Both the panel's list and the automatic one can contain the same id twice
+    (the preferred model is also a free model), and an empty id must never
+    reach the upstream. Kept separate from wb_settings._clean_models because
+    this one must not truncate: the caller decides how many rounds it walks.
+    """
+    seen = set()
+    ordered = []
+    for model in models or []:
+        name = str(model or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
+
+
 def _model_credit_rank(model, realm):
     """The catalogue multiplier as a number; unknown models sort last.
 
@@ -726,6 +828,27 @@ def _model_credit_rank(model, realm):
                 pass
         break
     return float("inf")
+
+
+def _parse_created_at(value):
+    """把上游的 createdAt 解析成 epoch 秒；解析不出来返回 0.0。
+
+    上游给的是带时区的 ISO 8601（如 2026-10-22T09:00:00+08:00）。解析不出来时
+    返回 0.0，调用方一律当「判断不了年龄」跳过——宁可漏收一条，也不要误停用户
+    或另一个实例正在跑的会话（漏掉的由撞 10105 时的 web_conversation_prune 兜）。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        stamp = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return 0.0
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp.timestamp()
 
 
 def _active_conversation_limit(status, detail):
@@ -1152,7 +1275,7 @@ class Account(object):
             "lastActivityReport": self.last_activity_report,
             "canCheckin": self.realm == "cn" and not self.uses_enterprise_billing(),
             "canDailyChat": self.realm == "intl",
-            "canReportActivity": (self.realm == "cn"
+            "canReportActivity": (self.realm in ("cn", "intl")
                                   and not self.uses_enterprise_billing()),
             "machineId": derive_id(self.uid, "machine"),
             "sessionId": session_id(self.uid),
@@ -1733,7 +1856,10 @@ class Account(object):
             private_data=(wb_settings.identity_private_data(
                 os.path.dirname(self.path)) if self.path else "auto"),
         )
-        if self.is_cli_identity():
+        if self.is_cli_identity() or (
+                self.product == wb_identity.PRODUCT_DESKTOP
+                and wb_identity.desktop_chat_compat_enabled()):
+            # Opt-in desktop chat uses the SDK profile, not the billing web profile.
             # 官方 CLI 的 chat 请求由 OpenAI Node SDK 发出：浏览器头一个都没有
             # （X-Requested-With 也没有），Accept 就是 application/json。
             headers = {
@@ -1902,8 +2028,11 @@ class Account(object):
         return not str(self.last_daily_chat).startswith(today_str)
 
     def can_report_activity(self):
-        """国内版每天一次的对话活跃上报（点亮 growth 连登）是否还没做过。"""
-        if self.realm != "cn":
+        """每天一次的对话活跃上报（点亮 growth 连登）是否还没做过。
+
+        国内版与国际版都有这套成长体系，只是上报端点不同（见 report_activity）。
+        """
+        if self.realm not in ("cn", "intl"):
             return False
         if self.uses_enterprise_billing():
             return False
@@ -1925,24 +2054,19 @@ class Account(object):
         }
 
     def daily_chat_model(self):
-        """Which model this account's daily activity runs on.
+        """Which model the desktop-identity leg of the activity runs on.
 
-        The panel's setting wins when set; otherwise the built-in free id. Both
-        legs (the desktop-identity completion and the web conversation) read
-        this, so one setting moves the whole activity.
+        Shares the candidate list with the web leg (`daily_chat_models`, first
+        entry preferred): one setting now drives both legs, and a model that is
+        cooling down or capped falls through to the next candidate instead of
+        failing the activity.
         """
-        candidates = []
-        if self.path:
-            picked = wb_settings.daily_chat_model(os.path.dirname(self.path))
-            if picked:
-                candidates.append(picked)
-        candidates.append(DAILY_CHAT_MODEL)
-        # Add fallback free models for the account's realm if preferred model is cooling down
-        if self.realm == "intl":
-            candidates.extend(["hy3", "hy4-preview-f", "hy4-preview", "glm-5.3-flash"])
-        else:
-            candidates.extend(["hy3", "hy4-preview-f", "hy4-preview"])
-
+        candidates = self.web_fallback_models() or [DAILY_CHAT_MODEL]
+        if len(candidates) < 2:
+            # 桌面腿历史上会在首选模型冷却 / 达限时顺延到其它免费模型。候选序列
+            # 只配了一个（或没配）时保留这份顺延；网页腿的轮数仍只看候选序列。
+            candidates = candidates + [model for model in DAILY_CHAT_DESKTOP_FALLBACKS
+                                       if model not in candidates]
         now = time.time()
         with self._throttle_lock:
             for cand in candidates:
@@ -1953,38 +2077,27 @@ class Account(object):
         return candidates[0]
 
     def web_fallback_models(self):
-        """The ordered model combination the web leg falls back through.
+        """The ordered model candidates the web leg walks through.
 
-        The panel's combination wins; when it is empty the account's preferred
-        model plus the realm's free models form the default. Either way the
-        result is sorted by catalogue multiplier, so a free model runs before a
-        cheap paid one and that one before an expensive one. The account's
-        preferred model is first when it shares the cheapest tier, because it
-        is what the operator picked.
+        An explicit list in the panel wins and is used **in that order** - it is
+        the operator's priority, not a suggestion. Only the automatic mode (no
+        list configured) sorts by catalogue multiplier, so a free model runs
+        before a cheap paid one and that one before an expensive one.
+
+        This replaces the old pair of settings (`daily_chat_model` for the
+        preferred model plus a separate fallback switch and combination): with
+        both set, the fallback branch took every model from the combination and
+        the preferred model never ran at all.
         """
         configured = []
         if self.path:
-            configured = wb_settings.daily_chat_web_fallback_models(
+            configured = wb_settings.daily_chat_models(
                 os.path.dirname(self.path))
         if configured:
-            candidates = list(configured)
-        else:
-            candidates = [self.daily_chat_model()]
-            if self.realm == "cn":
-                candidates.extend(DAILY_CHAT_WEB_FREE_FALLBACK_CN)
-            else:
-                candidates.extend(DAILY_CHAT_WEB_FREE_FALLBACK_INTL)
-        preferred = self.daily_chat_model()
-        seen = set()
-        ordered = []
-        for model in candidates:
-            if not model or model in seen:
-                continue
-            seen.add(model)
-            ordered.append(model)
-        ordered.sort(key=lambda model: (_model_credit_rank(model, self.realm),
-                                        0 if model == preferred else 1))
-        return ordered
+            return _clean_candidates(configured)
+        # 自动模式只有内置的免费模型一个候选：候选序列就是回退，没配就是不回退。
+        # 旧实现在这里额外塞进各区域的免费模型，只因为那套「回退组合」必须有人填。
+        return [DAILY_CHAT_MODEL]
 
     def daily_chat_web_prompt(self):
         """The prompt this turn sends on the web channel.
@@ -2034,65 +2147,94 @@ class Account(object):
     def _daily_chat_web_upstream(self, prompt=None):
         """网页通道的实际流程；返回形状见 daily_chat_web。
 
-        失败会再试（见 daily_chat_web_policy）：一共最多 attempts 次（含第一轮），
-        第 N 轮的等待是首轮的 N 倍 —— 默认 3 次、首轮 120 秒，也就是
-        120 / 240 / 360。最典型的失败是「会话还没跑完」（状态=working），它往往
-        只是慢，多等一轮就好，所以这里把等待时间当成重试的代价，不再额外 sleep。
+        一次打卡 = **一个预算 + 一个候选序列**：按候选顺序一轮一轮试，每轮最多等到
+        「单轮上限」与「剩余预算」里较小的那个；建会话 / 取沙箱失败后的退避也从同
+        一个预算里扣。预算用尽必定给出结论（phase="budget"），不再有「跑了几个小
+        时没动静、面板一片空白」这种状态。
+
+        轮数由候选序列推出（至少两轮：第二轮留给「会话只是慢」），所以面板上不再
+        需要「最多尝试次数」这个与候选数量互相覆盖的旋钮——旧实现里它被
+        `max(总次数, 候选数)` 顶掉，设 1 次也照样跑 6 次。
+
         业务拒绝（建会话返回非 0 code）不再试：同一个被拒的请求再发一次也一样被拒。
-        例外是「还没跑到 turn 就失败」的轮次（建会话 5xx、取沙箱失败）：那几轮
-        一秒都没等，再打一次仍落在同一个上游故障窗口里，所以补一段指数退避
-        （见 _web_retry_pause / web_retry_backoff）。
 
-        返回里带 attempts（实际跑了几轮），其余字段与 _daily_chat_web_once 一致。
+        返回里带 attempts（实际跑了几轮）、models_tried、model，其余字段与
+        _daily_chat_web_once 一致。
         """
-        base, total = self.daily_chat_web_policy()
-        directory = os.path.dirname(self.path) if self.path else ""
-        if directory and wb_settings.daily_chat_web_fallback(directory):
-            models = self.web_fallback_models()
-            if models:
-                # At least one try per candidate, so a combination the operator
-                # picked is actually walked; the configured attempt count still
-                # applies when it is larger (a second pass over the list).
-                attempts = max(total, len(models))
-                tried = []
-                last = None
-                for attempt in range(attempts):
-                    model = models[attempt % len(models)]
-                    res = self._daily_chat_web_once(
-                        prompt, wait_seconds=base * (2 ** attempt), model=model)
-                    res["attempts"] = attempt + 1
-                    res["models_tried"] = tried + [model]
-                    res["model"] = model
-                    if res.get("ok"):
-                        return res
-                    last = res
-                    if not res.get("retryable"):
-                        return res
-                    tried.append(model)
-                    if attempt + 1 < attempts:
-                        self._web_retry_pause(res, attempt)
-                return last
-        attempt = 0
-        while True:
-            res = self._daily_chat_web_once(prompt, wait_seconds=base * (attempt + 1))
-            res["attempts"] = attempt + 1
-            if res.get("ok") or attempt + 1 >= total or not res.get("retryable"):
+        models = self.web_fallback_models() or [self.daily_chat_model()]
+        turn_cap, rounds = self.daily_chat_web_policy()
+        budget = self.daily_chat_budget()
+        deadline = time.time() + budget if budget > 0 else None
+        tried = []
+        last = None
+        budget_hit = False
+        # 开跑之前先把「上一次跑剩下的」收干净，两层：
+        # 1. 本进程登记着、却已经超过两轮上限还没注销的会话——上一轮卡在 socket 上，
+        #    它的 finally 永远跑不到，只能由本线程代收；
+        # 2. 上一个进程留下的（登记表跟着进程一起没了，只能按上游会话列表兜底）。
+        # 任何一步失败都不影响这一轮：名额真不够时建会话会走 10105 的清理重试。
+        try:
+            self.web_conversation_reclaim(max_age=turn_cap * WEB_LIVE_STALE_FACTOR)
+            self.web_conversation_sweep_orphans()
+        except Exception:
+            pass
+        for index in range(rounds):
+            wait = turn_cap
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining < WEB_BUDGET_MIN_ROUND:
+                    budget_hit = True
+                    break
+                # 向上取整：面板上「单轮最长 120 秒」就该等满 120 秒，
+                # 别因为几毫秒的已用时间把它变成 119。
+                wait = min(turn_cap, int(remaining + 0.999))
+            model = models[index % len(models)]
+            res = self._daily_chat_web_once(prompt, wait_seconds=wait, model=model)
+            res["attempts"] = index + 1
+            res["models_tried"] = tried + [model]
+            res["model"] = model
+            if res.get("ok"):
                 return res
-            self._web_retry_pause(res, attempt)
-            attempt += 1
+            last = res
+            if not res.get("retryable"):
+                return res
+            tried.append(model)
+            if index + 1 >= rounds:
+                break
+            self._web_retry_pause(res, index, deadline=deadline)
+            if deadline is not None and deadline - time.time() < WEB_BUDGET_MIN_ROUND:
+                budget_hit = True
+                break
+        if last is None:
+            # 预算小到连第一轮都放不下：仍然要给一个明确结论，不能返回空。
+            return {"ok": False, "phase": "budget", "budget_exhausted": True,
+                    "attempts": 0,
+                    "error": "单账号预算 %ds 不足一轮（至少需要 %ds 秒）"
+                             % (budget, WEB_BUDGET_MIN_ROUND)}
+        if budget_hit:
+            last = dict(last)
+            last["phase"] = "budget"
+            last["budget_exhausted"] = True
+            last["error"] = ("单账号预算 %ds 用尽（尝试 %d 轮，最后状态 %s）：%s"
+                             % (budget, len(tried), last.get("status") or "未知",
+                                last.get("error") or "会话没有跑完"))
+        return last
 
-    def _web_retry_pause(self, res, round_index):
+    def _web_retry_pause(self, res, round_index, deadline=None):
         """还没跑到 turn 就失败时补一段退避，返回实际等了多少秒。
 
         跑过 turn 的轮次已经把等待预算（wait_seconds）花掉了，再睡一次就是双重
         惩罚；而建会话 / 取沙箱失败只用掉几百毫秒，背靠背重试会把所有尝试挤进
         同一个上游故障窗口。phase 缺失时按「已跑到 turn」处理，旧调用方和测试
-        桩返回的结果形状因此保持原样。
+        桩返回的结果形状因此保持原样。给了 deadline 时，退避也会被剩余预算钳住，
+        不能睡过总预算。
         """
         if res.get("phase") not in ("create", "session"):
             return 0.0
         delay = web_retry_backoff(round_index,
                                   base=self.daily_chat_web_retry_backoff())
+        if deadline is not None:
+            delay = min(delay, max(0.0, deadline - time.time()))
         if delay > 0:
             time.sleep(delay)
         return delay
@@ -2109,23 +2251,36 @@ class Account(object):
         return wb_settings.daily_chat_web_retry_backoff(
             os.path.dirname(self.path), default=WEB_RETRY_BACKOFF)
 
-    def daily_chat_web_policy(self):
-        """(首轮等待秒数, 总尝试次数)。设置页改过就按设置页的来。
+    def daily_chat_budget(self):
+        """单账号跑完网页活跃的总预算（秒）；0 = 不限制。
 
-        重试开关默认开（见 wb_settings.daily_chat_web_retry），关掉就是只试一次。
-        等待时间没设过时用 WEB_TURN_TIMEOUT —— 它吃 WB_WEB_TURN_TIMEOUT 环境变量，
-        别让这个新设置项把它悄悄顶掉。没配 settings 的账号（单测里手工构造的）
-        同样按内置默认走。
+        这是这套流程里唯一的时间上限：每轮等待、建会话失败后的退避都从它里面扣，
+        所以「一次打卡最长占住调度器多久」是一个可预测的数（默认 600 秒）。旧实现
+        没有这个上限，一个卡在「会话永远 working」的账号能把整轮巡检拖住数小时。
         """
         if not self.path:
-            return WEB_TURN_TIMEOUT, WEB_TURN_ATTEMPTS
+            return WEB_BUDGET_DEFAULT
+        return wb_settings.daily_chat_budget(
+            os.path.dirname(self.path), default=WEB_BUDGET_DEFAULT)
+
+    def daily_chat_web_policy(self):
+        """(单轮最长等待秒数, 轮数)。设置页改过就按设置页的来。
+
+        轮数 = max(WEB_MIN_ROUNDS, 候选数)：候选序列每多一个模型就多一轮，最少两轮
+        —— 第二轮留给「会话只是慢」（状态=working），一轮没跑完不代表坏了。总时长由
+        单账号预算兜底（见 daily_chat_budget），所以这里不需要「最多尝试次数」这个
+        与候选数量互相覆盖的旋钮。
+
+        等待时间没设过时用 WEB_TURN_TIMEOUT —— 它吃 WB_WEB_TURN_TIMEOUT 环境变量，
+        别让这个设置项把它悄悄顶掉。没配 settings 的账号（单测里手工构造的）同样按
+        内置默认走。
+        """
+        rounds = max(WEB_MIN_ROUNDS, len(self.web_fallback_models()))
+        if not self.path:
+            return WEB_TURN_TIMEOUT, rounds
         directory = os.path.dirname(self.path)
-        total = 1
-        if wb_settings.daily_chat_web_retry(directory):
-            total = wb_settings.daily_chat_web_attempts(directory,
-                                                        default=WEB_TURN_ATTEMPTS)
         return (wb_settings.daily_chat_web_timeout(directory, default=WEB_TURN_TIMEOUT),
-                total)
+                rounds)
 
     def _daily_chat_web_once(self, prompt=None, wait_seconds=None, model=None):
         """网页通道的一轮尝试；返回形状见 daily_chat_web。
@@ -2171,6 +2326,9 @@ class Account(object):
                     "phase": "create"}
 
         keep = False
+        # 建出来就先登记：万一这一轮卡在 socket 上走不到 finally，别的线程还能
+        # 按这张表替它收尾（见 web_conversation_reclaim）。
+        web_live_register(self.uid, conversation, model)
         try:
             # 建完只是排队：接上沙箱、请求这一轮，它才会真的跑起来（issue #90）。
             try:
@@ -2209,7 +2367,10 @@ class Account(object):
             # 这个账号就再也建不出会话（HTTP 429 / 10105）。成功的一轮保留记录
             # （stop 只把状态改成 completed），失败的一轮直接删掉，免得网页端历史
             # 里堆满「Hi」。
-            self.web_conversation_release(conversation, delete=not keep)
+            try:
+                self.web_conversation_release(conversation, delete=not keep)
+            finally:
+                web_live_unregister(self.uid, conversation)
 
     def _web_conversation_get(self, conversation, suffix=""):
         """读一条网页端会话（suffix 为空拿会话本身，"/session" 拿沙箱信息）。"""
@@ -2312,6 +2473,59 @@ class Account(object):
             if str((conversation or {}).get("name") or "").strip() not in pool:
                 continue
             if self._web_conversation_call(conversation.get("id"), "stop"):
+                stopped += 1
+        return stopped
+
+    def web_conversation_reclaim(self, max_age=0.0):
+        """替**别的线程**收尾它建出来、却还没注销的网页会话；返回收掉的条数。
+
+        为什么需要它：_daily_chat_web_once 的 finally 只在这一轮能返回时才跑得掉，
+        而 socket 层存在走不到返回的窗口（getaddrinfo 不吃 socket 超时、服务端可
+        以一点一点滴数据）。那一路卡住时，那条会话会一直占着上游的活跃名额，攒够
+        十条这个账号就再也建不出会话——和 #623 修的是同一个坑，只是那条路径靠
+        finally 兜不住。
+
+        max_age=0 表示「这个账号登记着的一律收掉」；给了秒数就只收超过这个时长的
+        （正常一轮的 finally 会自己注销，只有跑过头的才会被收）。收尾用本线程自己
+        的短超时连接，与卡住的那条线程无关，所以它卡着也照样能收。
+        """
+        reclaimed = 0
+        for item in web_live_snapshot(self.uid, min_age=max_age):
+            conversation = item.get("conversation")
+            if self.web_conversation_release(conversation, delete=True):
+                # 收尾成功后才摘掉登记：失败时留着重试，否则这个活跃名额会永久
+                # 丢失（进程内登记表是它唯一的回收线索）。
+                web_live_unregister(self.uid, conversation)
+                reclaimed += 1
+        return reclaimed
+
+    def web_conversation_sweep_orphans(self, older_than=WEB_ORPHAN_SWEEP_SECONDS):
+        """清扫**上一个进程**留下的活跃会话；返回停掉的条数。
+
+        进程被 kill 或崩掉时登记表跟着没了，靠 web_conversation_reclaim 收不到；
+        这里按上游的会话列表兜底：只停「名字来自每日活跃提示词池」且创建超过
+        older_than 秒、仍处于活跃状态的会话（用户自己在网页端的对话不碰）。
+
+        阈值默认 30 分钟——一轮最多几分钟，半小时还没结束的一定不是正在跑的本轮，
+        也避免误杀另一个网关实例正在跑的会话。只 stop 不 delete：历史留着。
+        """
+        try:
+            conversations = self.web_conversation_list()
+        except Exception:
+            return 0
+        cutoff = time.time() - max(0, older_than)
+        pool = self._daily_activity_prompt_pool()
+        stopped = 0
+        for conversation in conversations:
+            data = conversation or {}
+            if str(data.get("status") or "").lower() not in WEB_CONVERSATION_ACTIVE_STATUSES:
+                continue
+            if str(data.get("name") or "").strip() not in pool:
+                continue
+            created = _parse_created_at(data.get("createdAt"))
+            if not created or created > cutoff:
+                continue
+            if self._web_conversation_call(data.get("id"), "stop"):
                 stopped += 1
         return stopped
 
@@ -2433,6 +2647,22 @@ class Account(object):
                     result["error"] = "网页通道失败：%s%s" % (res.get("error"), suffix)
                     result["msg"] = "每日活跃对话未完成（网页通道失败：%s%s）" % (
                         res.get("error"), suffix)
+                    # 沙箱入口证书校验失败（#645）不属于「这一轮没跑完」，重试同一轮
+                    # 永远不会成功；而成长连登只需要一条 POST /v2/report 就能点亮。
+                    # 开关打开时改走活跃上报，把当天算完成（默认关，行为不变）。
+                    fallback_on = (bool(self.path)
+                                   and wb_settings.daily_chat_web_fallback_activity(
+                                       os.path.dirname(self.path)))
+                    if fallback_on and is_tls_verify_text(res.get("error")):
+                        fb = self.report_activity()
+                        result["web_fallback"] = fb
+                        if fb.get("ok"):
+                            web_ok = True
+                            result["ok"] = True
+                            result.pop("error", None)
+                            result["msg"] = (
+                                "每日活跃对话：网页通道证书校验失败，已回退对话活跃上报（%s）"
+                                % (fb.get("msg") or ""))
             # 只有真正计入官方「每日活跃」的网页通道成功了才算今天做过：网页腿失败时
             # 若照写 lastDailyChat，当天后续巡检会直接跳过该账号，那天的 30/50 积分静默
             # 丢掉且不再重试。web=False（没开网页通道）时维持原语义：桌面腿成功即算完成。
@@ -2512,17 +2742,19 @@ class Account(object):
         上游口径：必须带 userId，否则服务端 200 但静默丢弃；每号每天一次即可，
         不做多时点高频上报（风控口径）。成功后记 lastActivityReport 并落盘，再读
         一次 /activity/growth/streak 把连登天数带回去——读失败不影响上报本身的
-        结论。只有国内版有这套成长体系，国际版直接拒绝。
+        结论。国内版与国际版都有这套成长体系，只是 base 不同：国际版走
+        chat_base_url()（www.workbuddy.ai），国内版走 wb_tasks 的默认国内 base。
         """
-        if self.realm != "cn":
-            return {"ok": False, "error": "activity report is only for CN realm accounts"}
+        if self.realm not in ("cn", "intl"):
+            return {"ok": False, "error": "activity report is only for CN/Intl realm accounts"}
         if self.is_api_key:
             return {"ok": False, "error": "API key accounts have no activity programme"}
         if self.is_enterprise():
             return {"ok": False, "error": "enterprise accounts do not support activity report"}
         import wb_tasks
         event = wb_tasks.build_event(self, "chat")
-        if not wb_tasks.report_events(self, [event]):
+        base = None if self.realm == "cn" else self.chat_base_url()
+        if not wb_tasks.report_events(self, [event], base=base):
             return {"ok": False, "error": "活跃上报被上游拒绝（未返回 code=0）"}
         self.last_activity_report = time.strftime("%Y-%m-%d %H:%M:%S")
         if self.path and os.path.exists(os.path.dirname(self.path)):
@@ -3295,6 +3527,15 @@ class Account(object):
         succeeded is the one piece of evidence that the vendor lifted it. (In
         normal dispatch a restricted account is never picked, so this only fires
         from a manual test.)
+
+        It also lifts the `token_expired` park. A response the upstream really
+        served is direct proof that the credential still works, yet that flag is
+        process-local and only ever cleared by a successful refresh, a re-login
+        or a restart. So an account parked by one credential-shaped 401 stayed
+        unusable for the rest of the process lifetime: the panel's "test" would
+        return a real model reply and still render 「凭证失效」, because
+        `ready()` kept the account out of rotation. Nothing re-tests the token
+        in between, so it never came back on its own.
         """
         with self._throttle_lock:
             if model:
@@ -3312,6 +3553,7 @@ class Account(object):
             self.last_error = ""
             self.last_error_detail = ""
             self.cooldown_until = 0.0
+            self.token_expired = False
 
     def throttle_wait(self, model=None):
         """Seconds until this account can serve `model` again (0 = right now)."""
@@ -3369,6 +3611,39 @@ class Account(object):
             return
         with self._throttle_lock:
             self.model_cooldowns.pop(model, None)
+            # 起始时刻一起清：留着它，同一个模型下次再被限流时，面板会显示
+            # 上一次的开始时间（早于本次限流），把「刚开始 2 分钟」说成「很久了」。
+            self.model_cooldowns_at.pop(model, None)
+
+    def arm_model_cooldown(self, model, until, started_at=None):
+        """把一条**已知**的限流窗口挂成模型冷却（重启后恢复用）。
+
+        与 note_error 的分工：那个是「刚撞到」的现场记录，会一起写 last_error
+        与 last_error_detail；这个是从盘上读回来的恢复，只补冷却，不改错误文案
+        ——重启不该把「上次的报错」重新贴到账号行上。
+
+        返回是否真的挂上了（窗口已过期或已有更晚的冷却时返回 False）。
+        """
+        if not model:
+            return False
+        try:
+            until = float(until)
+        except (TypeError, ValueError):
+            return False
+        now = time.time()
+        if until <= now:
+            return False
+        with self._throttle_lock:
+            if self.model_cooldowns.get(model, 0.0) >= until:
+                return False
+            self.model_cooldowns[model] = until
+            try:
+                started = float(started_at or 0)
+            except (TypeError, ValueError):
+                started = 0.0
+            if started:
+                self.model_cooldowns_at.setdefault(model, started)
+        return True
 
 def _human_delta(seconds):
     if seconds is None: return None
@@ -3725,6 +4000,11 @@ class AccountPool(object):
             # 6004 的恢复时间跨重启有效：把还在恢复时间内的组合重新挂成模型
             # 冷却，否则重启会把它们重新放出去，直到下次撞 429 才又停。
             self.restore_model_caps()
+            # 普通 429（非 6004，比如国内版的频率限制）带的重置时刻由窗口探针
+            # 落在 model_windows.json 里，跨重启有效；但 restore_model_caps 只读
+            # 凭证档的 modelCaps，读不到它。不补这一次，重启后这些窗口就只对
+            # 探针可见：池子照常派单（每单再吃一次 429），面板「当前禁用」也空着。
+            self.restore_window_cooldowns()
             return self.accounts
 
     def restore_model_caps(self, now=None):
@@ -3738,6 +4018,43 @@ class AccountPool(object):
                     restored[account.uid] = mids
         for uid, mids in sorted(restored.items()):
             self.log("account %s: 模型 %s 仍在额度恢复期内（至上游给定时刻）"
+                     % (uid[:8], ", ".join(mids)))
+        return restored
+
+    def restore_window_cooldowns(self, now=None):
+        """把 wb_window_probe 登记的限流窗口挂回模型冷却（重启后恢复）。
+
+        与 restore_model_caps 的分工：那个管 6004（配额用满，来源是凭证档的
+        modelCaps），这个管「429 带重置时刻」的普通限流（来源是
+        accounts/model_windows.json）。两者都只在 reset_at 还没到时才挂，到点由
+        窗口探针清掉（_fire 成功后调 clear_model_cooldown），不会永久钉住账号。
+
+        读不到探针状态（模块缺失、文件坏）只写日志，不影响加载：宁可这次不恢复，
+        也不能因为一个附属文件让整个账号池加载失败。
+        """
+        now = time.time() if now is None else now
+        directory = getattr(self, "dir", "") or ""
+        if not directory:
+            return {}
+        try:
+            import wb_window_probe
+            windows = wb_window_probe.snapshot(directory, now)
+        except Exception as exc:
+            self.log("窗口探针状态读取失败（跳过限流窗口恢复）: %s" % exc)
+            return {}
+        restored = {}
+        with self._lock:
+            by_uid = {a.uid: a for a in self.accounts}
+            for row in windows or ():
+                uid = str(row.get("uid") or "")
+                model = str(row.get("model") or "")
+                account = by_uid.get(uid)
+                if account is None or not model:
+                    continue
+                if account.arm_model_cooldown(model, row.get("reset_at")):
+                    restored.setdefault(uid, []).append(model)
+        for uid, mids in sorted(restored.items()):
+            self.log("account %s: 模型 %s 仍在上游限流窗口内（重启后按窗口恢复）"
                      % (uid[:8], ", ".join(mids)))
         return restored
 

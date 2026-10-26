@@ -124,6 +124,17 @@ enforce per-Huawei-account restrictions inside that separate service.
 并为不同会话提供不同 `conversation_id` 或客户端会话头；省略时沿用 CodeArts 服务
 自身的会话策略。不要将不同租户放在同一个不带会话标识的共享客户端中。
 
+## 面板 / Dashboard
+
+CodeArts 页沿用原生状态卡、分组工具栏、账号/模型表格、折叠区块与主题变量。
+账号和模型在首屏，连接配置与请求测试可展开；刷新状态保留未保存的配置和测试输入/结果。
+语言切换在页面内同步更新，不发送模型请求。模型的“已列出”仅表示后端目录存在，
+不代表已完成实时连通性测试；上下文/最大输出仅在接口提供数值时显示。
+
+The provider page reuses native cards, toolbars, tables and theme tokens. Settings
+and request testing are collapsible. Refresh and language changes retain edits
+and test results. Catalog membership does not imply a successful inference.
+
 ## 账号与统计 / Accounts and usage
 
 - 登录华为账号、检查登录结果、签到、续期、启停、重载调用 CodeArts 的管理接口。
@@ -147,6 +158,7 @@ python tests/run_all.py --jobs 4
 python scripts/check_clean_checkout.py
 node --check extensions/codearts/dashboard.js
 node extensions/codearts/tests/test_login.js
+node extensions/codearts/tests/test_dashboard.js
 ```
 
 新增测试位于扩展目录，独立运行；原测试清单和套件数量未修改。
@@ -166,3 +178,63 @@ node extensions/codearts/tests/test_login.js
 
 All source changes are additive. Returning to the original launcher removes the
 extension from the process; no original source restoration is required.
+
+
+## 图片输入与能力目录 / Images and capability catalog
+
+连接设置 → 高级设置可启用「加入目录确认支持图片的模型」
+（`catalog_include_images`，默认 `false`）。在保留 `catalog_models` 原选择的基础上，
+仅加入实时后端目录返回 `supports_images: true` 的真实 ID，并去除展示名/大小写别名重复。
+缺失或相互冲突的能力显示为未知；静态种子、模型名字和历史缓存不会作为支持依据。
+`supports_images: false` 显示为「目录未声明图片支持」，仍允许发送图片实测，不据此否定模型本身的多模态能力。目录声明与实际调用结果分别验证。
+
+请求测试可选图片 URL 或单张本地图片，并指定 `detail: auto | low | high`。
+允许 PNG/JPEG/WebP/GIF，上传上限 4 MiB；这属于桥接的输入限制，并非华为所有客户端的统一限制。
+格式和 detail 是否被具体模型接受，以实际返回为准。桥接本身不下载 URL；图片随消息发送给后端/华为。
+URL 与文件不可同时选用，文件和图片数据 URL 不保存到设置或验证报告。
+
+Chat 使用标准 `image_url` 内容块；Responses 的 `input_image` 保留 detail。
+Anthropic Messages 在原生开关启用时可沿用图片转换（其 image source 没有 detail 参数）。
+现有 Go 后端必须通过本扩展重新构建：旧二进制会将图片块拍平为文本，单更新 Hub 不足以修复。
+Go overlay 保留图片与文本顺序，并将图片纳入会话指纹，防止不同图片复用同一上下文。
+普通文本请求保持既有行为，`codeart/` 不进入真实模型请求名称。
+
+```json
+{
+  "model": "codeart/<当前目录确认支持图片的真实模型ID>",
+  "messages": [{"role": "user", "content": [
+    {"type": "text", "text": "这张图片是什么颜色？"},
+    {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}}
+  ]}],
+  "stream": false
+}
+```
+
+音频/视频输入、附件和音频/图片生成不属于本次支持范围；不支持的媒体输入或音频输出请求会明确拒绝。
+华为客户端的语音输入可以先转文字，不等同于本桥接支持音频模型请求。
+参考：[华为多模态输入文档](https://support.huaweicloud.com/intl/zh-cn/usermanual-codeartsagent/codeartsagent_ug_0026.html)。
+
+Enable `catalog_include_images` (default false) in advanced settings to append only
+models explicitly declared image capable by the current backend catalog. Existing
+selected IDs remain. Unknown/conflicting metadata stays unknown; aliases are deduplicated
+by registered ID. The image test accepts a URL or one local file, up to 4 MiB, with
+`auto/low/high` detail. Rebuild the Go backend with this extension to retain image blocks.
+Chat and Responses preserve detail; native opt-in Messages supports its image source
+conversion. Audio/video/files and generation are outside this image-input feature.
+Only PNG has been checked against live models; other accepted file formats still depend
+on the upstream model. The bridge does not download image URLs itself.
+
+
+### 目录声明与实际通道 / Declaration versus route behavior
+
+模型原厂能力、华为 CodeArts 目录标志、当前账号端点的真实调用结果可能不同。
+图片测试不会仅因目录 false 而拦截或偷偷切换模型。当前通道若返回
+`InferHub.001001020.406 The request model is not multimodal`，面板显示其错误，
+后端将其归入请求不匹配（HTTP 400），不轮换或冷却整个账号；普通服务故障处理不变。
+模型原厂多模态能力参考：[DeepSeek V4.1 Flash](https://api-docs.deepseek.com/zh-cn/news/news260910/)、
+[Kimi K3](https://github.com/MoonshotAI/Kimi-K3)。这不构成该华为端点已开放相同能力的保证。
+
+Vendor capability, catalog metadata and actual account-route behavior are separate evidence.
+A false catalog flag is advisory: image tests remain possible and never rewrite the selected
+model. The precise upstream non-multimodal refusal code is treated as an invalid request,
+not an account outage. Validation and upstream errors appear next to the test controls.

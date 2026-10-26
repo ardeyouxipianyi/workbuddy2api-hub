@@ -470,6 +470,13 @@ check("opencode provider registered",
 check("opencode default model written", oc.get("model") == "wb-proxy/m-big", oc)
 check("opencode models map written",
       sorted(oc["provider"]["wb-proxy"]["models"]) == ["m-big", "m-small"], oc)
+check("opencode model entry carries context/output limits",
+      oc["provider"]["wb-proxy"]["models"]["m-big"].get("limit")
+      == {"context": 128000, "output": 8192},
+      oc["provider"]["wb-proxy"]["models"])
+check("opencode model without specs stays an empty object",
+      oc["provider"]["wb-proxy"]["models"]["m-small"] == {},
+      oc["provider"]["wb-proxy"]["models"])
 
 A.integrate(acct6, "crush", "http://gw:1", "k-cr", model="m-big",
             models=models, home=home6)

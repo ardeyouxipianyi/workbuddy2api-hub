@@ -131,3 +131,115 @@ reply and normal completion. The display-name aliases resolved to these IDs:
 Together with the GLM-5.3 result above, all seven selected models have passed
 one real basic text-chat request. This run does not establish streaming, tools,
 image input, concurrency, or sustained availability for every model.
+
+## Native dashboard alignment / 原生面板对齐（本地待验收）
+
+2026-10-23: native Hub regression suites passed 222/222; Python extension tests
+passed 38/38. The Node component test failed on the old account-table structure,
+then passed for native tables, inert metadata, edits during load/save, retained
+model selection and test result, partial failures, language changes without
+network calls, and disabled state. The existing OAuth popup test also passed.
+These are component/controlled-HTTP checks, not visual browser acceptance.
+
+The browser tool explicitly denied access to 8799. No alternate browser surface,
+raw CDP, or indirect renderer was used. Visual checks of desktop/mobile layouts,
+themes, languages and browser console remain NOT_RUN. Per CONTRIBUTING.md, this
+UI change must not be committed/pushed until the browser gate is satisfied.
+No fresh real Huawei/WorkBuddy inference was made for this presentation-only
+change; the previous model connectivity results above describe earlier code.
+
+The independent review found and fixed two P2 races, each reproduced RED then
+verified GREEN: a delayed settings read overwrote a successful save, and failed
+reads after a backend change retained actionable accounts from the old backend.
+Successful saves now invalidate older read generations. A changed backend clears
+cached data; failed account refreshes leave cached rows read-only. Independent
+review additionally verified same-URL credential changes with delayed responses.
+No Important issue remained. Node component and OAuth tests passed after fixes.
+
+The updated extension was loaded into isolated 8799 and health returned HTTP 200.
+Original 8788 also returned HTTP 200 and its process creation time was unchanged.
+Credentials were retained. Real-page acceptance has been requested from the user;
+this is pending, not PASS. The UI work remains local and uncommitted until that
+gate and the real WorkBuddy request required by CONTRIBUTING are satisfied.
+
+
+## 2026-10-26：上游合并与图片输入 / Upstream merge and image input
+
+集成分支 `codex/codearts-upstream-20261026`：原桥接基线
+`03486330c640391d3cdc8747780b0e5c17450c51` 合并上游 main
+`4f7ae6f2efcae5e6ae85aefa732035206044514b`（v1.8.0，20 个新增提交）。
+文本合并无冲突；原工作副本 10 个未提交 UI/文档文件已完整备份，原副本内容未改。
+扩展外的既有原生文件必须与上述 upstream 完全相同，不增加对原生源文件的修改。
+Integration uses the original bridge plus upstream v1.8.0. All native files remain
+identical to upstream; the original dirty UI checkout is preserved separately.
+
+| 检查 / Check | 结果 / Result |
+|---|---|
+| Native `python tests/run_all.py --jobs 4` | PASS: 226 passed, 0 failed, 0 skipped (69.9 s) |
+| Extension `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 44 tests |
+| Node dashboard component + OAuth login + syntax | PASS |
+| Go disposable source copy, `go test -overlay ... -count=1 ./...` | PASS; original 4 external source hashes unchanged |
+| Authenticated current catalog | PASS: original 7 retained, 2 explicitly image-capable IDs added |
+| Isolated panel login/logout API | PASS: HTTP 200; this is not browser/visual acceptance |
+| Real gateway → WorkBuddy CN `glm-5.3` | PASS: HTTP 200, `OK` (2.39 s on final image build) |
+| Real browser loading/console/themes/mobile | PENDING USER CHECK; tool access denied, no workaround used |
+| Clean-checkout guard / commit / remote sync | PENDING browser gate and completion of merge commit |
+
+当前账号目录中的两个新增真实 ID 为 `Qwen3-VL-235B`、`kimi-k2.6-vl`，
+`supports_images=true`；原有 7 个条目均明确返回 false。两个新增模型的上下文/最大输出
+未由当前动态目录给出，因此保持未知，不沿用静态种子的猜测值。
+Current authenticated catalog declares exactly these two extra image models. Missing
+limits remain absent. Catalog declarations do not establish sustained availability.
+
+真实测试经 8799 网关，使用程序生成的 32×32 纯色 PNG data URL 和同一颜色提问，
+请求模型保留 `codeart/`，上游仍使用真实 ID；`detail=low`。不涉及用户图片。
+Real tests used synthetic PNG images through the gateway, not private user content:
+
+| Model | Red PNG | Blue PNG |
+|---|---|---|
+| `codeart/Qwen3-VL-235B` | HTTP 200, `Red`, 11.59 s | HTTP 200, `Blue`, 22.66 s |
+| `codeart/kimi-k2.6-vl` | HTTP 200, `Red` plus an additional black-region description, 22.80 s | HTTP 200, `Blue`, 22.01 s |
+
+这些仅证明这两个模型的图片请求有返回；不是识图准确率评估。Kimi 的附加描述原样记录，
+不隐藏异常。URL 图片、JPEG/WebP/GIF 的真实调用、auto/high 对模型行为的影响、音视频
+及图片生成均未验证或不支持。Streaming/Responses/Messages 图片结构由受控链路测试，
+未把该结果记成这三类真实模型调用全部通过。
+These are bounded connectivity samples, not an accuracy evaluation. Only PNG data
+URLs were exercised live. Other formats/remote URLs and detail semantics remain unproven.
+
+独立审查复现并修复：Messages 心跳关闭后丢 terminal error；展示别名碰撞污染真实 ID
+能力/限制/benefit；Responses 工具输出中媒体静默丢弃；图片读取期间外部切换后端的
+跨连接发送。相关反例已加入测试，最后审查 0 Critical / 0 Important。
+Terminal SSE errors, exact-ID metadata, nested tool-output validation and delayed image
+reads across backend changes have regression coverage and no remaining important review findings.
+
+
+### 2026-10-26 补充：目录标志并非模型原厂能力 / Route declaration correction
+
+用户报告选择 DeepSeek-V4.1-Flash 上传图片后，结果区仍显示「尚未发送请求」。
+复现为目录 false 的预检在结果错误边界之外抛出，仅显示页顶错误。已将完整发送流程
+纳入错误边界，校验和上游错误直接显示在结果框，组件回归 RED→GREEN。
+
+原厂官方资料明确说明 DeepSeek V4.1 Flash 和 Kimi K3 具备多模态能力：
+https://api-docs.deepseek.com/zh-cn/news/news260910/
+https://github.com/MoonshotAI/Kimi-K3
+因此 false 只表述当前目录/通道声明，不再显示为模型本身仅支持文本，也不再拦截实测。
+不会偷偷改选模型，原请求 ID 保持不变。
+
+当前账号与实际 CodeArts 端点：这两个精确模型的合成 PNG 请求均收到
+`InferHub.001001020.406 The request model is not multimodal`。这是当前通道实测拒绝，
+不能外推为模型原厂不支持，也不能推断其他账号或官方客户端行为。未从 wild-work
+发现可直接复用的图片路由；其 CodeArts 目录还隐藏 -VL 模型，不能作为图片成功证据。
+
+修复前后端把该请求错误当成账号故障，整个账号冷却后表现为 503；测试产生的冷却已清除。
+Go overlay 现在仅将精确错误码 .001001020.406 归入已有请求参数错误分支：回 HTTP 400，
+不重试/轮换/冷却整个账号。HTTP、首帧 SSE、晚期 SSE × 流式/非流式 6 类回归均通过，
+其他 502 和相似文本仍按原故障逻辑处理。真实复测两个图片拒绝均为 400，账号 healthy=1、cooling=0。
+
+Official model capability, catalog flags and actual provider-route results are different evidence.
+The UI now treats a false flag as advisory, forwards the selected model unchanged, and displays
+preflight/upstream errors near the send button. Both disputed models are multimodal at the vendor,
+but this account's CodeArts endpoint rejected their image requests with the precise code above.
+The build overlay prevents this request mismatch from cooling the account. Independent review:
+0 Critical / 0 Important. Node components, 44 Python extension tests and full Go suite pass.
+Real browser acceptance remains pending; no browser policy workaround was used.

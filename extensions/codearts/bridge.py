@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .client import ADMIN_ACTIONS, CodeArtsClient, is_codearts, upstream_model
 from .config import BridgeConfig
+from .media import validate_payload, install_responses_detail
 
 
 class ServicePool:
@@ -36,13 +37,18 @@ class BridgeRuntime:
         self.local = threading.local()
 
     @contextmanager
-    def request(self, handler):
+    def request(self, handler, media=False):
         previous = getattr(self.local, "handler", None)
+        previous_media = getattr(self.local, "codearts_media", False)
+        self.local.codearts_media = media
+        previous_stream = getattr(self.local, "codearts_stream", False)
         self.local.handler = handler
         try:
             yield
         finally:
             self.local.handler = previous
+            self.local.codearts_stream = previous_stream
+            self.local.codearts_media = previous_media
 
     def open(self, payload, session_key=None, **kwargs):
         hub = self.hub
@@ -61,6 +67,7 @@ class BridgeRuntime:
         if conversation:
             scope = (handler._key_id() or "panel") if handler else "internal"
             conversation = "hub-ca-" + hashlib.sha256((scope + ":" + str(conversation)).encode()).hexdigest()
+        self.local.codearts_stream = True
         response = self.client.chat(payload, conversation)
         return response, self.service_pool, payload.get("reasoning_effort")
 
@@ -92,6 +99,9 @@ def install(hub, config_path):
     if "allowed_accounts" not in inspect.signature(hub.open_upstream).parameters:
         raise RuntimeError("incompatible Hub: open_upstream account restrictions are unavailable")
     runtime = BridgeRuntime(hub, config_path)
+    from .compat import install_heartbeat_compat
+    install_heartbeat_compat(hub, runtime)
+    install_responses_detail(hub, runtime)
     original_open = hub.open_upstream
     original_fallback = hub.open_upstream_with_fallback
     original_body = hub.build_upstream_body
@@ -136,14 +146,30 @@ def install(hub, config_path):
             return ""
 
         def _dispatch_chat_post(self, path, payload):
+            if is_codearts(payload.get("model")):
+                try:
+                    validate_payload(payload)
+                except ValueError as exc:
+                    return self._error(400, str(exc), "invalid_request_error")
             with runtime.request(self):
                 return super()._dispatch_chat_post(path, payload)
 
         def _handle_responses(self, payload):
-            with runtime.request(self):
+            media = is_codearts(payload.get("model"))
+            if media:
+                try:
+                    validate_payload(payload)
+                except ValueError as exc:
+                    return self._error(400, str(exc), "invalid_request_error")
+            with runtime.request(self, media=media):
                 return super()._handle_responses(payload)
 
         def _handle_messages(self, payload):
+            if is_codearts(payload.get("model")):
+                try:
+                    validate_payload(payload)
+                except ValueError as exc:
+                    return self._anthropic_error(400, str(exc))
             with runtime.request(self):
                 return super()._handle_messages(payload)
 
@@ -216,7 +242,7 @@ def install(hub, config_path):
                      b'(!new URL(location.href).searchParams.has("tab")&&'
                      b'localStorage.getItem("wb-proxy-main-tab")==="codearts");}catch(e){}</script>')
             body = body.replace(b"<head>", b"<head>" + early, 1)
-            body = body.replace(b"</body>", b'<script src="/codearts/login.js" defer></script><script src="/codearts/dashboard.js" defer></script></body>')
+            body = body.replace(b"</body>", b'<link rel="stylesheet" href="/codearts/dashboard.css"><script src="/codearts/login.js" defer></script><script src="/codearts/dashboard.js" defer></script></body>')
             etag = '"codearts-%s"' % hashlib.sha256(body).hexdigest()[:24]
             return self._send_asset(body, "text/html; charset=utf-8", etag)
 
@@ -239,9 +265,9 @@ def install(hub, config_path):
 
         def do_GET(self):
             path = urlsplit(self.path).path
-            if path in ("/codearts/dashboard.js", "/codearts/login.js"):
+            if path in ("/codearts/dashboard.js", "/codearts/login.js", "/codearts/dashboard.css"):
                 body = (Path(__file__).parent / path.rsplit("/", 1)[-1]).read_bytes()
-                return self._send_asset(body, "text/javascript; charset=utf-8")
+                return self._send_asset(body, "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
             if not path.startswith("/codearts/"):
                 return super().do_GET()
             if not self._panel_ok():

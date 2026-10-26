@@ -65,3 +65,28 @@ func TestBridgeAmbiguousDisplayAndBenefitAlias(t *testing.T) {
 		t.Fatal("resolved ID lost benefit routing")
 	}
 }
+
+func TestBridgeCapabilitiesComeFromCatalogAndConflictStaysUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == EpAgentList {
+			w.Write([]byte(`{"agents":[{"agent_id":"test","is_primary_agent":true}]}`))
+			return
+		}
+		w.Write([]byte(`{"gpts":{"models":[{"model_name":"Vision","model_parameters":{"model_id":"v-real","supports_images":true}},{"model_name":"Text","model_parameters":{"model_id":"text-real","supports_images":false}},{"model_name":"Unknown","model_parameters":{"model_id":"unknown-real"}}]}}`))
+	}))
+	defer server.Close()
+	c := New(time.Second)
+	c.snapBase = server.URL
+	models, err := c.fetchAgentModels(SignCredential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].SupportsImages == nil || !*models[0].SupportsImages || models[1].SupportsImages == nil || *models[1].SupportsImages || models[2].SupportsImages != nil {
+		t.Fatalf("capability tri-state lost: %+v", models)
+	}
+	yes, no := true, false
+	merged := MergeModels([]ModelInfo{{ID: "v", SupportsImages: &yes}}, []ModelInfo{{ID: "v", SupportsImages: &no}}, []ModelInfo{{ID: "v", SupportsImages: &yes}})
+	if merged[0].SupportsImages != nil || !merged[0].ImagesConflict {
+		t.Fatal("conflicting capabilities must stay unknown")
+	}
+}

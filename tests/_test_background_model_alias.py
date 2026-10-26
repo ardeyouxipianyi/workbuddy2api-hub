@@ -44,10 +44,20 @@ class BackgroundModelAliasTests(unittest.TestCase):
         wb_proxy._apply_background_model_alias(payload)
         return payload
 
-    def test_listed_models_are_redirected(self):
+    def test_listed_models_are_redirected_only_for_background_metadata(self):
+        meta = {"client_metadata": {"request_kind": "memory",
+                                    "thread_source": "memory_consolidation"}}
         for name in ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.3-codex"):
-            body = self._apply({"model": name, "messages": []})
+            body = self._apply({"model": name, "messages": [], **meta})
             self.assertEqual(body["model"], "deepseek-v4.1-flash")
+
+    def test_explicit_picker_choice_is_never_rewritten(self):
+        # The picker and the background router can name the same model. A body
+        # without background metadata is an explicit request (issue #619).
+        for body in ({"model": "gpt-5.6-terra", "messages": []},
+                     {"model": "gpt-5.6-terra", "stream": True},
+                     {"model": "gpt-5.6-terra", "client_metadata": {}}):
+            self.assertEqual(self._apply(dict(body))["model"], "gpt-5.6-terra")
 
     def test_normal_models_are_untouched(self):
         for name in ("deepseek-v4.1-flash", "gpt-6-astra", "glm-5.3"):
@@ -55,7 +65,8 @@ class BackgroundModelAliasTests(unittest.TestCase):
             self.assertEqual(body["model"], name)
 
     def test_matching_ignores_case_and_whitespace(self):
-        body = self._apply({"model": "  GPT-5.6-TERRA "})
+        body = self._apply({"model": "  GPT-5.6-TERRA ",
+                            "client_metadata": {"request_kind": "memory"}})
         self.assertEqual(body["model"], "deepseek-v4.1-flash")
 
     def test_missing_or_non_string_model_is_left_alone(self):
@@ -72,7 +83,8 @@ class BackgroundModelAliasTests(unittest.TestCase):
     def test_other_body_fields_survive_the_rewrite(self):
         body = self._apply({"model": "gpt-5.6-terra", "stream": True,
                             "max_tokens": 16, "messages": [{"role": "user",
-                                                            "content": "hi"}]})
+                                                            "content": "hi"}],
+                            "client_metadata": {"request_kind": "memory"}})
         self.assertEqual(body["model"], "deepseek-v4.1-flash")
         self.assertTrue(body["stream"])
         self.assertEqual(body["max_tokens"], 16)
@@ -88,9 +100,11 @@ class BackgroundModelAliasTests(unittest.TestCase):
         )
         wb_proxy.BACKGROUND_MODEL_NAMES = names
         wb_proxy.BACKGROUND_MODEL_TARGET = "some-free-model"
-        body = self._apply({"model": "MODEL-B"})
+        body = self._apply({"model": "MODEL-B",
+                            "client_metadata": {"request_kind": "memory"}})
         self.assertEqual(body["model"], "some-free-model")
-        untouched = self._apply({"model": "gpt-5.6-terra"})
+        untouched = self._apply({"model": "gpt-5.6-terra",
+                                 "client_metadata": {"request_kind": "memory"}})
         self.assertEqual(untouched["model"], "gpt-5.6-terra")
 
 

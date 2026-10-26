@@ -201,7 +201,9 @@ def fetch_streak_days(account):
     失败返回 None，不发写请求。供对话活跃上报后回显连登天数使用。
     """
     try:
-        req = urllib.request.Request(CHAT_BASE + "/activity/growth/streak",
+        # 成长体系国内国际都有，端点跟着身分走：国际版是 www.workbuddy.ai。
+        base = account.chat_base_url() if hasattr(account, "chat_base_url") else CHAT_BASE
+        req = urllib.request.Request(base + "/activity/growth/streak",
                                      headers=account.headers("chat"))
         with _accounts.urlopen(req, timeout=10, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))

@@ -1,12 +1,33 @@
 # WorkBuddy2API-Hub — 国际版、国内版多账号网关中枢
 
+> [!IMPORTANT]
+> **项目进入低频维护（2026-10-23） / Low-frequency maintenance**
+>
+> 大幅降低更新频率与 Issue / PR 处理速度。请先阅读风险说明，再决定是否继续使用。
+>
+> Updates and responses to issues / pull requests will be significantly reduced. Read the risk notice below before continuing.
+
+> [!WARNING]
+> **WorkBuddy 上游正在收紧对非官方客户端的识别与拦截。**
+>
+> - **封禁**：2026-10-23 下午起，非官方客户端的识别与拦截明显收紧。
+> - **维护者**：近期工作压力增大，无法保证及时更新与响应。
+> - **可用性**：上游可能随时进一步收紧，导致本项目不可用。
+> - **账号风险**：使用非官方客户端造成的风控、限流或封禁，由使用者自行承担。
+>
+> **Upstream enforcement** tightened detection and blocking of unofficial clients from the afternoon of 2026-10-23. The maintainer is under increased workload and cannot guarantee timely updates or replies. The upstream may tighten further at any time; rate limits, account restrictions or bans caused by using an unofficial client are the user's responsibility.
+
+本项目仅用于协议学习、研究与个人自用。请优先使用官方客户端，不要使用主账号，不要共享账号，也不要用于商业转售。
+
+This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
+
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.7.30-2496ED?style=flat-square" alt="Version 1.7.30"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.8.0-2496ED?style=flat-square" alt="Version 1.8.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
   <img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/Vibe_Coding-100%25-ff69b4?style=flat-square" alt="Vibe Coding">
+  <img src="https://img.shields.io/badge/Maintenance-Low--frequency-c96f3d?style=flat-square" alt="Low-frequency maintenance">
 </p>
 
 把腾讯 **[www.workbuddy.ai](https://www.workbuddy.ai)**（国际版）与 **[codebuddy.cn](https://www.codebuddy.cn)**（国内版）的原生服务封装成标准 OpenAI 兼容接口（Chat Completions / Responses），并提供默认关闭的实验性 Anthropic Messages 适配；同时补齐多账号调度与运维能力：
@@ -160,7 +181,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 - 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 222 个套件：165 个 Python + 57 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 226 个套件：167 个 Python + 59 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
@@ -472,7 +493,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-### Unreleased
+- **v1.8.0 发布**：汇总 v1.7.33 之后的 #640、#642、#643、#645/#647，并补齐 #578、#618、#625 的发布记录。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v180)**；下一版的改动继续写在本段。
+- **修正 CN 专属模型判定，并给 OpenCode 写入真实上下文上限**（#618 / #625）：`minimax-` 曾被当成整个模型家族的 CN 专属前缀，于是国际版也提供的 `minimax-m3.1-flash` 被本地 400 拦下。现在只保留确定的 CN 独占项（`deepseek-v4-pro*` 与显式 `minimax-m3`），同族其他模型按出口实际目录判断。OpenCode 一键配置此前只写空的模型条目，客户端只能回落到自己的 200k 默认值；现在把网关目录中的 `context_window` / `max_output` 写进 `limit.context` / `limit.output`，没有规格的条目仍保持空对象。新增回归覆盖。 / Narrow the China-only model gate and give OpenCode the real context limit (#618 / #625): `minimax-` used to mark the whole family as CN-exclusive, so the globally served `minimax-m3.1-flash` was refused locally with a 400. Only the confirmed China-only entries remain (`deepseek-v4-pro*` and the explicit `minimax-m3`); other members of the family follow the actual catalogue of the selected exit. OpenCode's one-click config used to write empty model entries, so it fell back to its own 200k default; the gateway's catalogue `context_window` / `max_output` now go into `limit.context` / `limit.output`, while entries without specs stay empty objects. Regression coverage added.
+- **流式回复在真实静默期发送 SSE 心跳**（#578）：上游思考期间可能长时间一个字节都不发，而客户端会把静默误判为断流；只在每次阻塞读之前检查心跳，恰好无法覆盖它。Chat、Responses 与 Anthropic Messages 三条流式路径现在共用后台 `SSEHeartbeat`：每 15 秒无写入就发送合法的 `: keepalive` 注释帧，与业务帧共用锁，保证不会截断 JSON；响应正常时不会多插帧，流结束后线程立即停止。新增 `tests/_test_stream_keepalive.py`（9 项，含读线程阻塞期间仍收到心跳与并发写入完整性），并复跑流式 id、usage 帧、断流错误帧与重试套件。 / Keep SSE streams alive through real upstream silence (#578): while the model is thinking the upstream may send nothing for longer than the client's idle window, and checking a heartbeat only before the next blocking read cannot cover that gap. Chat, Responses and Anthropic Messages now share a background `SSEHeartbeat`: after 15 idle seconds it writes a valid `: keepalive` comment frame under the same lock as application writes, so JSON frames cannot be split; responsive streams gain no extra frames and the thread stops as soon as the stream ends. Added `tests/_test_stream_keepalive.py` (9 checks, including heartbeat delivery while the reader is blocked and write integrity under contention), and re-ran the stream id, usage-frame, abort-frame and retry suites.
 
 - **修复调度器日志与区域风控闸门读错模块副本**：网关以 `python[w] wb_proxy.py` 启动时主模块是 `__main__`，`wb_scheduler` 里裸写 `import wb_proxy` 会再加载一份副本——副本的 `LOG_STORE` 是 None、`restriction_hold_remaining()` 也是另一份状态。结果是调度器写的每条日志都掉进黑洞（实测 6.4 万行日志库里 `[调度器]` 0 条，同期启动横幅 8 次），区域级连锁暂停的闸门恒为 0、从未生效。现在统一走 `_proxy_module()`，优先取正在运行的那一份。新增 2 项断言。 / Fix the scheduler reading a module copy: launched as `python[w] wb_proxy.py` the main module is `__main__`, so a plain `import wb_proxy` inside `wb_scheduler` loads a second copy whose `LOG_STORE` is None and whose `restriction_hold_remaining()` is separate state — every scheduler log line was dropped (64k log rows, zero `[调度器]` entries, against 8 startup banners) and the realm-level pause gate was always 0, so it never took effect. Both now go through `_proxy_module()`, which prefers the running instance. Two assertions added.
 - **修复签到把业务失败记成成功**：`ok: (code == 0 or code == 10001)` 无条件成功，而 10001 在本仓库不是「签到成功」专属码（活动补偿的「每人限领一次，您已领取过」、content rejected 都用它），上游还会在 `code=0` 下回「签到失败，已签到天数不足 7 天」——「请求处理中，请勿重复操作」这类明确没签成的回执因此被记成成功（实测一轮 27 个账号里 4 条，当天真签成 8 个）。现在按文案归 `checked` / `already` / `pending` / `failed` 四类，并且**只有 checked / already 才写 `lastCheckin`**：旧实现拿到 HTTP 200 就先写盘，于是当天 `can_checkin()` 恒为 False，9 点与 21 点两轮都不会重试，这次失败被永久放弃，面板还显示「今日已领」。新增 `tests/_test_checkin_state.py`（7 项）。 / Fix check-in recording business failures as success: `ok: (code == 0 or code == 10001)` treated everything as success, but 10001 is not the check-in success code here — the compensation path's "already claimed" and content rejection use it too, and upstream also returns code 0 with 「签到失败，已签到天数不足 7 天」. Receipts like 「请求处理中，请勿重复操作」 (still processing, do not repeat) were therefore recorded as successes (4 of 27 accounts in one measured round). Receipts are now classified as `checked` / `already` / `pending` / `failed`, and only `checked` / `already` write `lastCheckin`: the old code wrote it as soon as it saw HTTP 200, so `can_checkin()` stayed False for the rest of the day, the 09:00 and 21:00 rounds never retried, and the panel showed "claimed today". Covered by `tests/_test_checkin_state.py` (7 tests).
@@ -562,7 +585,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **DSH 一键配置放宽限流重试，修掉「对话到一半链接中断」**：WorkBuddy 的 429 冷却通常约一分钟，而 DSH 的默认 `retryPolicy` 是 `normal` / 最多 5 次 / 退避 500ms 起翻倍、封顶 10s——加起来不到 16 秒就放弃，冷却还没结束回合就以 `RATE_LIMIT` 失败。一键配置现在给 `wb-proxy` 单独写 `retryPolicy: {mode: normal, maxRetries: 8, backoff: {initialDelayMs: 2000, maxDelayMs: 30000, jitterRatio: 0.1}}`（合计约 2 分半），只影响 `wb-proxy`，其它 provider 仍用默认策略；字段与取值按 `@deepseek-ai/dsh-llm` 的 `RetryPolicySchema`。已经接入过的机器重新点一次「一键配置」即可补上这段（幂等），重启 DSH 生效。
   DSH's default per-provider retry policy (normal, at most 5 retries, 500ms→10s backoff, under 16 seconds in total) gives up before WorkBuddy's ~60s rate-limit cooldown ends, so the turn dies with `RATE_LIMIT` — which the user sees as the conversation breaking mid-flight. The one-click config now writes a wider `retryPolicy` for `wb-proxy` only (8 retries, 2s initial delay, 30s cap, ~2.5 minutes in total); other providers keep the default policy. Field names and bounds follow `@deepseek-ai/dsh-llm`'s `RetryPolicySchema`. Re-running the one-click config on an already-integrated machine adds it idempotently, and a DSH restart applies it.
 
-已发布版本的完整记录（v1.4.5 ~ v1.7.30，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+已发布版本的完整记录（v1.4.5 ~ v1.8.0，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ## 七、致谢与引用声明 (Credits & References)
 

@@ -157,6 +157,79 @@ check("ordinary function events carry item_id",
 check("no custom events for a normal tool", "custom_tool_call_input" not in raw2)
 
 print()
+print("[7.1] streaming: preserve arguments included in the first tool-call chunk")
+for first_args, later_args in [
+    ('{"city":"', ['Beijing"}']),
+    ('{"city":"Beijing"}', []),
+    ('', ['{"city":"Beijing"}']),
+]:
+    chunks = [chunk({"tool_calls": [{
+        "index": 0, "id": "call_first", "type": "function",
+        "function": {"name": "get_weather", "arguments": first_args},
+    }]})]
+    chunks.extend(chunk({"tool_calls": [{"index": 0, "function": {"arguments": part}}]})
+                  for part in later_args)
+    chunks.extend([chunk({}, "tool_calls"), b"data: [DONE]\n\n"])
+    events = [json.loads(line[6:]) for line in b"".join(P.stream_responses_events(
+        iter(chunks), "m", {"usage": None})).decode().splitlines()
+        if line.startswith("data: ")]
+    deltas = [e for e in events if e["type"] == "response.function_call_arguments.delta"]
+    done = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+    prefix = "first arguments %r" % first_args
+    check(prefix + ": deltas reconstruct the complete JSON exactly once",
+          "".join(e["delta"] for e in deltas) == '{"city":"Beijing"}', deltas)
+    check(prefix + ": delta arguments match the final event",
+          len(done) == 1 and done[0]["arguments"] == "".join(e["delta"] for e in deltas), done)
+    check(prefix + ": no empty argument deltas",
+          all(e["delta"] for e in deltas), deltas)
+    added_pos = next(i for i, e in enumerate(events)
+                     if e["type"] == "response.output_item.added")
+    check(prefix + ": tool item starts before its argument deltas",
+          all(i > added_pos for i, e in enumerate(events)
+              if e["type"] == "response.function_call_arguments.delta"))
+
+print()
+print("[7.2] streaming: interleaved tools keep their own initial argument segments")
+interleaved = [
+    chunk({"tool_calls": [
+        {"index": 0, "id": "call_a", "function": {"name": "get_weather", "arguments": '{"city":"'}},
+        {"index": 1, "id": "call_b", "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'}},
+    ]}),
+    chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'Beijing"}'}}]}),
+    chunk({}, "tool_calls"), b"data: [DONE]\n\n",
+]
+events = [json.loads(line[6:]) for line in b"".join(P.stream_responses_events(
+    iter(interleaved), "m", {"usage": None})).decode().splitlines()
+    if line.startswith("data: ")]
+for index, expected in [(0, '{"city":"Beijing"}'), (1, '{"city":"Paris"}')]:
+    actual = "".join(e["delta"] for e in events
+                     if e["type"] == "response.function_call_arguments.delta"
+                     and e["output_index"] == index)
+    check("interleaved tool %d: arguments preserved without duplication" % index,
+          actual == expected, actual)
+
+print()
+print("[7.3] streaming: custom tools preserve their first argument segment too")
+custom_first = [
+    chunk({"tool_calls": [{"index": 0, "id": "call_custom_first",
+                           "function": {"name": "apply_patch", "arguments": '{"input":"'}}]}),
+    chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'pwd"}'}}]}),
+    chunk({}, "tool_calls"), b"data: [DONE]\n\n",
+]
+events = [json.loads(line[6:]) for line in b"".join(P.stream_responses_events(
+    iter(custom_first), "m", {"usage": None, "custom_names": {"apply_patch"}})).decode().splitlines()
+    if line.startswith("data: ")]
+custom_delta = "".join(e["delta"] for e in events
+                       if e["type"] == "response.custom_tool_call_input.delta")
+check("custom tool: first segment reaches the existing custom delta path",
+      custom_delta == '{"input":"pwd"}', custom_delta)
+check("custom tool: final input remains unwrapped",
+      any(e["type"] == "response.custom_tool_call_input.done" and e["input"] == "pwd"
+          for e in events))
+check("custom tool: no function argument events emitted",
+      not any(e["type"].startswith("response.function_call_arguments.") for e in events))
+
+print()
 print("[8] aggregate_stream: empty tool_call placeholder fallback (Issue #15)")
 # Case A: upstream sends legacy function_call placeholder with finish_reason="tool_calls"
 stream_placeholder = [

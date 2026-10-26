@@ -42,15 +42,14 @@ TURN_FAIL = {"ok": False, "error": "会话在 120s 内没有跑完（状态=work
              "conversation": "c1", "retryable": True, "phase": "turn"}
 
 
-def make_account(name, attempts=None, models=None):
+def make_account(name, rounds=None, models=None):
+    """轮数现在由候选序列决定：给几个候选就是几轮（至少两轮）。"""
     directory = os.path.join(ACCOUNTS, name)
     os.makedirs(directory, exist_ok=True)
-    wb_settings.set_daily_chat_web_retry(directory, True)
-    if attempts is not None:
-        wb_settings.set_daily_chat_web_attempts(directory, attempts)
+    if models is None and rounds:
+        models = ["cand-%d" % i for i in range(rounds)]
     if models is not None:
-        wb_settings.set_daily_chat_web_fallback(directory, True)
-        wb_settings.set_daily_chat_web_fallback_models(directory, models)
+        wb_settings.set_daily_chat_models(directory, models)
     return wb_accounts.Account(
         {"uid": "u1", "realm": "intl", "accessToken": "t"},
         path=os.path.join(directory, "acc.json"))
@@ -84,11 +83,12 @@ class RetryBackoffTests(unittest.TestCase):
         acc = make_account("create")
         sleeps, rounds, res = self.run_rounds(acc, [CREATE_FAIL] * 3)
         self.assertFalse(res["ok"])
-        self.assertEqual(len(rounds), 3)
-        self.assertEqual(sleeps, [5.0, 10.0])
+        # 自动模式只有一个候选 = 两轮（第二轮留给「会话只是慢」）。
+        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
+        self.assertEqual(sleeps, [5.0])
 
     def test_backoff_doubles_and_stops_at_the_cap(self):
-        acc = make_account("capped", attempts=5)
+        acc = make_account("capped", rounds=5)
         sleeps, rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 5)
         self.assertEqual(len(rounds), 5)
         self.assertEqual(sleeps, [5.0, 10.0, 20.0, 30.0])
@@ -126,7 +126,7 @@ class RetryBackoffTests(unittest.TestCase):
     def test_zero_base_disables_the_backoff(self):
         acc = make_account("disabled")
         sleeps, rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3, base=0.0)
-        self.assertEqual(len(rounds), 3)
+        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
         self.assertEqual(sleeps, [])
 
     def test_model_fallback_rounds_also_back_off(self):
@@ -158,14 +158,14 @@ class RetryBackoffSettingTests(unittest.TestCase):
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 2)
         sleeps, _rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(sleeps, [2.0, 4.0])
+        self.assertEqual(sleeps, [2.0])
 
     def test_setting_zero_disables_the_backoff(self):
         acc = make_account("setting-0")
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 0)
         sleeps, rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(len(rounds), 3)
+        self.assertEqual(len(rounds), wb_accounts.WEB_MIN_ROUNDS)
         self.assertEqual(sleeps, [])
 
     def test_setting_larger_than_the_cap_is_not_clamped_away(self):
@@ -174,7 +174,7 @@ class RetryBackoffSettingTests(unittest.TestCase):
         wb_settings.set_daily_chat_web_retry_backoff(
             os.path.dirname(acc.path), 40)
         sleeps, _rounds, _res = self.run_rounds(acc, [CREATE_FAIL] * 3)
-        self.assertEqual(sleeps, [40.0, 40.0])
+        self.assertEqual(sleeps, [40.0])
 
     def test_unset_setting_falls_back_to_the_builtin_default(self):
         acc = make_account("setting-unset")
@@ -223,7 +223,7 @@ class RealCreateFailureTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         url = "http://127.0.0.1:%d/console/as/conversations/" % server.server_address[1]
-        acc = make_account("real", attempts=2)
+        acc = make_account("real", rounds=2)
         try:
             with mock.patch.object(wb_accounts, "WEB_CONVERSATIONS_URL", url), \
                     mock.patch.object(wb_accounts, "WEB_RETRY_BACKOFF", 0.2), \

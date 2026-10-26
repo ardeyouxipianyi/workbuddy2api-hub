@@ -7,6 +7,7 @@ pinned here so it cannot drift from what the web app actually sends.
 import io
 import json
 import urllib.error, os, sys, unittest, time
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
@@ -128,8 +129,11 @@ class WebChannelTests(unittest.TestCase):
             wb_accounts.urlopen = old
         self.assertTrue(res.get("ok"), res)
         self.assertEqual(res.get("conversation"), "2102411494602919936")
-        req = calls[0]
-        self.assertEqual(req.method, "POST")
+        # 开跑前会先 GET 一次会话列表清扫残留，所以按方法挑建会话那条。
+        creates = [r for r in calls if r.method == "POST"
+                   and r.full_url == "https://www.workbuddy.ai/console/as/conversations/"]
+        self.assertEqual(len(creates), 1, [r.full_url for r in calls])
+        req = creates[0]
         self.assertEqual(req.full_url, "https://www.workbuddy.ai/console/as/conversations/")
         headers = {k.lower(): v for k, v in req.headers.items()}
         self.assertEqual(headers.get("authorization"), "Bearer dummy-token")
@@ -278,41 +282,23 @@ class WebChannelTests(unittest.TestCase):
     # 一轮「会话还没跑完」往往只是慢，不是坏了。重试默认开，一共最多尝试 N 次
     # （含第一轮），每轮的等待在上一轮基础上增加一个首轮时长：默认 3 次 = 120 / 240 / 360。
 
-    def account_in(self, name, retry=None, timeout=None, attempts=None):
-        """一个带自己 settings.json 的账号，方便按设置页的口径测重试策略。"""
+    def account_in(self, name, models=None, budget=None, timeout=None):
+        """一个带自己 settings.json 的账号，方便按设置页的口径测预算与候选序列。"""
         directory = os.path.join(_TMP.name, name)
         os.makedirs(directory, exist_ok=True)
-        if retry is not None:
-            wb_settings.set_daily_chat_web_retry(directory, retry)
+        if models is not None:
+            wb_settings.set_daily_chat_models(directory, models)
+        if budget is not None:
+            wb_settings.set_daily_chat_budget(directory, budget)
         if timeout is not None:
             wb_settings.set_daily_chat_web_timeout(directory, timeout)
-        if attempts is not None:
-            wb_settings.set_daily_chat_web_attempts(directory, attempts)
         acc = wb_accounts.Account({"uid": self.UID, "realm": "intl",
                                    "accessToken": "dummy-token", "lastDailyChat": None})
         acc.path = os.path.join(directory, "acc-intl.json")
         return acc
 
-    def test_a_slow_turn_is_retried_and_the_wait_doubles(self):
-        acc = self.account_in("web-retry-on", retry=True)
-        _calls, fake = self.stub()
-        turns = self.stub_turn(sequence=[{"ok": False, "status": "working",
-                                          "chunks": 0,
-                                          "error": "会话在 120s 内没有跑完（状态=working）"},
-                                         {"ok": True, "status": "completed"}])
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertTrue(res.get("ok"), res)
-        self.assertEqual(res.get("attempts"), 2)
-        self.assertEqual([t["wait_seconds"] for t in turns], [120, 240])
-
-    def test_retries_stop_at_the_cap(self):
-        """一直跑不完就试到上限为止：默认一共 3 次，等待 120 / 240 / 360。"""
-        acc = self.account_in("web-retry-cap", retry=True)
+    def run_web(self, acc):
+        """跑一次网页腿，返回 (结果, 每轮的等待秒数)。"""
         _calls, fake = self.stub()
         turns = self.stub_turn({"ok": False, "status": "working", "chunks": 0,
                                 "error": "会话在 120s 内没有跑完（状态=working）"})
@@ -322,13 +308,78 @@ class WebChannelTests(unittest.TestCase):
             res = acc.daily_chat_web()
         finally:
             wb_accounts.urlopen = old
+        return res, [t["wait_seconds"] for t in turns]
+
+    def test_a_slow_turn_is_retried_with_the_same_wait(self):
+        """一轮没跑完只是慢：再等一轮。等待不再逐轮翻倍——总时长由预算管，
+        每轮都拿满「单轮上限」，所以两轮都是 45 秒。"""
+        acc = self.account_in("web-retry-same", timeout=45)
+        _calls, fake = self.stub()
+        turns = self.stub_turn(sequence=[{"ok": False, "status": "working", "chunks": 0,
+                                          "error": "会话在 45s 内没有跑完（状态=working）"},
+                                         {"ok": True, "status": "completed"}])
+        old = wb_accounts.urlopen
+        wb_accounts.urlopen = fake
+        try:
+            res = acc.daily_chat_web()
+        finally:
+            wb_accounts.urlopen = old
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(res.get("attempts"), 2)
+        self.assertEqual([t["wait_seconds"] for t in turns], [45, 45])
+
+    def test_the_rounds_follow_the_candidate_list(self):
+        """候选 3 个 = 3 轮，按面板上的顺序换模型（旧实现会按倍率重排）。"""
+        acc = self.account_in("web-candidates",
+                              models=["glm-5.3-flash", "deepseek-v4.1-flash", "hy3"])
+        res, waits = self.run_web(acc)
         self.assertFalse(res.get("ok"), res)
-        self.assertEqual(res.get("attempts"), wb_accounts.WEB_TURN_ATTEMPTS)
-        self.assertEqual([t["wait_seconds"] for t in turns], [120, 240, 360])
+        self.assertEqual(res.get("attempts"), 3)
+        self.assertEqual(res.get("models_tried"),
+                         ["glm-5.3-flash", "deepseek-v4.1-flash", "hy3"])
+        self.assertEqual(waits, [120, 120, 120])
+
+    def test_at_least_two_rounds_without_a_candidate_list(self):
+        """自动模式（没有候选列表）也至少跑两轮：第二轮留给「会话只是慢」。"""
+        acc = self.account_in("web-auto-rounds")
+        res, waits = self.run_web(acc)
+        self.assertFalse(res.get("ok"), res)
+        self.assertEqual(res.get("attempts"), wb_accounts.WEB_MIN_ROUNDS)
+        self.assertEqual(waits, [120, 120])
+
+    def test_a_tiny_budget_still_reports_a_verdict(self):
+        """预算小到连一轮都放不下：不发请求，直接给「预算不足」的结论。
+
+        这一条钉的是「必有结论」：旧实现里卡住的账号可以几小时不写一行，
+        面板上就是一片空白。
+        """
+        acc = self.account_in("web-budget-tiny", budget=5, timeout=120)
+        calls, fake = self.stub()
+        turns = self.stub_turn()
+        old = wb_accounts.urlopen
+        wb_accounts.urlopen = fake
+        try:
+            res = acc.daily_chat_web()
+        finally:
+            wb_accounts.urlopen = old
+        self.assertFalse(res.get("ok"), res)
+        self.assertEqual(res.get("attempts"), 0)
+        self.assertEqual(turns, [])
+        self.assertEqual([r for r in calls if r.full_url.endswith("/conversations/")], [])
+        self.assertEqual(res.get("phase"), "budget")
+        self.assertTrue(res.get("budget_exhausted"))
+        self.assertIn("预算", res.get("error") or "")
+
+    def test_the_round_wait_is_clamped_by_the_budget(self):
+        """单轮等待 = min(单轮上限, 剩余预算)，所以预算比上限小时每轮都按预算等。"""
+        acc = self.account_in("web-budget-clamp", budget=60, timeout=120)
+        res, waits = self.run_web(acc)
+        self.assertFalse(res.get("ok"), res)
+        self.assertEqual(waits, [60, 60])
 
     def test_a_business_rejection_is_not_retried(self):
         """建会话被业务拒绝（非 0 code）时重试没有意义，只跑一轮。"""
-        acc = self.account_in("web-retry-reject", retry=True)
+        acc = self.account_in("web-retry-reject")
         calls, fake = self.stub({"code": 12302, "msg": "activity is offline"})
         turns = self.stub_turn()
         old = wb_accounts.urlopen
@@ -345,7 +396,7 @@ class WebChannelTests(unittest.TestCase):
 
     def test_a_transient_create_failure_is_retried(self):
         """建会话时 503 是瞬时失败，值得再试一次（与业务拒绝区分开）。"""
-        acc = self.account_in("web-retry-503", retry=True)
+        acc = self.account_in("web-retry-503")
         calls, fake = self.stub()
         turns = self.stub_turn()
         state = {"left": 1}
@@ -365,84 +416,7 @@ class WebChannelTests(unittest.TestCase):
             wb_accounts.urlopen = old
         self.assertTrue(res.get("ok"), res)
         self.assertEqual(res.get("attempts"), 2)
-        self.assertEqual([t["wait_seconds"] for t in turns], [240])
-
-    def test_a_fresh_install_retries_by_default(self):
-        """没碰过设置的安装就是默认口径：一共 3 次，等待 120 / 240 / 360。"""
-        acc = self.account_in("web-retry-default")
-        _calls, fake = self.stub()
-        turns = self.stub_turn({"ok": False, "status": "working", "chunks": 0,
-                                "error": "会话在 120s 内没有跑完（状态=working）"})
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertFalse(res.get("ok"), res)
-        self.assertEqual(res.get("attempts"), 3)
-        self.assertEqual([t["wait_seconds"] for t in turns], [120, 240, 360])
-
-    def test_the_attempt_count_is_configurable(self):
-        """设置页改过的次数就是总次数（含第一轮）：5 次 = 120/240/360/480/600。"""
-        acc = self.account_in("web-attempts", retry=True, attempts=5)
-        _calls, fake = self.stub()
-        turns = self.stub_turn({"ok": False, "status": "working", "chunks": 0,
-                                "error": "会话在 120s 内没有跑完（状态=working）"})
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertEqual(res.get("attempts"), 5)
-        self.assertEqual([t["wait_seconds"] for t in turns], [120, 240, 360, 480, 600])
-
-    def test_one_attempt_means_one_try(self):
-        """次数填 1 就是只跑一轮，与关掉开关等效。"""
-        acc = self.account_in("web-attempts-one", retry=True, attempts=1)
-        _calls, fake = self.stub()
-        turns = self.stub_turn({"ok": False, "status": "working", "chunks": 0,
-                                "error": "会话在 120s 内没有跑完（状态=working）"})
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertEqual(res.get("attempts"), 1)
         self.assertEqual([t["wait_seconds"] for t in turns], [120])
-
-    def test_the_retry_toggle_off_keeps_one_attempt(self):
-        """显式关掉重试时，网页通道回到「只跑一轮」。"""
-        acc = self.account_in("web-retry-off", retry=False)
-        _calls, fake = self.stub()
-        turns = self.stub_turn({"ok": False, "status": "working", "chunks": 0,
-                                "error": "会话在 120s 内没有跑完（状态=working）"})
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertFalse(res.get("ok"), res)
-        self.assertEqual(res.get("attempts"), 1)
-        self.assertEqual([t["wait_seconds"] for t in turns], [120])
-
-    def test_the_configured_wait_is_the_first_attempt(self):
-        """设置页改过的等待时间就是首轮的等待，重试从它递增。"""
-        acc = self.account_in("web-timeout", retry=True, timeout=45)
-        _calls, fake = self.stub()
-        turns = self.stub_turn(sequence=[{"ok": False, "status": "working", "chunks": 0},
-                                         {"ok": True, "status": "completed"}])
-        old = wb_accounts.urlopen
-        wb_accounts.urlopen = fake
-        try:
-            res = acc.daily_chat_web()
-        finally:
-            wb_accounts.urlopen = old
-        self.assertTrue(res.get("ok"), res)
-        self.assertEqual([t["wait_seconds"] for t in turns], [45, 90])
 
     def test_the_env_timeout_survives_the_new_setting(self):
         """没在设置页改过时，WB_WEB_TURN_TIMEOUT 仍然说了算，不被 120 顶掉。"""
@@ -457,39 +431,68 @@ class WebChannelTests(unittest.TestCase):
         wb_settings.set_daily_chat_web_timeout(os.path.dirname(acc.path), 45)
         self.assertEqual(acc.daily_chat_web_policy()[0], 45)
 
-    def test_the_retry_settings_default_and_round_trip(self):
-        directory = os.path.join(_TMP.name, "web-retry-settings")
-        # 默认：重试开着、一共 3 次、首轮等待 120 秒。
-        self.assertTrue(wb_settings.daily_chat_web_retry(directory))
-        self.assertEqual(wb_settings.daily_chat_web_attempts(directory),
-                         wb_settings.DAILY_CHAT_WEB_ATTEMPTS_DEFAULT)
-        self.assertEqual(wb_settings.daily_chat_web_timeout(directory),
-                         wb_settings.DAILY_CHAT_WEB_TIMEOUT_DEFAULT)
-        self.assertFalse(wb_settings.set_daily_chat_web_retry(directory, False))
-        self.assertFalse(wb_settings.daily_chat_web_retry(directory))
-        self.assertEqual(wb_settings.set_daily_chat_web_attempts(directory, 5), 5)
-        self.assertEqual(wb_settings.daily_chat_web_attempts(directory), 5)
-        self.assertEqual(wb_settings.set_daily_chat_web_timeout(directory, 300), 300)
-        self.assertEqual(wb_settings.daily_chat_web_timeout(directory), 300)
+    def test_the_budget_settings_default_and_round_trip(self):
+        directory = os.path.join(_TMP.name, "web-budget-settings")
+        # 默认：单账号预算 600 秒，候选序列为空（自动），至少两轮。
+        self.assertEqual(wb_settings.daily_chat_budget(directory),
+                         wb_settings.DAILY_CHAT_BUDGET_DEFAULT)
+        self.assertEqual(wb_settings.daily_chat_models(directory), [])
+        acc = self.account_in("web-budget-default")
+        self.assertEqual(acc.daily_chat_budget(), wb_accounts.WEB_BUDGET_DEFAULT)
+        self.assertEqual(acc.daily_chat_web_policy()[1], wb_accounts.WEB_MIN_ROUNDS)
+        # 写读往返。
+        self.assertEqual(wb_settings.set_daily_chat_budget(directory, 900), 900)
+        self.assertEqual(wb_settings.daily_chat_budget(directory), 900)
+        self.assertEqual(wb_settings.set_daily_chat_budget(directory, 0), 0)
+        self.assertEqual(wb_settings.daily_chat_budget(directory), 0)
+        self.assertEqual(wb_settings.set_daily_chat_models(
+            directory, ["hy3", "hy3", " glm-5.3-flash "]), ["hy3", "glm-5.3-flash"])
+        self.assertEqual(wb_settings.daily_chat_models(directory),
+                         ["hy3", "glm-5.3-flash"])
+        self.assertEqual(wb_settings.set_daily_chat_models(directory, []), [])
+        self.assertEqual(wb_settings.daily_chat_models(directory), [])
         # 越界/非法值一律回落到默认，不让手改的 settings.json 把巡检拖住。
-        for bad in (0, -5, wb_settings.DAILY_CHAT_WEB_TIMEOUT_MAX + 1, "120", True):
+        for bad in (-1, wb_settings.DAILY_CHAT_BUDGET_MAX + 1, "600", True, None):
             with open(wb_settings.settings_path(directory), "w", encoding="utf-8") as fh:
-                json.dump({"daily_chat_web_timeout": bad}, fh)
-            self.assertEqual(wb_settings.daily_chat_web_timeout(directory),
-                             wb_settings.DAILY_CHAT_WEB_TIMEOUT_DEFAULT, bad)
-        for bad in (0, -1, wb_settings.DAILY_CHAT_WEB_ATTEMPTS_MAX + 1, "3", True):
-            with open(wb_settings.settings_path(directory), "w", encoding="utf-8") as fh:
-                json.dump({"daily_chat_web_attempts": bad}, fh)
-            self.assertEqual(wb_settings.daily_chat_web_attempts(directory),
-                             wb_settings.DAILY_CHAT_WEB_ATTEMPTS_DEFAULT, bad)
-        with self.assertRaises(ValueError):
-            wb_settings.set_daily_chat_web_timeout(directory, 0)
-        with self.assertRaises(ValueError):
-            wb_settings.set_daily_chat_web_timeout(directory, "120")
-        with self.assertRaises(ValueError):
-            wb_settings.set_daily_chat_web_attempts(directory, 0)
-        with self.assertRaises(ValueError):
-            wb_settings.set_daily_chat_web_attempts(directory, "3")
+                json.dump({"daily_chat_budget": bad}, fh)
+            self.assertEqual(wb_settings.daily_chat_budget(directory),
+                             wb_settings.DAILY_CHAT_BUDGET_DEFAULT, bad)
+        for bad in (-1, wb_settings.DAILY_CHAT_BUDGET_MAX + 1, "600", True):
+            with self.assertRaises(ValueError):
+                wb_settings.set_daily_chat_budget(directory, bad)
+
+    def test_legacy_model_and_fallback_settings_migrate_to_the_candidate_list(self):
+        """升级不能把老部署选过的模型与回退组合静默丢掉。"""
+        directory = os.path.join(_TMP.name, "web-legacy-candidates")
+        os.makedirs(directory, exist_ok=True)
+        with open(wb_settings.settings_path(directory), "w", encoding="utf-8") as fh:
+            json.dump({
+                "daily_chat_model": "hy3",
+                "daily_chat_web_fallback": True,
+                "daily_chat_web_fallback_models": ["glm-5.3-flash", "hy3"],
+            }, fh)
+        self.assertEqual(wb_settings.daily_chat_models(directory),
+                         ["hy3", "glm-5.3-flash"])
+
+        with open(wb_settings.settings_path(directory), "w", encoding="utf-8") as fh:
+            json.dump({
+                "daily_chat_model": "hy3",
+                "daily_chat_web_fallback": False,
+                "daily_chat_web_fallback_models": ["glm-5.3-flash"],
+            }, fh)
+        self.assertEqual(wb_settings.daily_chat_models(directory), ["hy3"])
+
+    def test_backoff_is_clamped_to_the_remaining_budget(self):
+        """建会话失败后的退避不能睡过单账号总预算。"""
+        acc = self.account_in("web-backoff-budget", budget=600)
+        deadline = time.time() + 2.0
+        with mock.patch.object(wb_accounts.time, "sleep") as sleep:
+            waited = acc._web_retry_pause(
+                {"phase": "create"}, 5, deadline=deadline)
+        self.assertGreater(waited, 0)
+        self.assertLessEqual(waited, 2.0)
+        sleep.assert_called_once()
+        self.assertLessEqual(sleep.call_args[0][0], 2.0)
 
     def test_the_web_toggle_defaults_on_and_round_trips(self):
         directory = os.path.join(_TMP.name, "web-toggle")
