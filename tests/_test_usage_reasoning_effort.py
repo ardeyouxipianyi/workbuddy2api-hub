@@ -22,6 +22,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_accounts
 import wb_proxy as P
+import wb_usage as U
 
 PASS = FAIL = 0
 
@@ -44,22 +45,22 @@ def rows():
 USAGE = {"prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": 3,
          "cached_tokens": 4, "total_tokens": 15}
 
-P.record_usage("deepseek-v4.1-flash", USAGE, stream=True, elapsed_ms=1200, ttft_ms=800,
+U.record_usage("deepseek-v4.1-flash", USAGE, stream=True, elapsed_ms=1200, ttft_ms=800,
                gen_ms=400, account=None, effort="high")
 row = rows()[-1]
 check("the resolved effort is written on the row",
       row.get("reasoning_effort") == "high", row.get("reasoning_effort"))
 
-P.record_usage("hy3", USAGE, stream=False, elapsed_ms=900, effort=None)
+U.record_usage("hy3", USAGE, stream=False, elapsed_ms=900, effort=None)
 check("a request without an effort writes no field",
       "reasoning_effort" not in rows()[-1], rows()[-1].get("reasoning_effort"))
 
-P.record_usage("gemini-3.5-flash", USAGE, stream=False, elapsed_ms=900, effort="medium")
+U.record_usage("gemini-3.5-flash", USAGE, stream=False, elapsed_ms=900, effort="medium")
 check("a fixed-effort model records its fixed value",
       rows()[-1].get("reasoning_effort") == "medium", rows()[-1].get("reasoning_effort"))
 
 # The panel reads rows through recent_usage(); the field has to survive it.
-got = P.recent_usage(limit=10, realm=P.CURRENT_REALM)
+got = U.recent_usage(limit=10, realm=P.CURRENT_REALM)
 latest = got["rows"][0]
 check("recent_usage passes the field through",
       latest.get("reasoning_effort") == "medium", latest.get("reasoning_effort"))
@@ -154,7 +155,7 @@ def chat(model, **extra):
 # record_usage() writes, so a camelCase client gets its chip too.
 effort = open_with(chat("deepseek-v4.1-flash", reasoningEffort="max"))
 check("open_upstream hands back the camelCase effort", effort == "max", effort)
-P.record_usage("deepseek-v4.1-flash", USAGE, stream=False, elapsed_ms=900, effort=effort)
+U.record_usage("deepseek-v4.1-flash", USAGE, stream=False, elapsed_ms=900, effort=effort)
 check("and that value lands on the usage row",
       rows()[-1].get("reasoning_effort") == "max", rows()[-1].get("reasoning_effort"))
 
@@ -171,7 +172,7 @@ check("a plain request to it carries no effort in the body",
       P.client_effort_of(plain) is None, P.client_effort_of(plain))
 effort = open_with(chat("gemini-3.5-flash"))
 check("open_upstream still reports the pinned level", effort == "medium", effort)
-P.record_usage("gemini-3.5-flash", USAGE, stream=False, elapsed_ms=900, effort=effort)
+U.record_usage("gemini-3.5-flash", USAGE, stream=False, elapsed_ms=900, effort=effort)
 check("so the pinned level reaches the usage row",
       rows()[-1].get("reasoning_effort") == "medium", rows()[-1].get("reasoning_effort"))
 check("kimi-k3 is pinned the same way", open_with(chat("kimi-k3")) == "medium",

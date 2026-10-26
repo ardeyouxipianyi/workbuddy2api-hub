@@ -17,6 +17,7 @@ import wb_activity
 import wb_atrest
 import wb_catalog
 import wb_identity
+import wb_runtime
 import wb_settings
 import wb_tiers
 import wb_upstream_pool
@@ -2586,7 +2587,7 @@ class Account(object):
 
     def _daily_chat_upstream(self, web=None):
         """每日活跃对话的实际流程；返回形状见 daily_chat。"""
-        import wb_proxy
+        wb_proxy = wb_runtime.gateway()
         url = self.chat_base_url() + wb_proxy.CHAT_PATH
         model = self.daily_chat_model()
         headers = self.headers("chat", model=model)
@@ -3937,12 +3938,6 @@ class CreditsRefresher(threading.Thread):
             "last_error": self.last_error,
             "logs": self.logs[-10:],
         }
-
-# 和账号凭证放在同一个目录、但本身不是账号的文件。跳过它们，免得每次启动
-# 都被当成「损坏的账号」解析并打一条 error 日志（settings.json 是面板设置，
-# active_realm.json 是区域开关）。
-NON_ACCOUNT_FILES = ("settings.json", "active_realm.json")
-
 
 # 和账号凭证放在同一个目录、但本身不是账号的文件。跳过它们，免得每次启动
 # 都被当成「损坏的账号」解析并打一条 error 日志（settings.json 是面板设置，

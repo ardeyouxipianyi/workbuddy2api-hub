@@ -20,8 +20,9 @@
 ```
 wb-proxy/
 ├── wb_agents.py               # 核心模块：文本编辑器、注册表、备份还原、公共 API、CLI 入口
-├── wb_proxy.py                # 路由层：/agents, /agents/cli, /agents/apply, /agents/restore
-├── dashboard.html             # 交互层：智能体配置看板、状态渲染与异步请求
+├── wb_routes_agents.py        # 路由层：/agents, /agents/apply, /agents/restore（wb_proxy.Handler 的 mixin）
+├── wb_proxy.py                # 路由分发与 /agents/cli、/agents/available
+├── assets/js/agents.js        # 交互层：智能体配置看板、状态渲染与异步请求（页面结构在 dashboard.html）
 └── accounts/                  # 数据持久化目录（由网关管理）
     ├── integration-state.json # 智能体集成状态账本
     └── agent-backups/         # 备份根目录
@@ -325,7 +326,7 @@ python wb_agents.py restore  --client CLIENT [--home DIR] [--state-dir DIR] [--j
 
 ```bash
 # 1. 语法检查
-python -m py_compile wb_agents.py wb_proxy.py
+python -m py_compile wb_agents.py wb_proxy.py wb_routes_agents.py
 
 # 2. 智能体专项单元测试与契约测试
 python tests/_test_agents.py

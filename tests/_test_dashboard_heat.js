@@ -11,7 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const html = require('./_dashboard_source.js').dashboardHtml();
 const start = html.indexOf('let heatFetchedAt');
 const end = html.indexOf('/* ---------------- KPI ---------------- */');
 assert.ok(start > 0 && end > start, 'dashboard.html 里找不到热力图取数逻辑，测试需要更新');

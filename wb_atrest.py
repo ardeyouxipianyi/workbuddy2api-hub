@@ -318,7 +318,7 @@ def seal(key, plaintext, framing, key_id=None, nonce=None):
 
 
 # ------------------------------------------------------------------ keyblob
-#: 桌面客户端的配置目录候选（keyblob 所在）。与 wb_proxy.read_product_config_models
+#: 桌面客户端的配置目录候选（keyblob 所在）。与 wb_models.read_product_config_models
 #: 的口径一致：国际版装在 ~/.workbuddy-ai，国内版装在 ~/.workbuddy；不同版本
 #: 的安装器两者都可能写，所以按存在性探测而不是写死一个。
 CONFIG_DIR_CANDIDATES = (".workbuddy-ai", ".workbuddy")

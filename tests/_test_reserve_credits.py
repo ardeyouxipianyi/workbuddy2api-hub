@@ -92,7 +92,7 @@ class ReserveCreditsTests(unittest.TestCase):
     def test_record_usage_feeds_the_balance(self):
         """Wiring pin: the deduction has to sit on the one usage choke point."""
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "wb_proxy.py")
+                            "wb_usage.py")
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         self.assertIn('acc.consume_credit(fields["credit"])', source)

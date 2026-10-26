@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import wb_accounts as A
 import wb_egress
 import wb_proxy
+import wb_usage as U
 import wb_settings
 import wb_upstream_pool
 
@@ -386,8 +387,8 @@ class SwitchOnTests(_OpenUpstreamHarness):
 
         with mock.patch.dict(os.environ, {"WB_ENABLE_FREE_MODEL_CREDIT_FALLBACK": "1"}), \
                 mock.patch.object(wb_proxy, "parse_rate_limit_reset", return_value=reset), \
-                mock.patch.object(wb_proxy, "apply_daily_guards", return_value=0), \
-                mock.patch.object(wb_proxy, "remaining_priority_enabled", return_value=False), \
+                mock.patch.object(U, "apply_daily_guards", return_value=0), \
+                mock.patch.object(U, "remaining_priority_enabled", return_value=False), \
                 mock.patch.object(wb_proxy, "upstream_timeouts", return_value=(2, 2)):
             raised, result = self.run_request(urlopen)
 
@@ -397,9 +398,9 @@ class SwitchOnTests(_OpenUpstreamHarness):
         self.assertEqual(result[0]._wb_billed_model, "deepseek-v4.1-flash-sg")
         self.assertGreater(account.cap_until("deepseek-v4.1-flash"), time.time())
         saved = []
-        with mock.patch.object(wb_proxy, "_persist_usage",
+        with mock.patch.object(U, "_persist_usage",
                                side_effect=lambda row, _label: saved.append(dict(row))):
-            wb_proxy.record_upstream_usage(
+            U.record_upstream_usage(
                 result[0], "deepseek-v4.1-flash",
                 {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3})
         self.assertEqual(saved[0]["model"], "deepseek-v4.1-flash-sg")
@@ -439,8 +440,8 @@ class SwitchOnTests(_OpenUpstreamHarness):
         try:
             with mock.patch.dict(os.environ,
                                  {"WB_ENABLE_FREE_MODEL_CREDIT_FALLBACK": "1"}), \
-                    mock.patch.object(wb_proxy, "apply_daily_guards", return_value=0), \
-                    mock.patch.object(wb_proxy, "remaining_priority_enabled", return_value=False), \
+                    mock.patch.object(U, "apply_daily_guards", return_value=0), \
+                    mock.patch.object(U, "remaining_priority_enabled", return_value=False), \
                     mock.patch.object(wb_proxy, "upstream_timeouts", return_value=(2, 2)), \
                     mock.patch.object(wb_proxy, "auto_switch_product_enabled", return_value=True), \
                     mock.patch.object(wb_proxy, "_try_switch_product",

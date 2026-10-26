@@ -32,6 +32,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as proxy
+import wb_usage as U
+import wb_translate as X
 import wb_webtools as W
 
 PASS = FAIL = 0
@@ -258,9 +260,9 @@ chat_body = {
 handler = FakeHandler()
 executed = []
 
-with mock.patch.multiple(proxy,
+with mock.patch.object(U, "record_usage", lambda *a, **k: None), \
+        mock.patch.multiple(proxy,
                          open_upstream=fake_open_upstream,
-                         record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
         mock.patch.object(W, "execute", lambda name, args: executed.append((name, args)) or
                           "Search results for: cats" + chr(10) + "1. Cats - https://example.com"):
@@ -303,9 +305,9 @@ def always_tool_body(body, session_key=None, target_realm=None):
 
 
 handler2 = FakeHandler()
-with mock.patch.multiple(proxy,
+with mock.patch.object(U, "record_usage", lambda *a, **k: None), \
+        mock.patch.multiple(proxy,
                          open_upstream=always_tool_body,
-                         record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
         mock.patch.object(W, "execute", lambda name, args: "Search results for: cats"):
     handler2._responses_stream_response(
@@ -342,7 +344,7 @@ check("the title comes along", found and found[0]["title"] == "All About Cats", 
 check("an error string yields no sources", W.sources_from_result("Error: nope") == [])
 
 answer = "See [All About Cats](https://example.com/cats) and https://example.com/other plus https://evil.example/x"
-anns = proxy.build_citations(answer, found)
+anns = X.build_citations(answer, found)
 urls = sorted(a["url"] for a in anns)
 check("a markdown link is cited", "https://example.com/cats" in urls, anns)
 check("a bare url is cited too", "https://example.com/other" in urls, anns)
@@ -402,10 +404,10 @@ class JsonHandler(FakeHandler):
 
 
 jh = JsonHandler()
-with mock.patch.multiple(proxy,
+with mock.patch.object(U, "record_usage", lambda *a, **k: None), \
+        mock.patch.multiple(proxy,
                          open_upstream=capture_open,
                          aggregate_stream=fake_aggregate,
-                         record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
         mock.patch.object(W, "execute", lambda name, args: SAMPLE):
     jh._responses_nonstream_response(
@@ -438,9 +440,9 @@ def passthrough_open(body, session_key=None, target_realm=None):
 
 handler3 = FakeHandler()
 ran = []
-with mock.patch.multiple(proxy,
+with mock.patch.object(U, "record_usage", lambda *a, **k: None), \
+        mock.patch.multiple(proxy,
                          open_upstream=passthrough_open,
-                         record_usage=lambda *a, **k: None,
                          record_error=lambda *a, **k: None), \
         mock.patch.object(W, "execute", lambda name, args: ran.append(name) or "no"), \
         mock.patch.object(proxy.wb_settings, "local_web_tools", lambda accounts_dir: False):

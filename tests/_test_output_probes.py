@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_probes
 import wb_proxy
+import wb_models as MC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -95,7 +96,7 @@ class ProbeRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wb_probes.save_probe(directory, "glm-5.2", {"clamped": 32000})
             with mock.patch.object(wb_proxy, "ACCOUNTS_DIR", directory):
-                entry = wb_proxy.model_entry("glm-5.2", {})
+                entry = MC.model_entry("glm-5.2", {})
         self.assertEqual(entry["output_clamp"], 32000)
         self.assertEqual(entry["max_output_tokens_clamped"], 32000)
         # The spec value from the knowledge table is untouched.

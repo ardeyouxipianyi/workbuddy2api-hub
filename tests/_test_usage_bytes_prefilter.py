@@ -46,6 +46,8 @@ os.environ["WB_USAGE_CACHE"] = "0"
 
 import wb_proxy as P
 
+import wb_usage as U
+
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
 P.POOL = None                     # 归属只走行自己的字段，可确定
 P.CURRENT_REALM = "intl"
@@ -155,9 +157,9 @@ ok_imply = True
 ok_same = True
 for label, raw, (want_b, want_t) in SHAPES:
     body = raw.rstrip(b"\n")          # 判定看的是不含换行的那段（扫描里也一样）
-    got_b = P._line_outside_window_bytes(body, LO, HI)
+    got_b = U._line_outside_window_bytes(body, LO, HI)
     try:
-        got_t = P._line_outside_window(body.decode("utf-8").strip(), LO, HI)
+        got_t = U._line_outside_window(body.decode("utf-8").strip(), LO, HI)
     except UnicodeDecodeError:
         got_t = "decode-error"
     if got_b and got_t is not True:
@@ -174,10 +176,10 @@ check("27 条 TRICKY 形状逐条与期望一致", ok_same)
 
 # 护栏单独钉：坏字节与非 ASCII 必须落到 decode 上（不是被跳过）。
 check("坏 UTF-8 行不被字节预过滤跳过（跳过它就绕开了 decode 报错）",
-      P._line_outside_window_bytes(
+      U._line_outside_window_bytes(
           b'{"at": 1789999000.5, "model": "\xff\xfe bad"}', LO, HI) is False)
 check("合法非 ASCII 行同样不跳过（整行 ASCII 才可能返回 True）",
-      P._line_outside_window_bytes(
+      U._line_outside_window_bytes(
           row_bytes(LO - 120, model="\u4e2d\u6587").rstrip(b"\n"), LO, HI) is False)
 
 
@@ -230,26 +232,26 @@ def reset_states():
     for name in ("_snap_cache", "_count_cache", "_series_cache", "_series_state",
                  "_analytics_cache", "_analytics_state", "_usage_snap_state",
                  "_perf_cache"):
-        obj = getattr(P, name, None)
+        obj = getattr(U, name, None)
         if isinstance(obj, dict):
             obj.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
-    P._count_state.update({"offset": 0, "key": None, "tail": b"", "n": 0,
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
+    U._count_state.update({"offset": 0, "key": None, "tail": b"", "n": 0,
                            "n_realm": {}})
-    P._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
-    P._daily_usage.update({"day": "", "totals": None, "credits": None,
+    U._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
+    U._daily_usage.update({"day": "", "totals": None, "credits": None,
                            "models": None, "offset": 0, "at": 0.0})
     try:
-        P._remaining_state["events"] = []
-        P._remaining_state["loaded"] = False
-        P._remaining_state["offset"] = 0
-        P._remaining_state["key"] = None
+        U._remaining_state["events"] = []
+        U._remaining_state["loaded"] = False
+        U._remaining_state["offset"] = 0
+        U._remaining_state["key"] = None
     except Exception:
         pass
 
 
-_real_prefilter = P._line_outside_window_bytes
+_real_prefilter = U._line_outside_window_bytes
 
 
 def dump(value):
@@ -263,14 +265,14 @@ def run_with_prefilter(on, fn):
     """跑一次 fn：on=False 时把字节预过滤关掉（等价于改动前的路径）。"""
     reset_states()
     if not on:
-        P._line_outside_window_bytes = lambda raw, lo, hi: False
+        U._line_outside_window_bytes = lambda raw, lo, hi: False
     try:
         try:
             out = fn()
         except Exception as exc:                # 两个模式都得同样地炸
             out = "ERR: %s: %s" % (type(exc).__name__, exc)
     finally:
-        P._line_outside_window_bytes = _real_prefilter
+        U._line_outside_window_bytes = _real_prefilter
     return out
 
 
@@ -292,31 +294,31 @@ print("[2] 扫描层：六个窗口读取器 + 公开端点，预过滤开/关�
 
 READERS = [
     ("_scan_usage_snapshot_window",
-     lambda: P._scan_usage_snapshot_window(None, LO, HI)),
+     lambda: U._scan_usage_snapshot_window(None, LO, HI)),
     ("_scan_usage_snapshot_window_days",
-     lambda: P._scan_usage_snapshot_window_days(None, LO)),
+     lambda: U._scan_usage_snapshot_window_days(None, LO)),
     ("_scan_usage_snapshot_window_hours",
-     lambda: P._scan_usage_snapshot_window_hours(None, LO)),
+     lambda: U._scan_usage_snapshot_window_hours(None, LO)),
     ("_scan_usage_analytics_window",
-     lambda: P._scan_usage_analytics_window(None, LO, HI)),
+     lambda: U._scan_usage_analytics_window(None, LO, HI)),
     ("_scan_usage_analytics_window_days",
-     lambda: P._scan_usage_analytics_window_days(None, LO)),
+     lambda: U._scan_usage_analytics_window_days(None, LO)),
     ("_scan_usage_analytics_window_hours",
-     lambda: P._scan_usage_analytics_window_hours(None, LO, HI)),
+     lambda: U._scan_usage_analytics_window_hours(None, LO, HI)),
     ("_usage_timeseries_scan",
-     lambda: P._usage_timeseries_scan(None, LO, HI, 60)),
+     lambda: U._usage_timeseries_scan(None, LO, HI, 60)),
     ("usage_snapshot(custom)",
-     lambda: P.usage_snapshot(realm=None, range="custom", since=LO, until=HI)),
+     lambda: U.usage_snapshot(realm=None, range="custom", since=LO, until=HI)),
     ("compute_usage_analytics(custom)",
-     lambda: P.compute_usage_analytics(range="custom", since=LO, until=HI)),
+     lambda: U.compute_usage_analytics(range="custom", since=LO, until=HI)),
     ("usage_timeseries(custom)",
-     lambda: P.usage_timeseries(range="custom", since=LO, until=HI)),
+     lambda: U.usage_timeseries(range="custom", since=LO, until=HI)),
     ("remaining_usage",
-     lambda: P.remaining_usage()),
+     lambda: U.remaining_usage()),
     ("count_usage_rows",
-     lambda: P.count_usage_rows(realm=None)),
+     lambda: U.count_usage_rows(realm=None)),
     ("usage_by_account",
-     lambda: P.usage_by_account()),
+     lambda: U.usage_by_account()),
 ]
 
 ok_same = True
@@ -349,8 +351,8 @@ check("关掉预过滤时窗内行数相同",
       snap_off["requests"] == EXPECT_ROWS, snap_off["requests"])
 
 # 无 skip 的调用方（all-time 折叠等）本来就与预过滤无关：关掉也不许变。
-alltime_on = run_with_prefilter(True, lambda: P._scan_usage_snapshot_window(None, LO, None))
-alltime_off = run_with_prefilter(False, lambda: P._scan_usage_snapshot_window(None, LO, None))
+alltime_on = run_with_prefilter(True, lambda: U._scan_usage_snapshot_window(None, LO, None))
+alltime_off = run_with_prefilter(False, lambda: U._scan_usage_snapshot_window(None, LO, None))
 check("只有下界的窗口在开/关下一致（同一个 skip 路径的另一种边界）",
       dump(alltime_on) == dump(alltime_off))
 
@@ -418,16 +420,16 @@ def scan_counted(prefilter):
         return out
 
     _CountedBytes.decodes = 0
-    P.open = _counted_open
+    U.open = _counted_open
     P.json.loads = loads_hook
-    P._line_outside_window_bytes = (bytes_hook if prefilter
+    U._line_outside_window_bytes = (bytes_hook if prefilter
                                     else (lambda raw, lo, hi: False))
     try:
-        snap = P._scan_usage_snapshot_window(None, LO, HI)
+        snap = U._scan_usage_snapshot_window(None, LO, HI)
     finally:
-        P.__dict__.pop("open", None)
+        U.__dict__.pop("open", None)
         P.json.loads = real_loads
-        P._line_outside_window_bytes = _real_prefilter
+        U._line_outside_window_bytes = _real_prefilter
     counts["decodes"] = _CountedBytes.decodes
     return snap, counts
 
@@ -525,10 +527,10 @@ check("补全后开/关仍逐字节一致",
 
 clean_log()
 check("跨块长行（窗外）字节版判为窗外",
-      P._line_outside_window_bytes(
+      U._line_outside_window_bytes(
           row_bytes(LO - 60, note="z" * 9000).rstrip(b"\n"), LO, HI) is True)
 check("跨块长行（窗内）字节版判为窗内（留给 decode 与折叠）",
-      P._line_outside_window_bytes(
+      U._line_outside_window_bytes(
           row_bytes(LO + 420, note="z" * 9000).rstrip(b"\n"), LO, HI) is False)
 check("跨块行两个模式都折进窗口",
       run_with_prefilter(True, READERS[0][1])["requests"] == EXPECT_ROWS)

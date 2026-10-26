@@ -146,7 +146,8 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
         # wb_pricing.py's inlined snapshot for good.
         "profiles": {"app": [p for p in files
                               if (p.startswith("wb_") and p.endswith(".py"))
-                              or p == "dashboard.html"]},
+                              or p == "dashboard.html"
+                              or p.startswith("assets/")]},
         # The runtime is one managed subtree rather than 500 manifest lines.
         "runtime": {
             "prefix": "python/",

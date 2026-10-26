@@ -46,6 +46,8 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_proxy as P
 
+import wb_models as MC
+
 
 CN_LIVE = (["hy4-preview-f", "hy3", "deepseek-v4.1-flash", "glm-5.3"],
            {"hy4-preview-f": {"credits": "x0.00"},
@@ -57,28 +59,28 @@ INTL_LIVE = (["grok-4.7"], {"grok-4.7": {"credits": "x1.90"}})
 
 class CatalogRefreshTests(unittest.TestCase):
     def setUp(self):
-        P._models_cache["intl"] = {"at": 0.0, "data": None}
-        P._models_cache["cn"] = {"at": 0.0, "data": None}
-        P._catalog_meta.clear()
-        P._catalog_refresh_at.clear()
-        self._orig = (P.fetch_remote_product_config,
-                      P.read_cached_remote_catalog)
+        MC._models_cache["intl"] = {"at": 0.0, "data": None}
+        MC._models_cache["cn"] = {"at": 0.0, "data": None}
+        MC._catalog_meta.clear()
+        MC._catalog_refresh_at.clear()
+        self._orig = (MC.fetch_remote_product_config,
+                      MC.read_cached_remote_catalog)
         self.calls = []
 
     def tearDown(self):
-        (P.fetch_remote_product_config,
-         P.read_cached_remote_catalog) = self._orig
+        (MC.fetch_remote_product_config,
+         MC.read_cached_remote_catalog) = self._orig
 
     def stub(self, by_realm):
         """fetch stub recording the realms asked for; None means failure."""
         def fake(realm):
             self.calls.append(realm)
             return by_realm.get(realm)
-        P.fetch_remote_product_config = fake
+        MC.fetch_remote_product_config = fake
 
     def test_refresh_uses_only_the_named_realm_and_publishes(self):
         self.stub({"cn": CN_LIVE, "intl": INTL_LIVE})
-        out = P.refresh_catalog("cn")
+        out = MC.refresh_catalog("cn")
         self.assertTrue(out["ok"], out)
         self.assertEqual(out["realm"], "cn")
         self.assertEqual(out["source"], "remote")
@@ -86,26 +88,26 @@ class CatalogRefreshTests(unittest.TestCase):
         # 只驱动了 cn 的取数——绝不碰 intl。
         self.assertEqual(self.calls, ["cn"])
         # 发布语义：/v1/models 的下一次读取立刻拿到新清单（不再触发取数）。
-        entries = dict(P.fetch_models("cn"))
+        entries = dict(MC.fetch_models("cn"))
         self.assertIn("glm-5.3", entries)
         self.assertEqual(self.calls, ["cn"])
         # intl 的缓存没被动过：还是空，取数也没碰它。
-        self.assertIsNone(P._models_cache["intl"]["data"])
+        self.assertIsNone(MC._models_cache["intl"]["data"])
 
     def test_refresh_replaces_the_cached_list_immediately(self):
         self.stub({"cn": (["glm-5.2"], {"glm-5.2": {"credits": "x0.79"}})})
-        P.fetch_models("cn")           # 缓存一份旧数据
+        MC.fetch_models("cn")           # 缓存一份旧数据
         self.stub({"cn": (["grok-4.7"], {"grok-4.7": {"credits": "x1.90"}})})
-        P._catalog_refresh_at.clear()  # 手动刷新不受冷却影响（上面不是手动）
-        out = P.refresh_catalog("cn")
+        MC._catalog_refresh_at.clear()  # 手动刷新不受冷却影响（上面不是手动）
+        out = MC.refresh_catalog("cn")
         self.assertTrue(out["ok"], out)
-        self.assertIn("grok-4.7", dict(P.fetch_models("cn")))
+        self.assertIn("grok-4.7", dict(MC.fetch_models("cn")))
 
     def test_cooldown_blocks_a_second_press_and_sends_nothing(self):
         self.stub({"cn": CN_LIVE})
-        first = P.refresh_catalog("cn")
+        first = MC.refresh_catalog("cn")
         self.assertTrue(first["ok"], first)
-        second = P.refresh_catalog("cn")
+        second = MC.refresh_catalog("cn")
         self.assertFalse(second["ok"])
         self.assertTrue(second.get("cooldown"))
         self.assertGreater(second["retry_after"], 0)
@@ -114,19 +116,19 @@ class CatalogRefreshTests(unittest.TestCase):
 
     def test_cooldown_is_per_realm(self):
         self.stub({"cn": CN_LIVE, "intl": INTL_LIVE})
-        self.assertTrue(P.refresh_catalog("cn")["ok"])
-        out = P.refresh_catalog("intl")
+        self.assertTrue(MC.refresh_catalog("cn")["ok"])
+        out = MC.refresh_catalog("intl")
         self.assertTrue(out["ok"], out)   # cn 的冷却不拦 intl
         self.assertEqual(self.calls, ["cn", "intl"])
 
     def test_failed_refresh_keeps_the_previous_list(self):
         self.stub({"cn": None})
-        P._models_cache["cn"] = {"at": 0.0,
+        MC._models_cache["cn"] = {"at": 0.0,
                                  "data": [("old-model", {"credits": "x0.50"})]}
-        out = P.refresh_catalog("cn")
+        out = MC.refresh_catalog("cn")
         self.assertFalse(out["ok"])
         self.assertIn("保留", out["msg"])
-        self.assertEqual(P._models_cache["cn"]["data"],
+        self.assertEqual(MC._models_cache["cn"]["data"],
                          [("old-model", {"credits": "x0.50"})])
 
     def test_failed_refresh_never_falls_back_to_the_desktop_cache(self):
@@ -137,37 +139,37 @@ class CatalogRefreshTests(unittest.TestCase):
             seen.append(realm)
             return CN_LIVE
 
-        P.read_cached_remote_catalog = cached
+        MC.read_cached_remote_catalog = cached
         self.stub({"cn": None})
-        out = P.refresh_catalog("cn")
+        out = MC.refresh_catalog("cn")
         self.assertFalse(out["ok"])
         self.assertEqual(seen, [])
 
     def test_cooldown_also_covers_a_failed_attempt(self):
         """失败也进冷却：连点重试不该变成对上游的高频轰炸。"""
         self.stub({"cn": None})
-        self.assertFalse(P.refresh_catalog("cn")["ok"])
-        second = P.refresh_catalog("cn")
+        self.assertFalse(MC.refresh_catalog("cn")["ok"])
+        second = MC.refresh_catalog("cn")
         self.assertTrue(second.get("cooldown"), second)
 
     def test_invalid_realm_is_rejected_without_side_effects(self):
         self.stub({"cn": CN_LIVE, "intl": INTL_LIVE})
         for bad in ("all", "", None, "CN ", "cn2"):
-            out = P.refresh_catalog(bad)
+            out = MC.refresh_catalog(bad)
             self.assertFalse(out["ok"], bad)
             self.assertIsNone(out["realm"], bad)
         self.assertEqual(self.calls, [])
 
     def test_success_message_reports_the_count(self):
         self.stub({"cn": CN_LIVE})
-        out = P.refresh_catalog("cn")
+        out = MC.refresh_catalog("cn")
         self.assertIn(str(out["count"]), out["msg"])
 
     def test_refresh_records_remote_provenance(self):
         """手动刷新成功后，来源行应显示「上游 API 获取」而不是配置文件。"""
         self.stub({"cn": CN_LIVE})
-        self.assertTrue(P.refresh_catalog("cn")["ok"])
-        meta = P.catalog_meta("cn")
+        self.assertTrue(MC.refresh_catalog("cn")["ok"])
+        meta = MC.catalog_meta("cn")
         self.assertEqual(meta["source"], "remote")
         self.assertIsNone(meta["file_mtime"])
         self.assertAlmostEqual(meta["fetched_at"], time.time(), delta=10)
@@ -182,26 +184,26 @@ class CatalogProvenanceTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self._orig = (P.fetch_remote_product_config,
-                      P.read_cached_remote_catalog,
-                      P.read_product_config_models,
-                      P.fetch_endpoint_models,
-                      P.product_config_path)
-        P._models_cache["intl"] = {"at": 0.0, "data": None}
-        P._models_cache["cn"] = {"at": 0.0, "data": None}
-        P._catalog_meta.clear()
+        self._orig = (MC.fetch_remote_product_config,
+                      MC.read_cached_remote_catalog,
+                      MC.read_product_config_models,
+                      MC.fetch_endpoint_models,
+                      MC.product_config_path)
+        MC._models_cache["intl"] = {"at": 0.0, "data": None}
+        MC._models_cache["cn"] = {"at": 0.0, "data": None}
+        MC._catalog_meta.clear()
 
     def tearDown(self):
-        (P.fetch_remote_product_config, P.read_cached_remote_catalog,
-         P.read_product_config_models, P.fetch_endpoint_models,
-         P.product_config_path) = self._orig
+        (MC.fetch_remote_product_config, MC.read_cached_remote_catalog,
+         MC.read_product_config_models, MC.fetch_endpoint_models,
+         MC.product_config_path) = self._orig
 
     def test_api_fetch_is_recorded_as_remote(self):
-        P.fetch_remote_product_config = (
+        MC.fetch_remote_product_config = (
             lambda realm: CN_LIVE if realm == "cn" else None)
-        P.read_cached_remote_catalog = lambda realm: None
-        P.fetch_models("cn")
-        meta = P.catalog_meta("cn")
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.fetch_models("cn")
+        meta = MC.catalog_meta("cn")
         self.assertEqual(meta["source"], "remote")
         self.assertIsNone(meta["file_mtime"])
         self.assertAlmostEqual(meta["fetched_at"], time.time(), delta=10)
@@ -214,63 +216,63 @@ class CatalogProvenanceTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("{}")
         os.utime(path, (1700000000.0, 1700000000.0))
-        P.fetch_remote_product_config = lambda realm: None
-        P.read_cached_remote_catalog = lambda realm: CN_LIVE
-        P.read_product_config_models = lambda realm=None: []
-        P.product_config_path = lambda realm: path
-        P.fetch_models("cn")
-        meta = P.catalog_meta("cn")
+        MC.fetch_remote_product_config = lambda realm: None
+        MC.read_cached_remote_catalog = lambda realm: CN_LIVE
+        MC.read_product_config_models = lambda realm=None: []
+        MC.product_config_path = lambda realm: path
+        MC.fetch_models("cn")
+        meta = MC.catalog_meta("cn")
         self.assertEqual(meta["source"], "cache")
         self.assertEqual(meta["file_mtime"], 1700000000.0)
         self.assertGreater(meta["fetched_at"], meta["file_mtime"])
         # 数据本身还是来自那份文件（hy3 等都在）。
-        self.assertIn("hy3", dict(P.fetch_models("cn")))
+        self.assertIn("hy3", dict(MC.fetch_models("cn")))
 
     def test_legacy_reader_also_counts_as_a_config_file(self):
         path = os.path.join(_TMP, "acc-product-config-v3.json")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("{}")
         os.utime(path, (1710000000.0, 1710000000.0))
-        P.fetch_remote_product_config = lambda realm: None
-        P.read_cached_remote_catalog = lambda realm: None
-        P.read_product_config_models = lambda realm=None: [
+        MC.fetch_remote_product_config = lambda realm: None
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.read_product_config_models = lambda realm=None: [
             ("glm-5.3", {"credits": "x0.79"})]
-        P.product_config_path = lambda realm: path
-        P.fetch_models("cn")
-        meta = P.catalog_meta("cn")
+        MC.product_config_path = lambda realm: path
+        MC.fetch_models("cn")
+        meta = MC.catalog_meta("cn")
         self.assertEqual(meta["source"], "legacy")
         self.assertEqual(meta["file_mtime"], 1710000000.0)
 
     def test_upstream_empty_is_recorded_as_bundled_snapshot(self):
-        P.fetch_remote_product_config = lambda realm: None
-        P.read_cached_remote_catalog = lambda realm: None
-        P.read_product_config_models = lambda realm=None: []
-        entries = P.fetch_models("cn")
+        MC.fetch_remote_product_config = lambda realm: None
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.read_product_config_models = lambda realm=None: []
+        entries = MC.fetch_models("cn")
         self.assertTrue(entries)   # 内置快照仍然给出清单
-        meta = P.catalog_meta("cn")
+        meta = MC.catalog_meta("cn")
         self.assertEqual(meta["source"], "bundled")
         self.assertIsNone(meta["file_mtime"])
 
     def test_narrow_endpoint_fallback_is_not_reported_as_remote(self):
         """窄端点（/v1/models）兜底也是一次 API 获取，但它不是桌面目录，
         来源要如实写成 endpoint 而不是 remote。"""
-        P.fetch_remote_product_config = lambda realm: None
-        P.read_cached_remote_catalog = lambda realm: None
-        P.read_product_config_models = lambda realm=None: []
-        P.fetch_endpoint_models = lambda: ["gpt-5.5"]
-        entries = dict(P.fetch_models("intl"))
+        MC.fetch_remote_product_config = lambda realm: None
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.read_product_config_models = lambda realm=None: []
+        MC.fetch_endpoint_models = lambda: ["gpt-5.5"]
+        entries = dict(MC.fetch_models("intl"))
         self.assertIn("gpt-5.5", entries)
-        self.assertEqual(P.catalog_meta("intl")["source"], "endpoint")
+        self.assertEqual(MC.catalog_meta("intl")["source"], "endpoint")
 
     def test_provenance_is_per_realm(self):
-        P.fetch_remote_product_config = (
+        MC.fetch_remote_product_config = (
             lambda realm: CN_LIVE if realm == "cn" else None)
-        P.read_cached_remote_catalog = lambda realm: None
-        P.read_product_config_models = lambda realm=None: []
-        P.fetch_models("cn")
-        P.fetch_models("intl")     # intl：全无 → bundled
-        self.assertEqual(P.catalog_meta("cn")["source"], "remote")
-        self.assertEqual(P.catalog_meta("intl")["source"], "bundled")
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.read_product_config_models = lambda realm=None: []
+        MC.fetch_models("cn")
+        MC.fetch_models("intl")     # intl：全无 → bundled
+        self.assertEqual(MC.catalog_meta("cn")["source"], "remote")
+        self.assertEqual(MC.catalog_meta("intl")["source"], "bundled")
 
 
 class CatalogDailyTests(unittest.TestCase):
@@ -286,65 +288,65 @@ class CatalogDailyTests(unittest.TestCase):
             return object()
 
     def setUp(self):
-        self._orig = (P.fetch_remote_product_config,
-                      P.read_cached_remote_catalog,
-                      P.read_product_config_models,
-                      P.product_config_path,
+        self._orig = (MC.fetch_remote_product_config,
+                      MC.read_cached_remote_catalog,
+                      MC.read_product_config_models,
+                      MC.product_config_path,
                       P.POOL,
-                      P.refresh_catalog)
-        P._models_cache["intl"] = {"at": 0.0, "data": None}
-        P._models_cache["cn"] = {"at": 0.0, "data": None}
-        P._catalog_meta.clear()
-        P._catalog_last_remote.clear()
-        P._catalog_refresh_at.clear()
+                      MC.refresh_catalog)
+        MC._models_cache["intl"] = {"at": 0.0, "data": None}
+        MC._models_cache["cn"] = {"at": 0.0, "data": None}
+        MC._catalog_meta.clear()
+        MC._catalog_last_remote.clear()
+        MC._catalog_refresh_at.clear()
         P.POOL = self._FakePool()
 
     def tearDown(self):
-        (P.fetch_remote_product_config, P.read_cached_remote_catalog,
-         P.read_product_config_models, P.product_config_path,
-         P.POOL, P.refresh_catalog) = self._orig
+        (MC.fetch_remote_product_config, MC.read_cached_remote_catalog,
+         MC.read_product_config_models, MC.product_config_path,
+         P.POOL, MC.refresh_catalog) = self._orig
 
     def test_both_realms_are_due_before_any_successful_fetch(self):
-        self.assertEqual(P.catalog_daily_due(), ["intl", "cn"])
+        self.assertEqual(MC.catalog_daily_due(), ["intl", "cn"])
 
     def test_a_successful_api_fetch_clears_its_realm_for_a_day(self):
-        P.fetch_remote_product_config = (
+        MC.fetch_remote_product_config = (
             lambda realm: CN_LIVE if realm == "cn" else None)
-        P.read_cached_remote_catalog = lambda realm: None
-        P.read_product_config_models = lambda realm=None: []
-        P.fetch_models("cn")
+        MC.read_cached_remote_catalog = lambda realm: None
+        MC.read_product_config_models = lambda realm=None: []
+        MC.fetch_models("cn")
         now = time.time()
-        self.assertNotIn("cn", P.catalog_daily_due(now))
-        self.assertIn("intl", P.catalog_daily_due(now))   # 没成功过的仍然到期
-        self.assertIn("cn", P.catalog_daily_due(now + P.CATALOG_DAILY_INTERVAL))
+        self.assertNotIn("cn", MC.catalog_daily_due(now))
+        self.assertIn("intl", MC.catalog_daily_due(now))   # 没成功过的仍然到期
+        self.assertIn("cn", MC.catalog_daily_due(now + MC.CATALOG_DAILY_INTERVAL))
 
     def test_cache_and_bundled_fallbacks_do_not_clear_the_due_flag(self):
         """读了本机配置文件也算「没从 API 拿到」：下一轮还要补取。"""
-        P.fetch_remote_product_config = lambda realm: None
-        P.read_cached_remote_catalog = lambda realm: CN_LIVE
-        P.product_config_path = lambda realm: os.path.join(_TMP, "nope.json")
-        P.fetch_models("cn")      # source=cache
-        self.assertEqual(P.catalog_meta("cn")["source"], "cache")
-        self.assertIn("cn", P.catalog_daily_due())
+        MC.fetch_remote_product_config = lambda realm: None
+        MC.read_cached_remote_catalog = lambda realm: CN_LIVE
+        MC.product_config_path = lambda realm: os.path.join(_TMP, "nope.json")
+        MC.fetch_models("cn")      # source=cache
+        self.assertEqual(MC.catalog_meta("cn")["source"], "cache")
+        self.assertIn("cn", MC.catalog_daily_due())
 
     def test_a_failed_refresh_does_not_mark_the_day(self):
-        P.fetch_remote_product_config = lambda realm: None
-        self.assertFalse(P.refresh_catalog("cn")["ok"])
-        self.assertIn("cn", P.catalog_daily_due())
+        MC.fetch_remote_product_config = lambda realm: None
+        self.assertFalse(MC.refresh_catalog("cn")["ok"])
+        self.assertIn("cn", MC.catalog_daily_due())
 
     def test_refresh_success_also_marks_the_day(self):
-        P.fetch_remote_product_config = (
+        MC.fetch_remote_product_config = (
             lambda realm: CN_LIVE if realm == "cn" else None)
-        self.assertTrue(P.refresh_catalog("cn")["ok"])
-        self.assertNotIn("cn", P.catalog_daily_due())
+        self.assertTrue(MC.refresh_catalog("cn")["ok"])
+        self.assertNotIn("cn", MC.catalog_daily_due())
 
     def test_daily_pass_only_touches_due_realms(self):
         calls = []
-        P.refresh_catalog = (
+        MC.refresh_catalog = (
             lambda realm: (calls.append(realm)
                            or {"ok": True, "realm": realm, "msg": "x"}))
-        P.note_remote_catalog("cn")     # cn 今天已经成功过
-        done = P.catalog_daily_pass()
+        MC.note_remote_catalog("cn")     # cn 今天已经成功过
+        done = MC.catalog_daily_pass()
         self.assertEqual(calls, ["intl"])
         self.assertEqual([r for r, _ in done], ["intl"])
 
@@ -356,16 +358,16 @@ class CatalogDailyTests(unittest.TestCase):
                 return None
 
         P.POOL = EmptyPool()
-        P.refresh_catalog = lambda realm: calls.append(realm) or {"ok": True}
-        self.assertEqual(P.catalog_daily_pass(), [])
+        MC.refresh_catalog = lambda realm: calls.append(realm) or {"ok": True}
+        self.assertEqual(MC.catalog_daily_pass(), [])
         self.assertEqual(calls, [])     # 静默跳过：不是错误，也不打上游
 
     def test_note_records_only_known_realms(self):
-        P.note_remote_catalog("all")
-        P.note_remote_catalog("")
-        self.assertEqual(P.catalog_daily_due(), ["intl", "cn"])
-        P.note_remote_catalog("cn")
-        self.assertNotIn("cn", P.catalog_daily_due())
+        MC.note_remote_catalog("all")
+        MC.note_remote_catalog("")
+        self.assertEqual(MC.catalog_daily_due(), ["intl", "cn"])
+        MC.note_remote_catalog("cn")
+        self.assertNotIn("cn", MC.catalog_daily_due())
 
 
 def config_payload(ids):
@@ -409,12 +411,12 @@ class CatalogDiskDumpTests(unittest.TestCase):
 
     def setUp(self):
         self._dir = tempfile.mkdtemp(prefix="wb-catalog-dump-")
-        self._orig = (P.CATALOG_CACHE_DIR, P.POOL, P.wb_accounts.urlopen)
-        P.CATALOG_CACHE_DIR = self._dir
+        self._orig = (MC.CATALOG_CACHE_DIR, P.POOL, P.wb_accounts.urlopen)
+        MC.CATALOG_CACHE_DIR = self._dir
         P.POOL = _FakePool()
 
     def tearDown(self):
-        P.CATALOG_CACHE_DIR, P.POOL, P.wb_accounts.urlopen = self._orig
+        MC.CATALOG_CACHE_DIR, P.POOL, P.wb_accounts.urlopen = self._orig
         shutil.rmtree(self._dir, ignore_errors=True)
 
     def test_a_successful_fetch_dumps_the_payload(self):
@@ -424,9 +426,9 @@ class CatalogDiskDumpTests(unittest.TestCase):
             return _FakeResponse(payload)
 
         P.wb_accounts.urlopen = fake_urlopen
-        parsed = P.fetch_remote_product_config("cn")
+        parsed = MC.fetch_remote_product_config("cn")
         self.assertIsNotNone(parsed)
-        path = P.catalog_cache_path("cn")
+        path = MC.catalog_cache_path("cn")
         self.assertTrue(os.path.exists(path), path)
         with open(path, encoding="utf-8") as fh:
             self.assertEqual(json.load(fh), payload)
@@ -438,7 +440,7 @@ class CatalogDiskDumpTests(unittest.TestCase):
             raise OSError("boom")
 
         P.wb_accounts.urlopen = fake_urlopen
-        self.assertIsNone(P.fetch_remote_product_config("cn"))
+        self.assertIsNone(MC.fetch_remote_product_config("cn"))
         self.assertEqual(os.listdir(self._dir), [])
 
     def test_persist_failure_is_silent(self):
@@ -446,8 +448,8 @@ class CatalogDiskDumpTests(unittest.TestCase):
         blocker = os.path.join(self._dir, "blocker")
         with open(blocker, "w", encoding="utf-8") as fh:
             fh.write("x")
-        P.CATALOG_CACHE_DIR = blocker      # makedirs 必败（父路径是文件）
-        P.persist_remote_catalog("cn", config_payload(["glm-5.3"]))   # 不抛
+        MC.CATALOG_CACHE_DIR = blocker      # makedirs 必败（父路径是文件）
+        MC.persist_remote_catalog("cn", config_payload(["glm-5.3"]))   # 不抛
 
 
 if __name__ == "__main__":

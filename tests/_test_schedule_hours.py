@@ -252,6 +252,7 @@ class LogRoutingTests(unittest.TestCase):
         recorded = []
 
         class FakeMain(object):
+            __wb_gateway__ = True
             LOG_BUFFER = []
 
             @staticmethod

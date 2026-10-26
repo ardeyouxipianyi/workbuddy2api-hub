@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_modelsdev
 import wb_proxy
+import wb_models as MC
 
 
 class FakeResponse(object):
@@ -185,17 +186,17 @@ class CatalogEntryTests(unittest.TestCase):
         reset_module()
 
     def test_model_entry_uses_the_table(self):
-        entry = wb_proxy.model_entry("glm-5.2", {})
+        entry = MC.model_entry("glm-5.2", {})
         self.assertEqual(entry["context_length"], 1000000)
         self.assertEqual(entry["max_output_tokens"], 131072)
 
     def test_unknown_model_gets_1m_context_and_no_output(self):
-        entry = wb_proxy.model_entry("totally-unknown", {})
+        entry = MC.model_entry("totally-unknown", {})
         self.assertEqual(entry["context_length"], 1000000)
         self.assertNotIn("max_output_tokens", entry)
 
     def test_remote_values_still_win(self):
-        entry = wb_proxy.model_entry("glm-5.2", {"maxInputTokens": 12345,
+        entry = MC.model_entry("glm-5.2", {"maxInputTokens": 12345,
                                                  "maxOutputTokens": 678})
         self.assertEqual(entry["context_length"], 12345)
         self.assertEqual(entry["max_output_tokens"], 678)

@@ -48,6 +48,8 @@ os.environ["WB_USAGE_CACHE"] = "0"          # checkpoint 与本套件无关
 os.environ["WB_COUNT_TTL"] = "0"            # 老路的页数标签每次现算
 
 import wb_proxy as P          # noqa: E402
+
+import wb_usage as U  # noqa: E402
 import wb_pricing             # noqa: E402
 
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
@@ -106,7 +108,7 @@ def _counting_open(*a, **kw):
     return _CountingFile(_REAL_OPEN(*a, **kw))
 
 
-P.open = _counting_open
+U.open = _counting_open
 
 
 def read_bytes(fn):
@@ -120,8 +122,8 @@ def read_bytes(fn):
 # 哪条路在跑：两个入口都包一层计数，断言「这次走的是索引 / 老路」
 # --------------------------------------------------------------------------
 CALLS = {"index": 0, "backward": 0}
-_real_index_page = P._recent_index_page
-_real_backward_page = P._recent_backward_page
+_real_index_page = U._recent_index_page
+_real_backward_page = U._recent_backward_page
 
 
 def _spy_index_page(snap, realm, page, limit):
@@ -134,13 +136,13 @@ def _spy_backward_page(realm, page, limit):
     return _real_backward_page(realm, page, limit)
 
 
-P._recent_index_page = _spy_index_page
-P._recent_backward_page = _spy_backward_page
+U._recent_index_page = _spy_index_page
+U._recent_backward_page = _spy_backward_page
 
 
 def reset_index():
     """清掉索引状态（等价于一次进程重启，只是磁盘上那份还在）。"""
-    P._recent_index_state.update({
+    U._recent_index_state.update({
         "stamp": None, "usable": False, "giveup": False, "giveup_key": None,
         "key": None, "size": 0, "tail": b"", "realm_map": None,
         "legacy": False, "realms": [], "counts": {}, "row_counts": {},
@@ -148,8 +150,8 @@ def reset_index():
 
 
 def reset_count():
-    P._count_cache.clear()
-    P._count_state.update({"offset": 0, "key": None, "tail": b"", "n": 0,
+    U._count_cache.clear()
+    U._count_state.update({"offset": 0, "key": None, "tail": b"", "n": 0,
                            "n_realm": {}})
 
 
@@ -161,7 +163,7 @@ def call_page(realm=None, limit=100, page_no=1, use_index=True, fresh=False):
     reset_count()
     CALLS["index"] = 0
     CALLS["backward"] = 0
-    text = json.dumps(P.recent_usage(limit=limit, realm=realm, page=page_no),
+    text = json.dumps(U.recent_usage(limit=limit, realm=realm, page=page_no),
                       ensure_ascii=False)
     return text, dict(CALLS)
 
@@ -340,9 +342,10 @@ RUNNER = r'''
 import json, os, sys
 sys.path.insert(0, __ROOT__)
 import wb_proxy as P
+import wb_usage as U
 out = {}
 for key, kw in __CASES__:
-    out[key] = json.dumps(P.recent_usage(**kw), ensure_ascii=False)
+    out[key] = json.dumps(U.recent_usage(**kw), ensure_ascii=False)
 with open(os.environ["WB_CHILD_OUT"], "w", encoding="utf-8") as fh:
     json.dump(out, fh, ensure_ascii=False)
 print("child ok")

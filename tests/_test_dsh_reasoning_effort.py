@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_agents as A
 import wb_proxy as P
+import wb_models as MC
 
 PASS = FAIL = 0
 

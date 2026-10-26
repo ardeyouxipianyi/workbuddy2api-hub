@@ -46,6 +46,8 @@ os.environ["ACCOUNTS_DIR"] = ACCOUNTS_DIR
 
 import wb_proxy as P
 
+import wb_usage as U
+
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
 P.POOL = None                     # 归属只走行自己的字段/模型前缀，可确定
 P.CURRENT_REALM = "intl"
@@ -127,7 +129,7 @@ def ref_perf_stats(sample=5000, realm=None, since=None, until=None):
         if not line:
             continue
         if (since or until) and sample_from is not None and \
-                P._line_outside_window(line, since or None, until or None):
+                U._line_outside_window(line, since or None, until or None):
             continue
         try:
             r = json.loads(line)
@@ -135,7 +137,7 @@ def ref_perf_stats(sample=5000, realm=None, since=None, until=None):
             continue
         if sample_from is None:
             sample_from = r.get("at")
-        if realm and not P.row_matches_realm(r, realm):
+        if realm and not U.row_matches_realm(r, realm):
             continue
         at = r.get("at") or 0
         if since and at < since:
@@ -143,9 +145,9 @@ def ref_perf_stats(sample=5000, realm=None, since=None, until=None):
         if until and at > until:
             continue
         total += 1
-        outcome = P.row_outcome(r)
+        outcome = U.row_outcome(r)
         m_id = r.get("model") or "unknown"
-        r_realm = P.row_realm(r)
+        r_realm = U.row_realm(r)
         mb = m_buckets.setdefault(m_id, {"total": 0, "ok": 0, "err": 0, "aborted": 0,
                                          "ttfts": [], "gens": [], "walls": [],
                                          "tok_rates": [], "hits": []})
@@ -208,9 +210,9 @@ def ref_perf_stats(sample=5000, realm=None, since=None, until=None):
             return None
         return {
             "avg": round(sum(vals) / len(vals), 1),
-            "p50": P._pct(vals, 50),
-            "p90": P._pct(vals, 90),
-            "p99": P._pct(vals, 99),
+            "p50": U._pct(vals, 50),
+            "p90": U._pct(vals, 90),
+            "p99": U._pct(vals, 99),
             "max": max(vals),
             "samples": len(vals),
         }
@@ -317,22 +319,22 @@ def append_lines(lines):
 def reset_state():
     """清掉增量环与载荷缓存（本套件按用例从零起）。"""
     try:
-        P._perf_state.clear()
+        U._perf_state.clear()
     except AttributeError:
         pass
-    P._perf_cache.clear()
+    U._perf_cache.clear()
 
 
 def inc(sample, realm=None, rng=None, since=None, until=None):
     """走增量入口（ttl=0 每次都是 TTL 过期后的重建）。"""
-    return P.perf_stats(sample, realm=realm, ttl=0, range=rng,
+    return U.perf_stats(sample, realm=realm, ttl=0, range=rng,
                         since=since, until=until)
 
 
 def ref(sample, realm=None, rng=None, since=None, until=None):
     """参考实现，用同一套窗口解析。"""
-    r = P.realm_scope(realm, P.CURRENT_REALM)
-    lo, hi = P.range_window(rng, since, until)
+    r = U.realm_scope(realm, P.CURRENT_REALM)
+    lo, hi = U.range_window(rng, since, until)
     return ref_perf_stats(sample, r, since=lo, until=hi)
 
 
@@ -403,7 +405,7 @@ ok_all = True
 for name in sorted(CASES):
     write_raw(CASES[name])
     for sample in (1, 3, 10, 5000, 20000):
-        got = P._tail_lines(LOG, sample)
+        got = U._tail_lines(LOG, sample)
         want = ref_tail_lines(LOG, sample)
         if got != want:
             ok_all = False
@@ -445,11 +447,11 @@ def tail_with_counter(path, sample, chunk=256 * 1024):
         counter["fh"] = ReadCounter(_real_open(*args, **kwargs))
         return counter["fh"]
 
-    P.open = fake_open
+    U.open = fake_open
     try:
-        lines = P._tail_lines(path, sample, chunk=chunk)
+        lines = U._tail_lines(path, sample, chunk=chunk)
     finally:
-        del P.open
+        del U.open
     return lines, counter["fh"].reads, counter["fh"].bytes
 
 
@@ -468,10 +470,10 @@ check("sample=5000 的行数与参考一致", len(lines5) == 5000, len(lines5))
 
 # 计时只打印不断言（CI 机器负载不可控；结构性证据在上面两条）
 t0 = time.perf_counter()
-P._tail_lines(LOG, 20000)
+U._tail_lines(LOG, 20000)
 t20 = (time.perf_counter() - t0) * 1000.0
 t0 = time.perf_counter()
-P._tail_lines(LOG, 5000)
+U._tail_lines(LOG, 5000)
 t5 = (time.perf_counter() - t0) * 1000.0
 print("    计时参考（25000 行日志）：sample=5000 %.2fms，sample=20000 %.2fms，"
       "比值 %.2f（读入的字节/行数就是 4 倍关系，线性读取器不可能更小）"
@@ -492,9 +494,9 @@ for sample, realm, rng, since, until in (
         (5000, None, "custom", ANCHOR + 100, ANCHOR + 600),
         (10, "intl", "custom", ANCHOR + 150, None)):
     reset_state()
-    a = text(P._perf_stats_uncached(sample, P.realm_scope(realm, P.CURRENT_REALM),
-                                    since=P.range_window(rng, since, until)[0],
-                                    until=P.range_window(rng, since, until)[1]))
+    a = text(U._perf_stats_uncached(sample, U.realm_scope(realm, P.CURRENT_REALM),
+                                    since=U.range_window(rng, since, until)[0],
+                                    until=U.range_window(rng, since, until)[1]))
     b = text(ref(sample, realm, rng, since, until))
     check("冷路径对拍 sample=%s realm=%s range=%s" % (sample, realm, rng), a == b,
           first_diff(b, a))
@@ -633,16 +635,16 @@ def count_loads(fn):
 reset_state()
 write_log(base)
 inc(5000, "all")
-P._perf_cache.clear()
+U._perf_cache.clear()
 n0 = count_loads(lambda: inc(5000, "all"))
 check("0 新字节的 TTL 重算：一个 json.loads 都不发生", n0 == 0, n0)
 # 自检：桩是活的
 append_lines([row(ANCHOR + 9500, "m-a", "u1")])
-P._perf_cache.clear()
+U._perf_cache.clear()
 n1 = count_loads(lambda: inc(5000, "all"))
 check("计数桩自检：追加 1 行时恰好解析 1 行", n1 == 1, n1)
 append_lines([row(ANCHOR + 9560 + i * 60, "m-b", "u2") for i in range(5)])
-P._perf_cache.clear()
+U._perf_cache.clear()
 n5 = count_loads(lambda: inc(5000, "all"))
 check("追加 5 行只解析 5 行（不是整段 5000 行）", n5 == 5, n5)
 # 0 新字节也不重读日志
@@ -656,22 +658,22 @@ def count_reads(fn):
         box["fh"] = ReadCounter(_real_open2(*args, **kwargs))
         return box["fh"]
 
-    P.open = fake_open
+    U.open = fake_open
     try:
         fn()
     finally:
-        del P.open
+        del U.open
     return box["fh"].reads, box["fh"].bytes
 
 
-P._perf_cache.clear()
+U._perf_cache.clear()
 reads, nbytes = count_reads(lambda: inc(5000, "all"))
 check("0 新字节的 TTL 重算：日志只被读 64B 的 tail 签名（不重读整段）",
       reads <= 2 and nbytes <= 128, (reads, nbytes))
-P._perf_cache.clear()
+U._perf_cache.clear()
 reads, nbytes = count_reads(lambda: inc(5000, "all"))
 check("样本没变时连渲染都省掉（载荷直接复用）",
-      P._perf_state[(5000, "all", -1, -1)]["dirty"] is False)
+      U._perf_state[(5000, "all", -1, -1)]["dirty"] is False)
 
 # --------------------------------------------------------------------------
 # [5] 口径钉住：sample_from / sample_capped / 桶顺序 / TTL
@@ -717,40 +719,40 @@ check("滑出后桶顺序与重建一致（不是简单挪到末尾）",
 
 # TTL：默认 TTL 内命中缓存，过期后重建并跟上新行
 reset_state()
-P._perf_cache.clear()
-P._STATS_TTL = 60.0
-first = P.perf_stats(5000, realm="all")
+U._perf_cache.clear()
+U._STATS_TTL = 60.0
+first = U.perf_stats(5000, realm="all")
 append_lines([row(ANCHOR + 5000, "m-q", "u1")])
-check("TTL 内命中缓存（不重算）", P.perf_stats(5000, realm="all") == first)
-P._STATS_TTL = 0.0
+check("TTL 内命中缓存（不重算）", U.perf_stats(5000, realm="all") == first)
+U._STATS_TTL = 0.0
 check("TTL 过期后重建并跟上新行",
-      P.perf_stats(5000, realm="all")["sampled"] == ref(5000, "all")["sampled"],
-      P.perf_stats(5000, realm="all")["sampled"])
+      U.perf_stats(5000, realm="all")["sampled"] == ref(5000, "all")["sampled"],
+      U.perf_stats(5000, realm="all")["sampled"])
 # ETag 仍然只认缓存条目的构建时刻
-P._perf_cache.clear()
-P._STATS_TTL = 60.0
-P.perf_stats(5000, realm="all")
-tag1 = P.perf_stats_etag(5000, realm="all")
-check("缓存命中时 ETag 不变", P.perf_stats_etag(5000, realm="all") == tag1,
+U._perf_cache.clear()
+U._STATS_TTL = 60.0
+U.perf_stats(5000, realm="all")
+tag1 = U.perf_stats_etag(5000, realm="all")
+check("缓存命中时 ETag 不变", U.perf_stats_etag(5000, realm="all") == tag1,
       tag1)
-P._STATS_TTL = 0.0
+U._STATS_TTL = 0.0
 # Windows 的 time.time() 粒度约 15.6ms：两次重建若落在同一个 tick，
 # _cache_etag 的微秒戳会相同、tag 也就「没变」（CI windows-3.12 腿实测过）。
 # 睡过一个 tick，保证测的是「重建换了构建时刻」这件事本身。
 time.sleep(0.05)
-P.perf_stats(5000, realm="all")
-tag2 = P.perf_stats_etag(5000, realm="all")
+U.perf_stats(5000, realm="all")
+tag2 = U.perf_stats_etag(5000, realm="all")
 check("重建后 ETag 变、缓存命中时不变", tag1 and tag2 and tag1 != tag2,
       (tag1, tag2))
-P._STATS_TTL = float(os.environ.get("WB_STATS_TTL", 15))
+U._STATS_TTL = float(os.environ.get("WB_STATS_TTL", 15))
 
 # 状态数有上限（用户来回切窗口不会无限堆积）
 reset_state()
 write_log(base)
 for i in range(12):
     inc(5000, "all", "custom", ANCHOR + i * 10, ANCHOR + 4000)
-check("增量状态数不超过上限", len(P._perf_state) <= P._PERF_STATE_MAX,
-      len(P._perf_state))
+check("增量状态数不超过上限", len(U._perf_state) <= U._PERF_STATE_MAX,
+      len(U._perf_state))
 check("淘汰后仍与参考一致",
       text(inc(5000, "all", "custom", ANCHOR, ANCHOR + 4000))
       == text(ref(5000, "all", "custom", ANCHOR, ANCHOR + 4000)))

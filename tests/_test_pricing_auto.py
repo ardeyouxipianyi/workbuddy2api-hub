@@ -37,6 +37,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_pricing
 import wb_proxy as P
+import wb_models as MC
 import wb_settings
 
 
@@ -142,13 +143,13 @@ class UnionInputTests(PricingTestCase):
         self.assertEqual(sorted(unpriced2), sorted(unpriced))
 
     def test_run_once_prices_a_live_only_model(self):
-        original = P.read_cached_remote_catalog
-        P.read_cached_remote_catalog = lambda realm: (["glm-5.3-flashx"], {})
+        original = MC.read_cached_remote_catalog
+        MC.read_cached_remote_catalog = lambda realm: (["glm-5.3-flashx"], {})
         try:
             refresher = self._refresher()
             ok, message = refresher.run_once()
         finally:
-            P.read_cached_remote_catalog = original
+            MC.read_cached_remote_catalog = original
         self.assertTrue(ok, message)
         self.assertEqual(refresher.last_extra, 1)
         _at, assignment = wb_pricing.current_assignment()
@@ -174,14 +175,14 @@ class UnionInputTests(PricingTestCase):
         self.assertGreater(refresher.last_models, 3)
 
     def test_live_ids_use_the_same_filter_as_the_model_list(self):
-        original = P.read_cached_remote_catalog
-        P.read_cached_remote_catalog = lambda realm: (
+        original = MC.read_cached_remote_catalog
+        MC.read_cached_remote_catalog = lambda realm: (
             ["default-model", "auto", "lite", "codewise-inline",
              "glm-5.3-flashx", "hy4-preview-sg", "glm-5.3-flash"], {})
         try:
             ids = self._refresher().live_ids()
         finally:
-            P.read_cached_remote_catalog = original
+            MC.read_cached_remote_catalog = original
         # The new name comes through...
         self.assertIn("glm-5.3-flashx", ids)
         # ...while the virtual aliases, the non-chat helper and the paid
@@ -252,6 +253,7 @@ sys.path.insert(0, __ROOT__)
 class FakeGateway(object):
     """Stands in for the running `python wb_proxy.py` instance."""
 
+    __wb_gateway__ = True
     VIRTUAL_ALIAS_MODELS = ("default-model", "auto")
 
     def curated_live_sources(self, realm):
@@ -289,6 +291,7 @@ class SingleGatewayInstanceTests(PricingTestCase):
     @staticmethod
     def _fake_gateway():
         class FakeGateway(object):
+            __wb_gateway__ = True
             VIRTUAL_ALIAS_MODELS = ("default-model", "auto")
 
             def __init__(self):

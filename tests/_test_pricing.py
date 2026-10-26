@@ -26,6 +26,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_pricing
 import wb_proxy as P
+import wb_usage as U
 
 
 def utc_ts(text):
@@ -498,8 +499,8 @@ class PricingIntegrationTests(unittest.TestCase):
     MODEL = "deepseek-v4.1-flash"
 
     def setUp(self):
-        with P._daily_usage_lock:
-            P._daily_usage.update({"day": "", "totals": None, "credits": None,
+        with U._daily_usage_lock:
+            U._daily_usage.update({"day": "", "totals": None, "credits": None,
                                    "models": None, "offset": 0, "at": 0.0})
         self.usd_rate = wb_pricing.load_pricing()["models"][self.MODEL]["flat"][
             "input_cache_miss"]
@@ -515,7 +516,7 @@ class PricingIntegrationTests(unittest.TestCase):
                                 ensure_ascii=False) + "\n")
 
     def test_recent_rows_carry_the_estimate_and_the_rate(self):
-        page = P.recent_usage(limit=10)
+        page = U.recent_usage(limit=10)
         self.assertGreater(page["usd_cny"], 1.0)
         by_model = {r["model"]: r for r in page["rows"]}
         expected = self.usd_rate * page["usd_cny"]
@@ -532,7 +533,7 @@ class PricingIntegrationTests(unittest.TestCase):
         self.assertIsNone(by_model["no-such-model"]["cost_cny"])
 
     def test_snapshot_totals_include_cost_and_missing(self):
-        snap = P.usage_snapshot(ttl=0, range="all")
+        snap = U.usage_snapshot(ttl=0, range="all")
         self.assertAlmostEqual(snap["cost_cny"], self.usd_rate * snap["usd_cny"],
                                places=3)
         self.assertEqual(snap["cost_missing"], {"no-such-model": 1})

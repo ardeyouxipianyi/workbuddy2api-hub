@@ -28,12 +28,16 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-hotpath-")
 
 import wb_proxy as P  # noqa: E402
+
+import wb_usage as U  # noqa: E402
+import wb_wire as W  # noqa: E402
+import wb_transforms as T  # noqa: E402
 import wb_settings  # noqa: E402
 
 # 指纹基串从模块常量派生，而不是手抄一份字面量：手抄两份必然漂移，
 # 派生值才是唯一可信来源。
-FP = P.SANITIZE_OMO_JUNIOR_RE.pattern
-HDR = P.SANITIZE_BARE_HDR_LOWER
+FP = T.SANITIZE_OMO_JUNIOR_RE.pattern
+HDR = T.SANITIZE_BARE_HDR_LOWER
 # re.I 能匹配 i/s 而 str.lower() 不能的三个 Unicode 字符：İ / ı / ſ。
 SPECIALS = ("\u0130", "\u0131", "\u017f")
 
@@ -42,11 +46,11 @@ def old_has_fingerprint(text):
     """改动前的实现（等价性基准）：两个 (?i) 正则做字面量匹配。"""
     if not isinstance(text, str) or not text:
         return False
-    for f in P.SANITIZE_FEATURES:
+    for f in T.SANITIZE_FEATURES:
         if f in text:
             return True
-    return bool(P.SANITIZE_BARE_HDR_RE.search(text)
-                or P.SANITIZE_OMO_JUNIOR_RE.search(text))
+    return bool(T.SANITIZE_BARE_HDR_RE.search(text)
+                or T.SANITIZE_OMO_JUNIOR_RE.search(text))
 
 
 def old_estimate_tokens(text):
@@ -69,7 +73,7 @@ def fingerprint_cases():
         "", "plain text with no fingerprint",
         "Sisyphus-Junior alone", "from OhMyOpenCode alone",
     ]
-    cases += list(P.SANITIZE_FEATURES)
+    cases += list(T.SANITIZE_FEATURES)
     for special in SPECIALS:
         for pos in range(len(FP)):
             t = FP[:pos] + special + FP[pos + 1:]
@@ -95,7 +99,7 @@ def fingerprint_cases():
 class FingerprintFastPathTests(unittest.TestCase):
     def test_has_fingerprint_matches_the_regex_implementation(self):
         mismatches = [t for t in fingerprint_cases()
-                      if P.has_fingerprint(t) != old_has_fingerprint(t)]
+                      if T.has_fingerprint(t) != old_has_fingerprint(t)]
         self.assertEqual(
             mismatches[:5], [],
             "快路径与 (?i) 正则判定不一致（%d 例）" % len(mismatches))
@@ -105,7 +109,7 @@ class FingerprintFastPathTests(unittest.TestCase):
         # 同样的 sanitize 结果。
         # OMO 替换串（把整条指纹规范化成不带框架归因的短形式）从模块行为派生：
         # 对整条指纹跑一次 sanitize_text 拿到的就是那个字面量，手抄第二份不可靠。
-        replacement = P.sanitize_text(FP)
+        replacement = T.sanitize_text(FP)
         self.assertNotEqual(replacement, FP, "指纹应当被改写")
 
         def old_sanitize(text):
@@ -113,38 +117,38 @@ class FingerprintFastPathTests(unittest.TestCase):
                 return text
             if not old_has_fingerprint(text):
                 return text
-            text = P.SANITIZE_OMO_JUNIOR_RE.sub(replacement, text)
-            for old, new in P.SANITIZE_REWRITES:
+            text = T.SANITIZE_OMO_JUNIOR_RE.sub(replacement, text)
+            for old, new in T.SANITIZE_REWRITES:
                 text = text.replace(old, new)
-            text = P.SANITIZE_HDR_RE.sub("", text)
+            text = T.SANITIZE_HDR_RE.sub("", text)
             if "cc_" in text:
                 prev = ""
                 while prev != text:
                     prev = text
-                    text = P.SANITIZE_KV_RE.sub("", text)
-            text = P.SANITIZE_BARE_HDR_RE.sub("x-anthropic-billing-hdr", text)
+                    text = T.SANITIZE_KV_RE.sub("", text)
+            text = T.SANITIZE_BARE_HDR_RE.sub("x-anthropic-billing-hdr", text)
             return text.strip()
 
         for t in fingerprint_cases():
-            self.assertEqual(P.sanitize_text(t), old_sanitize(t), repr(t[:80]))
+            self.assertEqual(T.sanitize_text(t), old_sanitize(t), repr(t[:80]))
 
     def test_lowercase_constants_stay_in_sync_with_the_regexes(self):
         # 快路径的两个小写字面量必须与正则同源，改一处忘另一处会被这里拦下。
-        self.assertEqual(P.SANITIZE_OMO_JUNIOR_RE.pattern.lower(),
-                         P.SANITIZE_OMO_JUNIOR_LOWER)
-        self.assertEqual(P.SANITIZE_BARE_HDR_RE.pattern,
-                         "(?i)" + P.SANITIZE_BARE_HDR_LOWER)
+        self.assertEqual(T.SANITIZE_OMO_JUNIOR_RE.pattern.lower(),
+                         T.SANITIZE_OMO_JUNIOR_LOWER)
+        self.assertEqual(T.SANITIZE_BARE_HDR_RE.pattern,
+                         "(?i)" + T.SANITIZE_BARE_HDR_LOWER)
 
     def test_unicode_case_specials_follow_re_ignorecase(self):
         # 'ſ' 替 s、'İ'/'ı' 替 i：这三个字符是 re.I 与 lower() 的全部差异点，
         # 快路径必须和正则一样认出它们。
-        self.assertTrue(P.has_fingerprint(FP.replace("s", "\u017f", 1)))
-        self.assertTrue(P.has_fingerprint(FP.replace("i", "\u0130", 1)))
-        self.assertTrue(P.has_fingerprint(FP.replace("i", "\u0131", 1)))
+        self.assertTrue(T.has_fingerprint(FP.replace("s", "\u017f", 1)))
+        self.assertTrue(T.has_fingerprint(FP.replace("i", "\u0130", 1)))
+        self.assertTrue(T.has_fingerprint(FP.replace("i", "\u0131", 1)))
         self.assertTrue(old_has_fingerprint(FP.replace("s", "\u017f", 1)))
         # 单独出现不是指纹（与改动前一致）
-        self.assertFalse(P.has_fingerprint("plain \u017f \u0130 \u0131 text"))
-        self.assertEqual(P.has_fingerprint("plain \u017f \u0130 \u0131 text"),
+        self.assertFalse(T.has_fingerprint("plain \u017f \u0130 \u0131 text"))
+        self.assertEqual(T.has_fingerprint("plain \u017f \u0130 \u0131 text"),
                          old_has_fingerprint("plain \u017f \u0130 \u0131 text"))
 
 
@@ -225,8 +229,8 @@ class EstimateTokensTests(unittest.TestCase):
     def test_cjk_re_covers_exactly_the_loop_ranges(self):
         inside = "\u3400\u4dbf\u4e00\u9fff"
         outside = "\u33ff\u4dc0\ua000 ab"
-        self.assertEqual(len(P.CJK_RE.sub("", inside)), 0)
-        self.assertEqual(P.CJK_RE.sub("", outside), outside)
+        self.assertEqual(len(W.CJK_RE.sub("", inside)), 0)
+        self.assertEqual(W.CJK_RE.sub("", outside), outside)
 
 
 class UsageCounterTests(unittest.TestCase):
@@ -239,16 +243,16 @@ class UsageCounterTests(unittest.TestCase):
     """
 
     def test_usage_holds_only_the_start_marker(self):
-        started = P._usage["started"]
-        P.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5,
+        started = U._usage["started"]
+        U.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5,
                                "total_tokens": 15}, stream=True, elapsed_ms=1200,
                        ttft_ms=300, gen_ms=900, account=None)
-        P.record_error("m-1", 500, "boom", elapsed_ms=200)
-        self.assertEqual(P._usage, {"started": started})
+        U.record_error("m-1", 500, "boom", elapsed_ms=200)
+        self.assertEqual(U._usage, {"started": started})
 
     def test_snapshot_started_and_since_come_from_it(self):
-        P._usage["started"] = 1791445200.0
-        snap = P.usage_snapshot(realm=None, ttl=0)
+        U._usage["started"] = 1791445200.0
+        snap = U.usage_snapshot(realm=None, ttl=0)
         self.assertEqual(snap["started"], 1791445200.0)
         self.assertEqual(snap["since"],
                          time.strftime("%Y-%m-%d %H:%M:%S",

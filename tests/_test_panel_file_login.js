@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const html = require('./_dashboard_source.js').dashboardHtml();
 const start = html.indexOf('async function submitPanelLogin(){');
 assert.ok(start > 0, 'submitPanelLogin moved; update this test marker');
 const end = html.indexOf('\nasync function panelLogout()', start);

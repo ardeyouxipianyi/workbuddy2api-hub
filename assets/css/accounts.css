@@ -1,0 +1,171 @@
+/* 账号区折叠。chevron 的指向跟着 aria-expanded 走，正文用
+   grid-template-rows 收放：0fr 本身就是收起，所以没有动画也正确，也不必给
+   列表猜一个 max-height（账号一多就会被截断）。hoverTip 是挂在 body 上的
+   全局单例，不受这里的 overflow 影响。 */
+.disclosure{display:inline-flex;align-items:center;gap:7px;background:transparent;
+  border:none;padding:3px 7px;margin:-3px -7px;font:inherit;color:inherit;cursor:pointer;border-radius:8px}
+/* 焦点态给一个柔和的胶囊高亮（淡蓝底 + 细描边），而不是贴着字画一圈硬描边。
+   padding 与 margin 成对出现，聚焦时标题文字的位置不会动。 */
+.disclosure:focus-visible{outline:none;background:var(--accent-soft);box-shadow:0 0 0 1.5px var(--accent)}
+.disclosure-chevron{width:0;height:0;border-left:5px solid currentColor;
+  border-top:4px solid transparent;border-bottom:4px solid transparent;
+  transition:transform .18s ease;transform:rotate(90deg)}
+.disclosure[aria-expanded="false"] .disclosure-chevron{transform:rotate(0deg)}
+.collapse{display:grid;grid-template-rows:1fr;transition:grid-template-rows .18s ease}
+.collapse.collapsed{grid-template-rows:0fr}
+.collapse>.collapse-inner{min-height:0;overflow:hidden}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);white-space:nowrap;font-weight:600}
+.badge.ok{color:#4a7a3d;background:rgba(94,140,79,.14);border-color:rgba(94,140,79,.32)}
+.badge.s{color:#2c6392;background:rgba(106,155,204,.14);border-color:rgba(106,155,204,.35)}
+.badge.off{color:#73716a;background:#e9e6db;border-color:#d9d5c7}
+.badge.warn{color:#a0691c;background:rgba(183,121,31,.14);border-color:rgba(183,121,31,.35)}
+.badge.bad{color:#a03c32;background:rgba(181,71,59,.14);border-color:rgba(181,71,59,.35)}
+.badge.mini{padding:1px 6px;font-size:10px}
+.cool-list{display:flex;flex-direction:column;align-items:stretch;gap:2px;margin-top:3px;max-width:100%;overflow:hidden;min-width:0}
+.cool-pill{display:inline-block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;
+  color:#a0691c;background:rgba(183,121,31,.14);border:1px solid rgba(183,121,31,.35);white-space:nowrap}
+/* 桌面账号表的告警按模型逐条纵排；完整模型名/时间仍可通过 title 悬浮查看。 */
+table.account-cards td[data-label="账号"] .cool-list{display:flex;flex-direction:column;align-items:stretch;gap:2px;max-width:100%;overflow:hidden}
+table.account-cards td[data-label="账号"] .cool-pill{display:block;width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (min-width:641px){
+  table.account-cards{table-layout:fixed;min-width:1262px}
+  table.account-cards th:nth-child(2),table.account-cards td:nth-child(2){width:180px}
+  table.account-cards td.acct-actions{white-space:normal;min-width:232px;width:232px;position:sticky;right:0;z-index:2;background:var(--panel);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
+  table.account-cards th:last-child{position:sticky;right:0;z-index:3;background:var(--panel2);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
+  table.account-cards tbody tr:hover td.acct-actions{background:var(--panel2)}
+  /* 操作区沿用原来的两行布局，不在窄列中再次折成三四行。 */
+  table.account-cards .acct-actions-col{min-width:max-content;max-width:none}
+  table.account-cards .acct-actions-row{flex-wrap:nowrap;max-width:none}
+}
+@media (max-width:640px){
+  table.account-cards{min-width:0!important;table-layout:auto}
+  table.account-cards th:last-child,table.account-cards td.acct-actions{position:static;min-width:0;width:auto;z-index:auto;box-shadow:none}
+  table.account-cards td[data-label="积分"]{white-space:normal;align-items:flex-start}
+  table.account-cards .credit-stack{width:100%;align-items:flex-start}
+}
+.empty{color:var(--dim);text-align:center;padding:28px 0;font-size:13px}
+/* 价格悬停气泡：自绘，才能对齐单价并截图验收；pointer-events:none 让它不会
+   抢走鼠标、把 hover 打断。 */
+.cost-cell{cursor:help}
+/* 价估算总开关关闭时，除开关本身外整块功能从界面上撤掉：价格列、KPI 卡片、
+   设置页的取价子控件与未定价清单一并隐藏，只留下开关，方便随时再打开。 */
+body.pricing-off .pricing-col{display:none}
+/* 胶囊式开关：原生 checkbox 管状态与键盘可达性，视觉交给 .switch-track。
+   点一下即切换并立即保存，所以不再另配「保存」按钮。 */
+.switch{position:relative;display:inline-flex;align-items:center;gap:8px;font-size:13px;
+  min-height:40px;cursor:pointer;user-select:none}
+.switch input{position:absolute;width:1px;height:1px;opacity:0;margin:0}
+.switch-track{position:relative;flex:0 0 auto;width:38px;height:20px;border-radius:999px;
+  background:var(--panel2);border:1px solid var(--line);
+  transition:background .18s ease,border-color .18s ease}
+.switch-track::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;
+  border-radius:50%;background:var(--dim);transition:transform .18s ease,background .18s ease}
+.switch input:checked+.switch-track{background:var(--accent2);border-color:var(--accent2)}
+.switch input:checked+.switch-track::after{transform:translateX(18px);background:#fff}
+.switch input:focus-visible+.switch-track{outline:2px solid var(--accent2);outline-offset:2px}
+#costTip{position:fixed;z-index:80;display:none;max-width:min(480px,94vw);padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);
+  font-size:12px;line-height:1.7;box-shadow:0 14px 34px rgba(15,23,42,.28);pointer-events:none}
+#costTip .ct-h{color:var(--dim);font-size:11px;letter-spacing:.02em}
+#costTip .ct-line{margin-top:2px}
+#costTip .ct-row{display:flex;gap:18px;justify-content:space-between;margin-top:2px}
+#costTip .ct-k{color:var(--dim)}
+#costTip .ct-v{font-variant-numeric:tabular-nums;white-space:nowrap}
+#costTip .ct-note{color:var(--dim);font-size:11px;margin-top:4px}
+#costTip .ct-sep{height:1px;background:var(--line);margin:7px 0}
+.legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin-top:12px;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+/* 工具栏按用途分组：浅底胶囊容器把同组按钮抱成一团，组与组之间的间隔由外层
+   toolbar 的 gap 负责，不必再插竖线。 */
+.tb-group{display:inline-flex;align-items:center;gap:4px;padding:3px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px}
+.tb-group button.sec{box-shadow:none}
+.tb-group button.sec:hover{background:var(--panel3);border-color:var(--line-hover)}
+button{cursor:pointer;font:inherit;font-size:12px;font-weight:500;padding:6px 14px;border-radius:8px;
+  border:1px solid var(--accent);background:var(--accent);color:#fff;box-shadow:var(--shadow-sm);transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.sec{background:var(--panel);border-color:var(--line);color:var(--fg);box-shadow:var(--shadow-sm)}
+button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
+button.danger{border-color:rgba(220,38,38,.3);background:rgba(220,38,38,.06);color:var(--bad)}
+button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
+button.mini{padding:3px 9px;font-size:11px}
+.id-btn-group{display:inline-flex;gap:2px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px}
+.id-btn{background:transparent;border:none;color:var(--dim);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500;cursor:pointer;transition:all .15s}
+.id-btn:hover{color:var(--fg)}
+.id-btn-label{color:var(--dim);font-size:11px;white-space:nowrap}
+.id-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+.slot-select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:5px 8px;color:var(--fg);font:inherit;font-size:12px;max-width:140px}
+/* 表格行内的小号选择器（账号权重）：与 slot-select 同一家族，尺寸收到能放进
+   单元格。原生 select 的直角白框在暖色表里显得突兀，这里补齐主题样式。 */
+.mini-select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+  padding:3px 6px;color:var(--fg);font:inherit;font-size:11px;font-variant-numeric:tabular-nums}
+.slot-input{width:100%;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit;font-size:13px}
+table.account-cards td[data-label="账号"]{padding-top:6px;padding-bottom:6px}
+table.account-cards td[data-label="账号"] .cool-list{max-width:100%;}
+table.account-cards td[data-label="账号"] .cool-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+/* 冷却 / 达日限额的整行（coolRow / limitRow）：跨满表头列数，文本完整可见，
+   不再有省略号，所以也不再需要 title 兜底。桌面下表格用 table-layout:fixed，
+   td 是普通单元格，只要去掉 ::before 的 data-label 装饰即可；窄屏走
+   data-cards 的 grid，td[colspan] 已跨满 6 栏。
+   这一行是账号行的续行（同一块内容），所以两行之间不能有分割线：
+   ① 这里不画 border-top；② 账号行让出 td 默认的 border-bottom（见 has-alert）。
+   间距也收紧到 1px，让胶囊贴住它所属的账号，而不是飘在下一块区域里；
+   左右留 12px 与首列文字对齐（归零会让胶囊比账号名更靠左，看着歪）。 */
+table.account-cards tr.cool-row td{border-top:none;padding:1px 12px 3px}
+table.account-cards tr.cool-row td::before{content:none}
+/* 有续行的账号行：交出底边框，否则 th,td 的默认 border-bottom 会在账号行与
+   胶囊行之间留一条实线，把同一块内容切成两块。 */
+table.account-cards tr.has-alert td{border-bottom:none}
+/* 悬停账号行时续行一起亮：视觉上它们是一块，不该只有上半截响应鼠标。
+   用相邻选择器而不是 ~：~ 会一路匹配到后面别的账号的续行，鼠标停在 A 号上
+   却把 B 号的胶囊也点亮。续行最多两条（冷却 + 达限），所以写两段就够。 */
+table.account-cards tr.has-alert:hover + tr.cool-row,
+table.account-cards tr.has-alert:hover + tr.cool-row + tr.cool-row{background:var(--panel2)}
+/* 整行放得下完整文案，胶囊恢复成自然宽度、不再截断。 */
+table.account-cards tr.cool-row .cool-list{flex-direction:row;flex-wrap:wrap;gap:4px 8px;max-width:none}
+table.account-cards tr.cool-row .cool-pill{display:inline-block;width:auto;max-width:none;overflow:visible;text-overflow:clip;white-space:nowrap;cursor:default}
+@media (max-width:640px){
+  /* 窄屏每个 tr 是一张独立卡片（border + 圆角 + 10px 外边距）。续行要跟账号
+     卡片拼成一块：负 margin 抵消上一张的 margin-bottom 并让边框重叠，自己只
+     留底部圆角、去掉上边框，就不会出现「两张卡片叠在一起」的割裂感。 */
+  table.account-cards tr.cool-row{margin-top:-11px;border-top:none;
+    border-radius:0 0 12px 12px;padding-top:8px;padding-bottom:8px}
+  table.account-cards tr.has-alert{margin-bottom:10px;border-bottom:none;
+    border-radius:12px 12px 0 0}
+  /* 窄屏 6 栏也够放一条，但一条放不下时允许换行而不是横向溢出卡片。 */
+  table.account-cards tr.cool-row .cool-pill{white-space:normal}
+}
+
+.acct-actions-col{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center}
+.acct-actions-row{display:flex;gap:4px;justify-content:center}
+/* 账号列（accountRow）：账号名 + 备注 chip 一行、次要信息一行、报错一行。
+   次要信息与报错的完整值都在 data-tip 悬浮气泡里。 */
+.acct-name-row{display:flex;align-items:center;gap:6px;min-width:0}
+/* 移动端专用徽章组：桌面表格视图隐藏（版本/状态有自己的两列）。 */
+.acct-mobile-badges{display:none}
+.acct-mobile-badges .badge,.acct-mobile-badges .realm-badge-intl,.acct-mobile-badges .realm-badge-cn{flex-shrink:0}
+.credit-summary{white-space:nowrap}
+.credit-kind{font-size:11px;font-weight:500;color:var(--dim)}
+.credit-stack{display:flex;flex-direction:column;align-items:flex-start;gap:3px;white-space:nowrap;min-width:0}
+.credit-main{display:inline-flex;align-items:baseline;gap:6px;line-height:1.15}
+.credit-main b{font-size:13px;font-weight:700;color:var(--accent2)}
+.credit-main .credit-total{font-size:11px;font-weight:500;color:var(--dim)}
+.credit-meta{display:inline-flex;align-items:center;gap:4px;min-height:17px}
+.credit-meta .badge{font-size:10px;padding:1px 5px}
+@media (max-width:1100px){.realm-cards-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.realm-cards-grid .gateway-ctrl{grid-column:span 2}}
+@media (max-width:720px){.realm-cards-grid{grid-template-columns:1fr!important}.realm-cards-grid .gateway-ctrl{grid-column:auto}.credit-summary{white-space:normal}}
+.acct-name{font-weight:600;font-size:14px;color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.note-chip{flex-shrink:0;font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;cursor:pointer;color:var(--dim);border:1px dashed var(--line);white-space:nowrap}
+.note-chip:hover{color:var(--accent);border-color:var(--accent)}
+.note-chip.has{color:var(--accent2);border:1px solid transparent;background:var(--accent2-soft);max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.acct-meta{color:var(--dim);font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct-meta [data-tip]{cursor:help}
+.acct-meta [data-tip]:hover{color:var(--fg)}
+.acct-err{display:flex;align-items:center;gap:4px;color:var(--warn);font-size:11px;margin-top:1px;cursor:help;max-width:340px}
+.acct-err .err-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct-err .err-info{flex-shrink:0;opacity:.7}

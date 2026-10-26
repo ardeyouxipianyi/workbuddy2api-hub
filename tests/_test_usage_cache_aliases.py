@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as proxy
 
+import wb_usage as U
+
 
 class BestCachedTokensTests(unittest.TestCase):
     def test_every_alias_is_read(self):
@@ -70,7 +72,7 @@ class NormalizeAliasesTests(unittest.TestCase):
         usage = {"prompt_tokens": 100, "completion_tokens": 5,
                  "total_tokens": 105, "cached_tokens": 0,
                  "prompt_tokens_details": {"cached_tokens": 80}}
-        fields = proxy._extract_usage(usage)
+        fields = U._extract_usage(usage)
         self.assertEqual(fields["cached_tokens"], 80)
         self.assertEqual(fields["total_tokens"], 105)
 

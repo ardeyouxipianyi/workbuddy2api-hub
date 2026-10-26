@@ -47,7 +47,7 @@ CREDITS_REFRESH_HOURS_KEY = "credits_refresh_hours"
 # terminal's own 620px so the terminal stays untouched until the user asks for
 # something smaller.
 SECTION_MAX_HEIGHT_KEY = "section_max_height"
-DEFAULT_SECTION_MAX_HEIGHT = 640
+DEFAULT_SECTION_MAX_HEIGHT = 0
 MAX_SECTION_MAX_HEIGHT = 4000
 # How many app-layer backups a successful update keeps under <app>/updates.
 # Rollback works off those backups, so 0 means "no rollback at all"; 1 is the

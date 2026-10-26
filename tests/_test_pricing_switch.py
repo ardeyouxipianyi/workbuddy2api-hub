@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_pricing
 import wb_proxy
+import wb_usage as U
 import wb_settings
 
 
@@ -102,13 +103,13 @@ class PricingGateTests(unittest.TestCase):
     def test_the_aggregate_does_not_call_a_disabled_row_unpriced(self):
         wb_settings.set_pricing_enabled(self.accounts, False)
         bucket = {}
-        wb_proxy._fold_cost(bucket, wb_pricing.cost_for_row(dict(self.row)),
+        U._fold_cost(bucket, wb_pricing.cost_for_row(dict(self.row)),
                             self.model)
         self.assertEqual(bucket.get("cost_missing"), None)
         # An unpriced row under a live switch is still reported, as before.
         wb_settings.set_pricing_enabled(self.accounts, True)
         bucket = {}
-        wb_proxy._fold_cost(bucket, wb_pricing.cost_for_row(
+        U._fold_cost(bucket, wb_pricing.cost_for_row(
             {"model": "no-such-model-anywhere", "prompt_tokens": 1}),
             "no-such-model-anywhere")
         self.assertEqual(bucket.get("cost_missing"), {"no-such-model-anywhere": 1})

@@ -62,6 +62,8 @@ import time as _time
 _time.time = lambda: FROZEN
 
 import wb_proxy as P
+
+import wb_usage as U
 import wb_pricing
 
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
@@ -71,7 +73,7 @@ wb_pricing.set_settings_dir(ACCOUNTS_DIR)
 USAGE_LOG = P.USAGE_LOG
 # checkpoint 在 v4 里一类一份文件（T8 的拆分）：这里给出合并视图与按类读写，
 # 用例里 data["snapshot"] / data["series"] / data["analytics"] 的写法不用改。
-KIND_FILES = {kind: P._usage_cache_kind_path(kind) for kind in P._USAGE_CACHE_KINDS}
+KIND_FILES = {kind: U._usage_cache_kind_path(kind) for kind in U._USAGE_CACHE_KINDS}
 
 
 def cache_files():
@@ -82,7 +84,7 @@ def clear_cache_files():
     for path in KIND_FILES.values():
         if os.path.exists(path):
             os.unlink(path)
-P._usage["started"] = FROZEN
+U._usage["started"] = FROZEN
 
 PASS = FAIL = 0
 
@@ -241,23 +243,23 @@ def cache_env_off():
 
 def restart():
     """清掉所有状态、TTL 缓存与「已读过 checkpoint」的记忆，模拟进程重启。"""
-    P._usage_snap_state.clear()
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
-    P._analytics_state.clear()
-    P._series_state.clear()
-    P._snap_cache.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._analytics_cache.clear()
-    P._series_cache.clear()
-    P._usage_cache_forget()
-    P._usage_cache_progress.clear()
-    P._usage_cache_checkpointed.clear()
-    P._usage_cache_last_attempt = time.time()
-    P._usage_cache_digest_memo.clear()
+    U._usage_snap_state.clear()
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
+    U._analytics_state.clear()
+    U._series_state.clear()
+    U._snap_cache.clear()
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._analytics_cache.clear()
+    U._series_cache.clear()
+    U._usage_cache_forget()
+    U._usage_cache_progress.clear()
+    U._usage_cache_checkpointed.clear()
+    U._usage_cache_last_attempt = time.time()
+    U._usage_cache_digest_memo.clear()
 
 
 def hour_start(ts):
-    """ts 所属本地整点的 epoch（与 P._local_hour_start 同一套）。"""
+    """ts 所属本地整点的 epoch（与 U._local_hour_start 同一套）。"""
     lt = time.localtime(ts)
     return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour,
                         0, 0, 0, 0, -1))
@@ -270,12 +272,12 @@ def hour_window(hours_back, minute_offset=0):
 
 def window_raw(since, until=None, realm=None):
     """窗口半的原始折叠（走层：小时层可用时由桶求和，否则冷路径）。"""
-    return P._usage_snapshot_window(realm, since, until)
+    return U._usage_snapshot_window(realm, since, until)
 
 
 def window_public(since, until=None, realm=None):
     """公开入口的窗口结果（带 started / accounts_map 等装饰，时钟冻结后可比）。"""
-    return P._usage_snapshot_uncached(realm, since=since, until=until)
+    return U._usage_snapshot_uncached(realm, since=since, until=until)
 
 
 def no_hour_cold_path():
@@ -284,14 +286,14 @@ def no_hour_cold_path():
     def boom(*args, **kwargs):
         raise AssertionError("整点窗口走了冷路径（没有用上小时层）")
 
-    P._scan_usage_snapshot_window_hours = boom
+    U._scan_usage_snapshot_window_hours = boom
 
 
 def restore_cold_path():
-    P._scan_usage_snapshot_window_hours = _COLD_HOURS
+    U._scan_usage_snapshot_window_hours = _COLD_HOURS
 
 
-_COLD_HOURS = P._scan_usage_snapshot_window_hours
+_COLD_HOURS = U._scan_usage_snapshot_window_hours
 
 
 def live():
@@ -299,7 +301,7 @@ def live():
     out = {}
     for label, since, until in WINDOWS:
         out["win_" + label] = window_public(since, until)
-    out["snap_all"] = P._usage_snapshot_uncached()
+    out["snap_all"] = U._usage_snapshot_uncached()
     return out
 
 
@@ -313,7 +315,7 @@ def snapshot_entry(data, realm=None):
 def cache_data():
     """五个 kind 文件的合并视图：{kind: entries}（缺失/读不出的当空表）。"""
     merged = {}
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         try:
             with io.open(KIND_FILES[kind], encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -326,11 +328,11 @@ def cache_data():
 
 def save_cache(data):
     """把合并视图写回 kind 文件（保持 v4 的包装形状；空表不写）。"""
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         entries = data.get(kind) or []
         if not entries:
             continue
-        payload = {"schema": P._USAGE_CACHE_SCHEMA, "kind": kind,
+        payload = {"schema": U._USAGE_CACHE_SCHEMA, "kind": kind,
                    "written_at": time.time(), "entries": entries}
         io.open(KIND_FILES[kind], "w", encoding="utf-8", newline="\n").write(
             json.dumps(payload, ensure_ascii=False))
@@ -389,6 +391,7 @@ FROZEN = __FROZEN__
 _t.time = lambda: FROZEN
 sys.path.insert(0, __ROOT__)
 import wb_proxy as P
+import wb_usage as U
 import wb_pricing
 wb_pricing.set_data_dir(P.USAGE_DIR)
 wb_pricing.set_settings_dir(P.ACCOUNTS_DIR)
@@ -409,11 +412,11 @@ def hour_window(hours_back, minute_offset=0):
 out = {}
 for label, hours_back, minute_offset, until in __WINDOWS__:
     since = hour_window(hours_back, minute_offset)
-    out["win_" + label] = P._usage_snapshot_uncached(None, since=since,
+    out["win_" + label] = U._usage_snapshot_uncached(None, since=since,
                                                      until=until)
-out["snap_all"] = P._usage_snapshot_uncached()
+out["snap_all"] = U._usage_snapshot_uncached()
 with open(os.environ["WB_CHILD_OUT"], "w", encoding="utf-8") as fh:
-    json.dump({"checkpointed": P._usage_cache_checkpointed, "results": out}, fh,
+    json.dump({"checkpointed": U._usage_cache_checkpointed, "results": out}, fh,
               ensure_ascii=False)
 print("child ok")
 '''
@@ -453,16 +456,16 @@ check("基线：整点窗口有内容，窗口越窄覆盖的请求越少",
       (GOLDEN_OBJ["win_today_h5"]["requests"],
        GOLDEN_OBJ["win_yest_h22"]["requests"]))
 check("基线（关掉日桶/小时层）：状态里一个桶都没有",
-      not P._usage_snap_state[None]["days"]
-      and P._usage_snap_state[None].get("hours_floor_at") is None,
-      P._usage_snap_state[None].get("days"))
+      not U._usage_snap_state[None]["days"]
+      and U._usage_snap_state[None].get("hours_floor_at") is None,
+      U._usage_snap_state[None].get("days"))
 
 print()
 print("[1] 切分：每行折进它 at 所属那天、离午夜多少个 3600 秒的小时桶")
 cache_env_nowrite()
 restart()
 live()
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 days = state["days"]
 today = days[TODAY_KEY]
 hours = today["hours"]
@@ -492,14 +495,14 @@ check("昨天 23:59:59 的行落在昨天第 23 个小时（不跨天）",
       and days[DAY1_KEY]["hours"]["23"]["total_tokens"] == 440,
       days[DAY1_KEY]["hours"]["23"]["requests"])
 # hours_floor_at 是剪枝线：最新那天往前保留小时层天数。
-want_floor = P._day_key_start(TODAY_KEY) - P._usage_hour_keep_days() * 86400
+want_floor = U._day_key_start(TODAY_KEY) - U._usage_hour_keep_days() * 86400
 check("hours_floor_at 落在剪枝线上（最新那天往前保留天数）",
       state["hours_floor_at"] == want_floor,
       (state["hours_floor_at"], want_floor))
 # 迟写行：把一条 at 属于昨天第 4 个小时的行追加到今天，它必须落进那个小时。
 append_log([row(DAY1 + 4 * 3600, "m-a", "u1", 1000, 100, credit=0.5)])
 live()
-days = P._usage_snap_state[None]["days"]
+days = U._usage_snap_state[None]["days"]
 check("迟写行落进它时间戳所属的那个小时（不是折叠时刻那小时）",
       days[DAY1_KEY]["hours"]["4"]["requests"] == 1
       and days[TODAY_KEY]["hours"]["0"]["requests"] == 5,
@@ -540,9 +543,9 @@ finally:
 for label, since, until in WINDOWS[:5]:
     cache_env_nowrite()
     restart()
-    P._usage_snapshot_uncached()      # 折出小时桶
+    U._usage_snapshot_uncached()      # 折出小时桶
     layered = canon(window_raw(since, until))
-    cold = canon(P._scan_usage_snapshot_window_hours(None, since, None))
+    cold = canon(U._scan_usage_snapshot_window_hours(None, since, None))
     check("窗口 %s：小时桶之和 == 按小时分组的冷路径" % label, layered == cold,
           first_diff(cold, layered))
 # realm 过滤：三个 realm 视角都要与逐行口径一致（小时桶按 realm 分开折）。
@@ -553,14 +556,14 @@ for realm in (None, "intl", "cn"):
     ref = canon(window_raw(since, None, realm))
     cache_env_nowrite()
     restart()
-    P._usage_snapshot_uncached(realm)
+    U._usage_snapshot_uncached(realm)
     got = canon(window_raw(since, None, realm))
     check("realm=%s：走层 == 逐行口径（整包逐字节）" % (realm or "all"),
           ref == got, first_diff(ref, got))
 # 成本字段必须跟着小时桶走（不是留空、也不是标注不可用）。
 cache_env_nowrite()
 restart()
-P._usage_snapshot_uncached()
+U._usage_snapshot_uncached()
 snap = window_raw(WINDOWS[3][1])
 check("整点窗口带成本字段：cost_cny / cost_missing / by_model_acct 都在",
       snap["cost_cny"] > 0 and isinstance(snap["cost_missing"], dict)
@@ -573,7 +576,7 @@ check("无价模型照常落进 cost_missing",
 mid_since = TODAY0
 cache_env_nowrite()
 restart()
-P._usage_snapshot_uncached()
+U._usage_snapshot_uncached()
 mid = canon(window_raw(mid_since))
 cache_env_off()
 restart()
@@ -585,11 +588,11 @@ print("[3] 封口：越过的小时不再重折（对象原样复用），只有
 cache_env_nowrite()
 restart()
 live()
-before_objs = dict(P._usage_snap_state[None]["days"])
-before = json.loads(canon(P._usage_snap_state[None]["days"]))
+before_objs = dict(U._usage_snap_state[None]["days"])
+before = json.loads(canon(U._usage_snap_state[None]["days"]))
 append_log([row(TODAY0 + 8 * 3600, "m-a", "u1", 2000, 200, credit=0.5)])
 live()
-after = P._usage_snap_state[None]["days"]
+after = U._usage_snap_state[None]["days"]
 sealed = [k for k in before if k != TODAY_KEY]
 check("旧日的小时表对象原样复用（同一个 dict，不是重建的）",
       all(after[k] is before_objs[k] for k in sealed),
@@ -612,7 +615,7 @@ print()
 print("[4] checkpoint：小时表与 hours_floor_at 随状态落盘/加载")
 check("写盘成功", make_checkpoint())
 stored = cache_data()
-check("每个 kind 文件都是当前 schema 的 JSON 对象", all(json.load(io.open(KIND_FILES[k], encoding="utf-8"))["schema"] == P._USAGE_CACHE_SCHEMA for k in P._USAGE_CACHE_KINDS if os.path.exists(KIND_FILES[k])), cache_files())
+check("每个 kind 文件都是当前 schema 的 JSON 对象", all(json.load(io.open(KIND_FILES[k], encoding="utf-8"))["schema"] == U._USAGE_CACHE_SCHEMA for k in U._USAGE_CACHE_KINDS if os.path.exists(KIND_FILES[k])), cache_files())
 entry = snapshot_entry(stored, None)
 day = entry["days"][TODAY_KEY]
 check("snapshot 条目里今天那天的 hours 子表落盘了",
@@ -633,7 +636,7 @@ check("小时桶里的键序是折叠插入顺序（不是字母序）",
 cache_env_nowrite()
 restart()
 LOADED_RAW = live()
-ADOPTED = dict(P._usage_cache_checkpointed)
+ADOPTED = dict(U._usage_cache_checkpointed)
 check("重启后加载到了 checkpoint（含 snapshot）",
       "snapshot" in ADOPTED, ADOPTED)
 check("加载后窗口与冷折逐字节一致", canon(LOADED_RAW) == GOLDEN,
@@ -698,8 +701,8 @@ def load_mutated(mutate_fn):
     save_cache(data)
     cache_env_nowrite()
     restart()
-    P._usage_snapshot_uncached()      # 采用（或拒绝）变异后的 checkpoint
-    return P._usage_snap_state[None]
+    U._usage_snapshot_uncached()      # 采用（或拒绝）变异后的 checkpoint
+    return U._usage_snap_state[None]
 
 
 # 6.0 自检：形状合法、值被改过的小时桶会被采用（标记必须可见），否则下面的
@@ -757,7 +760,7 @@ def _none_today(entry):
 
 state = load_mutated(_none_today)
 check("今天那天的表被摘过（None）：层拒绝服务",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 check("表被摘过时窗口退回冷路径，结果仍然正确",
       canon(window_public(WINDOWS[1][1]))
       == canon(GOLDEN_OBJ["win_" + WINDOWS[1][0]]))
@@ -769,7 +772,7 @@ def _drop_today(entry):
 
 state = load_mutated(_drop_today)
 check("今天那天的表整个丢了：层拒绝服务",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 
 
 def _drop_yesterday(entry):
@@ -778,7 +781,7 @@ def _drop_yesterday(entry):
 
 state = load_mutated(_drop_yesterday)
 check("窗口起点那天的表丢了：层拒绝服务（不能只跳过那一天）",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[2][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[2][1], None, None) is None)
 check("起点那天丢表时窗口退回冷路径，结果仍然正确（没少算昨天）",
       canon(window_public(WINDOWS[2][1]))
       == canon(GOLDEN_OBJ["win_" + WINDOWS[2][0]]))
@@ -790,7 +793,7 @@ def _old_floor(entry):
 
 state = load_mutated(_old_floor)
 check("hours_floor_at 比窗口起点还新：层拒绝服务",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 
 
 def _new_days_floor(entry):
@@ -799,7 +802,7 @@ def _new_days_floor(entry):
 
 state = load_mutated(_new_days_floor)
 check("days_floor 比窗口起点还新：层拒绝服务",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 
 
 def _shifted_at(entry):
@@ -808,7 +811,7 @@ def _shifted_at(entry):
 
 state = load_mutated(_shifted_at)
 check("小时桶 at 与日桶对不上：层拒绝服务（格点校验）",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 
 
 def _bad_day_at(entry):
@@ -817,7 +820,7 @@ def _bad_day_at(entry):
 
 state = load_mutated(_bad_day_at)
 check("日桶 at 被挪了半小时：层拒绝服务（格点校验）",
-      P._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
+      U._usage_snapshot_window_from_hours(None, WINDOWS[1][1], None, None) is None)
 
 print()
 print("[7] 保留/剪枝：小时层只留最近几天，够不到的窗口退回冷路径")
@@ -828,11 +831,11 @@ clear_cache_files()
 cache_env(enabled=1, min_bytes=10 ** 9, min_seconds=10 ** 9, hour_keep=1)
 restart()
 live()
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 floor = state["hours_floor_at"]
 check("剪枝线随保留天数前移（keep=1）",
-      floor == P._day_key_start(TODAY_KEY) - 86400,
-      (floor, P._day_key_start(TODAY_KEY) - 86400))
+      floor == U._day_key_start(TODAY_KEY) - 86400,
+      (floor, U._day_key_start(TODAY_KEY) - 86400))
 check("剪枝线以外的天：小时表被置 None（留痕，不再重建）",
       state["days"][DAY2_KEY].get("hours", "missing") is None
       and state["days"][DAY1_KEY].get("hours"),
@@ -857,7 +860,7 @@ restart()
 live()
 append_log([row(DAY2 + 6 * 3600, "m-a", "u1", 1000, 100, credit=0.5)])
 live()
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 check("剪枝线以外的迟到行不重建小时表",
       state["days"][DAY2_KEY].get("hours", "missing") is None
       and state["days"][DAY2_KEY]["requests"] > 0,
@@ -881,18 +884,18 @@ cache_env_off()
 restart()
 ref = canon(window_public(WINDOWS[1][1]))
 check("关掉开关：状态里没有日桶/小时桶（窗口路径压根不碰状态）",
-      not (P._usage_snap_state.get(None) or {}).get("days"),
-      (P._usage_snap_state.get(None) or {}).get("days"))
+      not (U._usage_snap_state.get(None) or {}).get("days"),
+      (U._usage_snap_state.get(None) or {}).get("days"))
 cache_env_nowrite()
 restart()
 # 折出一份 all-time（窗口请求本身不折——冷状态直接走扫描，见 T14 的
 # _usage_snap_state_cold）：这条比的是「小时层服务」与「关掉开关的扫描」。
-P._usage_snapshot_uncached()
+U._usage_snapshot_uncached()
 got = canon(window_public(WINDOWS[1][1]))
 check("开着开关：整点窗口结果与关掉时逐字节一致（精确价下）", ref == got,
       first_diff(ref, got))
 check("开着开关：小时桶确实折了",
-      P._usage_snap_state[None]["days"][TODAY_KEY]["hours"],
+      U._usage_snap_state[None]["days"][TODAY_KEY]["hours"],
       "没有小时桶")
 
 print()
@@ -932,11 +935,11 @@ if hasattr(time, "tzset"):
             for label, since in windows:
                 cache_env_off()
                 restart()
-                ref = canon(P._usage_snapshot_uncached(None, since=since,
+                ref = canon(U._usage_snapshot_uncached(None, since=since,
                                                        until=None))
                 cache_env_nowrite()
                 restart()
-                got = canon(P._usage_snapshot_uncached(None, since=since,
+                got = canon(U._usage_snapshot_uncached(None, since=since,
                                                        until=None))
                 check("夏令时 %s：整点窗口走层 == 逐行口径（逐字节）" % label,
                       ref == got, first_diff(ref, got))
@@ -946,22 +949,22 @@ if hasattr(time, "tzset"):
             restart()
             # 折出一份 all-time（窗口请求本身不折——冷状态直接走扫描，
             # 见 T14 的 _usage_snap_state_cold），下面的层校验才有桶可看。
-            P._usage_snapshot_uncached()
-            key = P._local_day_key(since)
-            state = P._usage_snap_state[None]
+            U._usage_snapshot_uncached()
+            key = U._local_day_key(since)
+            state = U._usage_snap_state[None]
             check("对齐的整点窗口本来就走层",
-                  P._usage_snapshot_window_from_hours(None, since, None, None)
+                  U._usage_snapshot_window_from_hours(None, since, None, None)
                   is not None)
             # 取窗口起点之后的小时（起点那天的更早小时本来就会被跳过）。
             hours = state["days"][key]["hours"]
             h_key = sorted(hours, key=int)[-1]
             hours[h_key]["at"] += 1800
             check("小时桶 at 不落在 3600 格点上时求和放弃（退回冷路径）",
-                  P._usage_snapshot_window_from_hours(None, since, None, None)
+                  U._usage_snapshot_window_from_hours(None, since, None, None)
                   is None)
             hours[h_key]["at"] -= 1800
             check("恢复后求和又能用",
-                  P._usage_snapshot_window_from_hours(None, since, None, None)
+                  U._usage_snapshot_window_from_hours(None, since, None, None)
                   is not None)
     finally:
         _time.time = lambda: FROZEN
@@ -983,23 +986,23 @@ print("[10] 与日桶的边界：午夜窗口走日桶，整点窗口走小时�
 cache_env_nowrite()
 restart()
 live()
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 check("午夜起点：_hour_window_key 也认它，但日桶优先（窗口结果仍由日桶给）",
-      P._hour_window_key(TODAY0) == (TODAY_KEY, 0)
-      and P._window_day_key(TODAY0) == TODAY_KEY,
-      (P._hour_window_key(TODAY0), P._window_day_key(TODAY0)))
+      U._hour_window_key(TODAY0) == (TODAY_KEY, 0)
+      and U._window_day_key(TODAY0) == TODAY_KEY,
+      (U._hour_window_key(TODAY0), U._window_day_key(TODAY0)))
 check("非整点起点：两条路都不认（退回逐行）",
-      P._hour_window_key(TODAY0 + 61) is None
-      and P._window_day_key(TODAY0 + 61) is None,
-      (P._hour_window_key(TODAY0 + 61), P._window_day_key(TODAY0 + 61)))
+      U._hour_window_key(TODAY0 + 61) is None
+      and U._window_day_key(TODAY0 + 61) is None,
+      (U._hour_window_key(TODAY0 + 61), U._window_day_key(TODAY0 + 61)))
 check("空窗口（起点在未来）走层且全零",
       GOLDEN_OBJ["win_future"]["requests"] == 0
       and GOLDEN_OBJ["win_future"]["cost_cny"] == 0.0,
       GOLDEN_OBJ["win_future"]["requests"])
 # 30 分钟偏移的时区语义（不是整点）：起点不是整点时一律逐行。
 check("起点不是整点时 _usage_snapshot_window 走逐行路径",
-      P._hour_window_key(TODAY0 + 1800) is None,
-      P._hour_window_key(TODAY0 + 1800))
+      U._hour_window_key(TODAY0 + 1800) is None,
+      U._hour_window_key(TODAY0 + 1800))
 
 print()
 print("PASS=%d FAIL=%d" % (PASS, FAIL))

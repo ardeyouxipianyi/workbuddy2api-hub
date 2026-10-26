@@ -17,6 +17,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-namespace-tools-")
 
 import wb_proxy as P
+import wb_translate as X
 
 PASS = FAIL = 0
 
@@ -66,7 +67,7 @@ NAMESPACES = [
 ]
 
 print("[1] outbound: namespace tools are flattened, the rest is untouched")
-flat, ns_map = P.expand_namespace_tools([CUSTOM_TOOL, WEB_TOOL, FUNC_TOOL] + NAMESPACES)
+flat, ns_map = X.expand_namespace_tools([CUSTOM_TOOL, WEB_TOOL, FUNC_TOOL] + NAMESPACES)
 names = [t.get("name") or (t.get("function") or {}).get("name") for t in flat]
 check("namespace children are pulled out as tools",
       {"js", "spawn_agent", "_get_profile"}.issubset(set(names)), names)
@@ -87,7 +88,7 @@ check("top level order is preserved",
 
 print()
 print("[2] outbound: duplicate tool names collapse to one entry")
-flat_dup, _ = P.expand_namespace_tools([JS_TOOL] + NAMESPACES)
+flat_dup, _ = X.expand_namespace_tools([JS_TOOL] + NAMESPACES)
 check("the top level definition wins",
       [t.get("name") for t in flat_dup].count("js") == 1, flat_dup)
 
@@ -150,11 +151,11 @@ for wire_name, bare, ns in (("js", "js", "node_repl"),
                             ("codex_apps__github__line", "line", "codex_apps__github"),
                             ("codex_apps__github::line", "line", "codex_apps__github"),
                             ("js2", "js2", "")):
-    got_bare, got_ns = P.resolve_namespaced_name(wire_name, NS_MAP)
+    got_bare, got_ns = X.resolve_namespaced_name(wire_name, NS_MAP)
     check("%s -> (%s, %s)" % (wire_name, bare, ns or "no namespace"),
           (got_bare, got_ns) == (bare, ns), (got_bare, got_ns))
 check("__ inside a namespace is not split at the wrong place",
-      P.resolve_namespaced_name("codex_apps__github__line", {"line": "codex_apps__github"})
+      X.resolve_namespaced_name("codex_apps__github__line", {"line": "codex_apps__github"})
       == ("line", "codex_apps__github"))
 
 print()
@@ -165,7 +166,7 @@ items = [
     {"type": "function_call", "name": "node_repl__js", "call_id": "c3"},
     {"type": "message", "role": "assistant"},
 ]
-fixed_items, fixed = P.apply_namespace_to_calls(items, {"js": "node_repl"})
+fixed_items, fixed = X.apply_namespace_to_calls(items, {"js": "node_repl"})
 check("only the namespaced calls are touched", fixed == 2, fixed)
 check("bare call gets its namespace", fixed_items[0].get("namespace") == "node_repl"
       and fixed_items[0].get("name") == "js")
@@ -174,7 +175,7 @@ check("prefixed call is rewritten to the bare name",
       fixed_items[2].get("name") == "js" and fixed_items[2].get("namespace") == "node_repl",
       fixed_items[2])
 already = [{"type": "function_call", "name": "js", "namespace": "node_repl", "call_id": "c9"}]
-_, fixed_again = P.apply_namespace_to_calls(already, {"js": "node_repl"})
+_, fixed_again = X.apply_namespace_to_calls(already, {"js": "node_repl"})
 check("an already stamped call is not double counted", fixed_again == 0)
 
 print()

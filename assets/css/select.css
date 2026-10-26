@@ -1,0 +1,52 @@
+/* ── 自定义下拉（Custom Select）────────────────────────────────────
+   原生 <select> 的展开列表由浏览器绘制，CSS 无法美化：深色模式下
+   会出现突兀的直角白框/系统蓝高亮，与暖色主题割裂。
+   这里用渐进增强：原生 select 仍在（表单值、change 事件、无障碍不变），
+   仅视觉上被隐藏，由同尺寸的触发器 + 自绘面板接管。
+   无 JS 时原生 select 照常可用，不会退化。 */
+.cs-wrap{position:relative;display:inline-block;vertical-align:middle;max-width:100%}
+.cs-wrap.cs-block{display:block;width:100%}
+/* 原生控件保留在无障碍树里，只做视觉隐藏（不能用 display:none） */
+.cs-native{position:absolute!important;inset:0;width:100%;height:100%;
+  opacity:0;pointer-events:none;margin:0}
+.cs-trigger{display:flex;align-items:center;gap:8px;width:100%;
+  background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-control);
+  padding:5px 9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.35;
+  text-align:left;cursor:pointer;transition:border-color .14s ease,background .14s ease,box-shadow .14s ease}
+.cs-trigger:hover{border-color:var(--line-hover);background:var(--panel3)}
+.cs-trigger:focus-visible{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft)}
+.cs-wrap.cs-open .cs-trigger{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.cs-value{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-value.cs-placeholder{color:var(--dim-light)}
+.cs-arrow{flex:0 0 auto;width:9px;height:9px;margin-left:2px;opacity:.55;
+  border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;
+  transform:translateY(-2px) rotate(45deg);transition:transform .18s ease,opacity .14s ease}
+.cs-trigger:hover .cs-arrow{opacity:.8}
+.cs-wrap.cs-open .cs-arrow{transform:translateY(1px) rotate(-135deg)}
+.cs-panel{position:absolute;z-index:80;top:calc(100% + 4px);left:0;min-width:100%;
+  max-width:min(320px,calc(100vw - 24px));max-height:min(320px,52vh);overflow:auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  box-shadow:var(--shadow-md);padding:4px;
+  opacity:0;transform:translateY(-4px) scale(.985);pointer-events:none;
+  transition:opacity .13s ease,transform .13s ease;
+  scrollbar-width:thin}
+.cs-wrap.cs-open .cs-panel{opacity:1;transform:none;pointer-events:auto}
+.cs-wrap.cs-drop-up .cs-panel{top:auto;bottom:calc(100% + 4px);transform:translateY(4px) scale(.985)}
+.cs-wrap.cs-drop-up.cs-open .cs-panel{transform:none}
+.cs-opt{display:flex;align-items:center;gap:7px;padding:6px 9px;border-radius:7px;
+  font-size:12px;color:var(--fg);cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;transition:background .1s ease}
+.cs-opt.cs-hover{background:var(--panel2)}
+.cs-opt.cs-selected{background:var(--accent-selected-bg);color:var(--accent);font-weight:600}
+.cs-opt.cs-selected.cs-hover{background:var(--accent-selected-bg)}
+.cs-opt.cs-disabled{color:var(--dim-light);cursor:not-allowed;opacity:.65}
+.cs-opt.cs-disabled.cs-hover{background:transparent}
+.cs-opt .cs-tick{flex:0 0 auto;width:11px;font-size:11px;opacity:0;color:var(--accent)}
+.cs-opt.cs-selected .cs-tick{opacity:1}
+.cs-empty{padding:10px 9px;font-size:11.5px;color:var(--dim-light);text-align:center}
+/* 深色主题下原生控件仍是系统配色，这里补一层兜底，避免未增强时闪白 */
+[data-theme="dark"] select{color-scheme:dark}
+@media (prefers-reduced-motion:reduce){
+  .cs-panel,.cs-arrow,.cs-trigger{transition:none}
+}

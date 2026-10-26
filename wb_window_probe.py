@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 
 import wb_accounts
+import wb_runtime
 import wb_settings
 
 STATE_NAME = "model_windows.json"
@@ -334,7 +335,7 @@ def _probe(account, model):
       * reset_at 非空 上游又回了 429，并给出了重置时间；
       * detail        失败原因，只用于日志与状态展示。
     """
-    import wb_proxy  # 函数内导入：wb_proxy 顶层会拉起调度器，避免循环依赖
+    wb_proxy = wb_runtime.gateway()
     url = account.chat_base_url() + wb_proxy.CHAT_PATH
     headers = account.headers(purpose="chat")
     body = {

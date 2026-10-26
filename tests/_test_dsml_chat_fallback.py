@@ -20,6 +20,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402
 _TMP = isolated_data_dirs("wb-dsml-chat-")
 
 import wb_proxy as P  # noqa: E402
+import wb_transforms as T  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -60,7 +61,7 @@ HYBRID = (
 ) % (BAR, BAR, BAR, BAR, BAR, BAR, BAR, BAR)
 
 print("[1] parse_leaked_tool_calls recovers both spellings")
-calls, clean = P.parse_leaked_tool_calls(HYBRID)
+calls, clean = T.parse_leaked_tool_calls(HYBRID)
 check("hybrid yields one call", calls is not None and len(calls) == 1, calls)
 check("hybrid call name", bool(calls) and calls[0]["name"] == "run_code", calls)
 args = json.loads(calls[0]["arguments"]) if calls else {}
@@ -69,7 +70,7 @@ check("hybrid description argument", args.get("description") == "say hi", args)
 check("hybrid markup stripped",
       "<parameter" not in clean and "DSML" not in clean, clean)
 
-calls2, clean2 = P.parse_leaked_tool_calls(dsml_block())
+calls2, clean2 = T.parse_leaked_tool_calls(dsml_block())
 check("dsml yields one call", calls2 is not None and len(calls2) == 1, calls2)
 check("dsml call name", bool(calls2) and calls2[0]["name"] == "run_shell", calls2)
 check("dsml command argument",
@@ -78,10 +79,10 @@ check("dsml command argument",
 check("dsml markup stripped", "<" not in clean2, clean2)
 
 print("[2] prose is left alone")
-calls3, clean3 = P.parse_leaked_tool_calls("just a normal answer")
+calls3, clean3 = T.parse_leaked_tool_calls("just a normal answer")
 check("prose yields no call", calls3 is None, calls3)
 check("prose unchanged", clean3 == "just a normal answer", clean3)
-calls4, _ = P.parse_leaked_tool_calls("use a <parameter>less approach")
+calls4, _ = T.parse_leaked_tool_calls("use a <parameter>less approach")
 check("a bare word does not fabricate a call", calls4 is None, calls4)
 
 print("[3] repair_leaked_tool_calls moves the call onto the message")

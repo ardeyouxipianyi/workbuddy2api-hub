@@ -42,6 +42,8 @@ _TMP = tempfile.mkdtemp(prefix="wb-bykey-")
 os.environ["WB_PROXY_USAGE_DIR"] = _TMP
 
 import wb_proxy as P
+
+import wb_usage as U
 import wb_settings as S
 
 P.ACCOUNTS_DIR = os.path.join(_TMP, "accounts")
@@ -63,11 +65,11 @@ def check(label, cond, extra=""):
 # --------------------------------------------------------------------------
 # 1. The writers put the key id on the row, always.
 # --------------------------------------------------------------------------
-P.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+U.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                key="k-writer")
-P.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
-P.record_error("m-1", 500, "boom", key="k-writer")
-P.record_error("m-1", 500, "boom")
+U.record_usage("m-1", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
+U.record_error("m-1", 500, "boom", key="k-writer")
+U.record_error("m-1", 500, "boom")
 
 with io.open(P.USAGE_LOG, encoding="utf-8") as fh:
     written = [json.loads(line) for line in fh if line.strip()]
@@ -161,7 +163,7 @@ S.set_api_keys(P.ACCOUNTS_DIR, [
 ])
 P.API_KEY = "launcher-secret"
 
-data = P._compute_usage_analytics_uncached()
+data = U._compute_usage_analytics_uncached()
 by_key = {k["key"]: k for k in data["keys"]}
 
 check("the payload carries a key axis", "keys" in data and len(data["keys"]) == len(by_key))
@@ -174,11 +176,11 @@ check("a configured key with no traffic still gets a row (0 is not 'missing')",
 check("a disabled key with traffic in the window is kept",
       by_key["k2"]["window"]["requests"] == 1 and by_key["k2"]["enabled"] is False)
 check("rows written before the field existed are their own bucket",
-      by_key[P.KEY_BUCKET_BEFORE]["window"]["requests"] == 1)
+      by_key[U.KEY_BUCKET_BEFORE]["window"]["requests"] == 1)
 check("a keyless deployment is its own bucket, not the legacy one",
-      by_key[P.KEY_BUCKET_ANON]["window"]["requests"] == 2)
+      by_key[U.KEY_BUCKET_ANON]["window"]["requests"] == 2)
 check("an id the roster cannot name is folded into one row",
-      by_key[P.KEY_BUCKET_UNKNOWN]["window"]["requests"] == 1)
+      by_key[U.KEY_BUCKET_UNKNOWN]["window"]["requests"] == 1)
 check("the launcher key gets a row when it is configured",
       by_key["launcher"]["window"]["requests"] == 1 and by_key["launcher"]["name"] == "启动参数")
 check("a key used on both exits is flagged",
@@ -186,7 +188,7 @@ check("a key used on both exits is flagged",
       and sorted(by_key["k-follow"]["realms"]) == ["cn", "intl"])
 check("a key that only ever used one exit is not",
       by_key["k1"]["cross_realm"] is False)
-check("the model list is capped", len(by_key["k-wide"]["models"]) == P.KEY_MODEL_TOP_N)
+check("the model list is capped", len(by_key["k-wide"]["models"]) == U.KEY_MODEL_TOP_N)
 check("the cap is accounted for rather than dropped",
       by_key["k-wide"]["models_other"]["models"] == 2
       and by_key["k-wide"]["models_other"]["tokens"] == 300 + 200)
@@ -212,12 +214,12 @@ with io.open(P.USAGE_LOG, "w", encoding="utf-8") as fh:
     for r in rows:
         if r.get("key") != "launcher":
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-idle = P._compute_usage_analytics_uncached()
+idle = U._compute_usage_analytics_uncached()
 check("an unused launcher key gets no row at all",
       "launcher" not in [k["key"] for k in idle["keys"]])
 
 # The realm view must not invent a row for a key bound to the other exit.
-only_cn = P._compute_usage_analytics_uncached(realm="cn")
+only_cn = U._compute_usage_analytics_uncached(realm="cn")
 check("a key bound to the other exit is not listed in this view",
       "k-idle" not in [k["key"] for k in only_cn["keys"]])
 check("a key with no binding is still listed, it can serve this exit",

@@ -50,6 +50,8 @@ import time as _time
 _time.time = lambda: FROZEN
 
 import wb_proxy as P
+
+import wb_usage as U
 import wb_accounts
 import wb_pricing
 
@@ -59,9 +61,9 @@ wb_pricing.set_settings_dir(ACCOUNTS_DIR)
 
 USAGE_LOG = P.USAGE_LOG
 LEGACY = os.path.join(USAGE_DIR, "usage-aggregate-cache.json")
-KIND_FILES = {kind: P._usage_cache_kind_path(kind)
-              for kind in P._USAGE_CACHE_KINDS}
-P._usage["started"] = FROZEN
+KIND_FILES = {kind: U._usage_cache_kind_path(kind)
+              for kind in U._USAGE_CACHE_KINDS}
+U._usage["started"] = FROZEN
 
 PASS = FAIL = 0
 
@@ -203,14 +205,14 @@ def live_all(accounts=None):
     return {
         # 走公开入口（与面板同一条路）：realm="all" 折不限 realm 的那份，
         # realm=None 解析成 CURRENT_REALM（这里就是 intl）。
-        "snap": P.usage_snapshot(realm="all", ttl=0),
-        "snap_intl": P.usage_snapshot(realm=None, ttl=0),
-        "snap_cn": P.usage_snapshot(realm="cn", ttl=0),
-        "byacct": P.usage_by_account(ttl=0),
-        "analytics": P.compute_usage_analytics(ttl=0),
-        "analytics_intl": P.compute_usage_analytics(ttl=0, realm="intl"),
-        "series": P.usage_timeseries(range="today", ttl=0),
-        "remaining": P._remaining_payload(now=FROZEN, accounts=accounts),
+        "snap": U.usage_snapshot(realm="all", ttl=0),
+        "snap_intl": U.usage_snapshot(realm=None, ttl=0),
+        "snap_cn": U.usage_snapshot(realm="cn", ttl=0),
+        "byacct": U.usage_by_account(ttl=0),
+        "analytics": U.compute_usage_analytics(ttl=0),
+        "analytics_intl": U.compute_usage_analytics(ttl=0, realm="intl"),
+        "series": U.usage_timeseries(range="today", ttl=0),
+        "remaining": U._remaining_payload(now=FROZEN, accounts=accounts),
     }
 
 
@@ -223,30 +225,30 @@ def live_all_canon(accounts=None):
 
 def restart():
     """清掉五份状态、TTL 缓存与「已读过 checkpoint」的记忆，模拟进程重启。"""
-    P._usage_snap_state.clear()
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None,
+    U._usage_snap_state.clear()
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None,
                             "tail": b""})
-    P._analytics_state.clear()
-    P._series_state.clear()
-    with P._remaining_state_lock:
-        P._remaining_state.clear()
-        P._remaining_state.update({
+    U._analytics_state.clear()
+    U._series_state.clear()
+    with U._remaining_state_lock:
+        U._remaining_state.clear()
+        U._remaining_state.update({
             "events": [], "keys": set(), "usage": {}, "day": "",
             "log": {"offset": 0, "key": None, "tail": b""},
             "file": {"offset": 0, "key": None, "tail": b""},
         })
-    P._snap_cache.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._analytics_cache.clear()
-    P._series_cache.clear()
-    with P._remaining_cache_lock:
-        P._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
-    P._usage_cache_forget()
-    P._usage_cache_progress.clear()
-    P._usage_cache_checkpointed.clear()
-    P._usage_cache_last_attempt = time.time()
-    P._usage_cache_digest_memo.clear()
-    P._realm_disk_cache.update({"key": None, "map": None})
+    U._snap_cache.clear()
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._analytics_cache.clear()
+    U._series_cache.clear()
+    with U._remaining_cache_lock:
+        U._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
+    U._usage_cache_forget()
+    U._usage_cache_progress.clear()
+    U._usage_cache_checkpointed.clear()
+    U._usage_cache_last_attempt = time.time()
+    U._usage_cache_digest_memo.clear()
+    U._realm_disk_cache.update({"key": None, "map": None})
 
 
 def cache_files():
@@ -291,7 +293,7 @@ def write_kind_raw(kind, data):
 def legacy_payload(entries):
     """按 v3 单文件的形状拼一份旧格式 checkpoint（一节一个 kind）。"""
     payload = {"schema": 3, "written_at": FROZEN}
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         payload[kind] = list(entries.get(kind) or [])
     return payload
 
@@ -322,10 +324,10 @@ print()
 print("[1] 一类一份：五类都落盘、都能采纳，结果与冷折逐字节一致")
 written = make_checkpoint()
 check("五类各写出一份文件",
-      written == set(P._USAGE_CACHE_KINDS), sorted(written))
+      written == set(U._USAGE_CACHE_KINDS), sorted(written))
 check("文件名带 kind，且文件里的 kind 标签与文件名一致",
-      all(kind_raw(k)["kind"] == k for k in P._USAGE_CACHE_KINDS),
-      {k: kind_raw(k).get("kind") for k in P._USAGE_CACHE_KINDS})
+      all(kind_raw(k)["kind"] == k for k in U._USAGE_CACHE_KINDS),
+      {k: kind_raw(k).get("kind") for k in U._USAGE_CACHE_KINDS})
 check("旧单文件没有被写出来（只读迁移源）", not os.path.exists(LEGACY))
 check("写盘是原子替换：没有留下临时文件",
       not [n for n in os.listdir(USAGE_DIR) if n.endswith(".tmp")],
@@ -334,8 +336,8 @@ cache_env_nowrite()
 restart()
 LOADED_RAW, err = live_all_canon()
 check("五类都被采纳（checkpointed 记到各自的位置）",
-      set(P._usage_cache_checkpointed) == set(P._USAGE_CACHE_KINDS),
-      P._usage_cache_checkpointed)
+      set(U._usage_cache_checkpointed) == set(U._USAGE_CACHE_KINDS),
+      U._usage_cache_checkpointed)
 check("加载后结果与冷折逐字节一致", LOADED_RAW == GOLDEN,
       err or first_diff(GOLDEN, LOADED_RAW or ""))
 
@@ -343,7 +345,7 @@ print()
 print("[2] 单视图进程只解析自己那一类（其余文件坏了也不影响）")
 # 计数桩：记录真正被打开解析的类文件与字节数。
 reads = []
-real_read_kind = P._usage_cache_read_kind
+real_read_kind = U._usage_cache_read_kind
 
 
 def counting_read_kind(kind):
@@ -352,7 +354,7 @@ def counting_read_kind(kind):
 
 
 legacy_reads = []
-real_read_legacy = P._usage_cache_read_legacy_file
+real_read_legacy = U._usage_cache_read_legacy_file
 
 
 def counting_read_legacy():
@@ -360,29 +362,29 @@ def counting_read_legacy():
     return real_read_legacy()
 
 
-P._usage_cache_read_kind = counting_read_kind
-P._usage_cache_read_legacy_file = counting_read_legacy
+U._usage_cache_read_kind = counting_read_kind
+U._usage_cache_read_legacy_file = counting_read_legacy
 try:
     cache_env_nowrite()
     restart()
     reads[:] = []
     legacy_reads[:] = []
-    snap = P.usage_snapshot(realm=None, ttl=0)
+    snap = U.usage_snapshot(realm=None, ttl=0)
     check("只跑 /usage 的进程只读了 snapshot 这一类",
           [kind for kind, _ in reads] == ["snapshot"], reads)
     check("没有去碰旧单文件", not legacy_reads, legacy_reads)
     check("采纳成功（结果来自 checkpoint，不是冷折）",
-          "snapshot" in P._usage_cache_checkpointed
+          "snapshot" in U._usage_cache_checkpointed
           and snap["requests"] == GOLDEN_OBJ["snap_intl"]["requests"],
-          (dict(P._usage_cache_checkpointed), snap.get("requests")))
+          (dict(U._usage_cache_checkpointed), snap.get("requests")))
     parsed = sum(size for _, size in reads)
     total = sum(os.path.getsize(path) for path in cache_files().values())
     check("只解析了一个类文件、字节数少于全部 checkpoint",
           parsed == os.path.getsize(KIND_FILES["snapshot"]) and parsed < total,
           (parsed, total))
 finally:
-    P._usage_cache_read_kind = real_read_kind
-    P._usage_cache_read_legacy_file = real_read_legacy
+    U._usage_cache_read_kind = real_read_kind
+    U._usage_cache_read_legacy_file = real_read_legacy
 
 # 更强的一条：其余四类文件整份是乱码，单视图进程照样采纳。
 cache_env_nowrite()
@@ -391,9 +393,9 @@ for kind in ("by_account", "analytics", "series", "remaining"):
     io.open(KIND_FILES[kind], "wb").write(b"{not json at all")
 try:
     restart()
-    snap = P.usage_snapshot(realm=None, ttl=0)
+    snap = U.usage_snapshot(realm=None, ttl=0)
     check("其余四类文件是乱码时，/usage 仍从自己的文件采纳",
-          "snapshot" in P._usage_cache_checkpointed
+          "snapshot" in U._usage_cache_checkpointed
           and snap["requests"] == GOLDEN_OBJ["snap_intl"]["requests"],
           snap.get("requests"))
 finally:
@@ -413,7 +415,7 @@ old_files = {kind: io.open(path, "rb").read()
              for kind, path in cache_files().items()}
 cache_env_force()
 restart()
-P.usage_timeseries(range="today", ttl=0)
+U.usage_timeseries(range="today", ttl=0)
 now_files = {kind: io.open(path, "rb").read()
              for kind, path in cache_files().items()}
 check("只有推进过的那一类被重写（series 变了）",
@@ -428,10 +430,10 @@ MIXED_RAW, err = live_all_canon()
 check("混合新旧下的结果与全量冷折逐字节一致",
       MIXED_RAW == GROWN, err or first_diff(GROWN, MIXED_RAW or ""))
 check("每类各自记录自己的位置（series 在文件尾、其余在旧 offset）",
-      P._usage_cache_checkpointed.get("series") == os.path.getsize(USAGE_LOG)
-      and 0 < P._usage_cache_checkpointed.get("snapshot", 0)
+      U._usage_cache_checkpointed.get("series") == os.path.getsize(USAGE_LOG)
+      and 0 < U._usage_cache_checkpointed.get("snapshot", 0)
       < os.path.getsize(USAGE_LOG),
-      (dict(P._usage_cache_checkpointed), os.path.getsize(USAGE_LOG)))
+      (dict(U._usage_cache_checkpointed), os.path.getsize(USAGE_LOG)))
 write_log(ROWS)                       # 恢复基线日志，后续用例共用它
 
 print()
@@ -444,7 +446,7 @@ before_files = {kind: io.open(path, "rb").read()
 append_log([row(FROZEN - 100, "m-a", "u1", 500, 50)])
 cache_env_force()
 restart()
-P._remaining_payload(now=FROZEN, accounts=[wb_accounts.Account(
+U._remaining_payload(now=FROZEN, accounts=[wb_accounts.Account(
     {"uid": "u1", "nickname": "u1", "accessToken": "t", "realm": "intl"})])
 after_files = {kind: io.open(path, "rb").read()
                for kind, path in cache_files().items()}
@@ -455,14 +457,14 @@ check("只有 remaining 被重写",
       sorted(k for k in before_files
              if after_files.get(k) != before_files[k]))
 check("其余四类的旧文件仍在（没有被空段覆盖）",
-      set(after_files) == set(P._USAGE_CACHE_KINDS), sorted(after_files))
+      set(after_files) == set(U._USAGE_CACHE_KINDS), sorted(after_files))
 # 重启：四类从各自的旧文件续读（只折新增的那一行），remaining 从新文件续读。
 cache_env_nowrite()
 restart()
 AFTER_RAW, err = live_all_canon()
 check("重启后四类仍然被采纳（旧文件没有被清掉）",
-      set(P._usage_cache_checkpointed) == set(P._USAGE_CACHE_KINDS),
-      P._usage_cache_checkpointed)
+      set(U._usage_cache_checkpointed) == set(U._USAGE_CACHE_KINDS),
+      U._usage_cache_checkpointed)
 cache_env_off()
 restart()
 WANT = canon(live_all())
@@ -484,15 +486,15 @@ check("snapshot 文件里有三个 realm 条目（all + intl + cn）",
 append_log([row(FROZEN - 100, "m-b", "u2", 700, 70)])
 restart()
 cache_env_force()
-P.usage_snapshot(realm="all", ttl=0)          # 只请求 realm=all，不碰 intl/cn
+U.usage_snapshot(realm="all", ttl=0)          # 只请求 realm=all，不碰 intl/cn
 check("只写 all 时 intl/cn 的旧条目仍在（没有被清掉）",
       _snap_realms() == ["all", "cn", "intl"], _snap_realms())
 cache_env_nowrite()
 restart()
-P.usage_snapshot(realm=None, ttl=0)           # intl 之后仍能采纳（不重折）
+U.usage_snapshot(realm=None, ttl=0)           # intl 之后仍能采纳（不重折）
 check("intl 之后仍被采纳（snapshot 进了 checkpointed）",
-      P._usage_cache_checkpointed.get("snapshot", 0) > 0,
-      P._usage_cache_checkpointed)
+      U._usage_cache_checkpointed.get("snapshot", 0) > 0,
+      U._usage_cache_checkpointed)
 cache_env_off()
 restart()
 write_log(ROWS)
@@ -500,13 +502,13 @@ make_checkpoint()
 
 print()
 print("[5] 一类坏掉只作废那一类，其余类照常采纳")
-for kind in P._USAGE_CACHE_KINDS:
+for kind in U._USAGE_CACHE_KINDS:
     # 每类各坏一种顶层形状：schema 改成未来版本 / kind 标签写错 / entries
     # 不是列表。坏法轮着来，覆盖面更大。
     make_checkpoint()
     raw = kind_raw(kind)
     if kind == "snapshot":
-        raw["schema"] = P._USAGE_CACHE_SCHEMA + 1
+        raw["schema"] = U._USAGE_CACHE_SCHEMA + 1
         what = "schema 比当前新"
     elif kind == "by_account":
         raw["kind"] = "snapshot"
@@ -521,13 +523,13 @@ for kind in P._USAGE_CACHE_KINDS:
     check("%s 坏掉（%s）：结果回到真值" % (kind, what), got == GOLDEN,
           err or first_diff(GOLDEN, got or ""))
     check("%s 坏掉：其余四类照常采纳" % kind,
-          set(P._usage_cache_checkpointed) == set(P._USAGE_CACHE_KINDS) - {kind},
-          P._usage_cache_checkpointed)
+          set(U._usage_cache_checkpointed) == set(U._USAGE_CACHE_KINDS) - {kind},
+          U._usage_cache_checkpointed)
 
 print()
 print("[6] 旧单文件（schema 3）只读兼容：升级后第一次刷新不必整段重折")
 make_checkpoint()
-entries = {kind: kind_entries(kind) for kind in P._USAGE_CACHE_KINDS}
+entries = {kind: kind_entries(kind) for kind in U._USAGE_CACHE_KINDS}
 clear_cache_files()
 write_legacy(entries)
 check("旧文件就位、五类文件都不在",
@@ -536,15 +538,15 @@ cache_env_nowrite()
 restart()
 LEGACY_RAW, err = live_all_canon()
 check("五类都从旧文件采纳（各取自己那一节）",
-      set(P._usage_cache_checkpointed) == set(P._USAGE_CACHE_KINDS),
-      P._usage_cache_checkpointed)
+      set(U._usage_cache_checkpointed) == set(U._USAGE_CACHE_KINDS),
+      U._usage_cache_checkpointed)
 check("从旧文件采纳的结果与冷折逐字节一致",
       LEGACY_RAW == GOLDEN, err or first_diff(GOLDEN, LEGACY_RAW or ""))
 
 # 类文件存在时旧文件不参与：把旧文件写成"有毒"的（requests +1000），新进程
 # 只认类文件，结果必须仍是真值。
 make_checkpoint()
-entries = {kind: kind_entries(kind) for kind in P._USAGE_CACHE_KINDS}
+entries = {kind: kind_entries(kind) for kind in U._USAGE_CACHE_KINDS}
 poisoned = dict(entries)
 poisoned["snapshot"] = [dict(e) for e in entries["snapshot"]]
 poisoned["snapshot"][0] = json.loads(json.dumps(poisoned["snapshot"][0]))
@@ -561,7 +563,7 @@ check("类文件存在时旧文件整份被忽略（带毒也不影响结果）"
 # 指纹/形状过了就照用，载荷值不做校验），不属于「坏文件必须被拒」的范畴。
 write_legacy(entries)
 snapshot_raw = kind_raw("snapshot")
-snapshot_raw["schema"] = P._USAGE_CACHE_SCHEMA + 1
+snapshot_raw["schema"] = U._USAGE_CACHE_SCHEMA + 1
 write_kind_raw("snapshot", snapshot_raw)
 cache_env_nowrite()
 restart()
@@ -569,14 +571,14 @@ got, err = live_all_canon()
 check("类文件坏掉时退回旧文件采纳（结果仍正确）", got == GOLDEN,
       err or first_diff(GOLDEN, got or ""))
 check("这一类确实走了旧文件（采纳位置 = 旧文件里的 offset）",
-      P._usage_cache_checkpointed.get("snapshot")
+      U._usage_cache_checkpointed.get("snapshot")
       == entries["snapshot"][0]["offset"],
-      (P._usage_cache_checkpointed.get("snapshot"),
+      (U._usage_cache_checkpointed.get("snapshot"),
        entries["snapshot"][0]["offset"]))
 
 # 旧文件的 schema 不对（2 / 4 / true）：整份作废，五类都冷折。
 make_checkpoint()
-entries = {kind: kind_entries(kind) for kind in P._USAGE_CACHE_KINDS}
+entries = {kind: kind_entries(kind) for kind in U._USAGE_CACHE_KINDS}
 for bad in (2, 4, True, "3", None):
     clear_cache_files()
     payload = legacy_payload(entries)
@@ -592,16 +594,16 @@ for bad in (2, 4, True, "3", None):
     check("旧文件 schema=%r：整份作废、结果回到真值" % (bad,), got == GOLDEN,
           err or first_diff(GOLDEN, got or ""))
     check("旧文件 schema=%r：一类都没有被采纳" % (bad,),
-          not P._usage_cache_checkpointed, P._usage_cache_checkpointed)
+          not U._usage_cache_checkpointed, U._usage_cache_checkpointed)
 
 print()
 print("[7] 某一类写失败不拖累其余类；失败后退避不重试")
 make_checkpoint()
 clear_cache_files()
 cache_env_force()
-real_kind_path = P._usage_cache_kind_path
+real_kind_path = U._usage_cache_kind_path
 missing_dir = os.path.join(_TMP, "no-such-dir")
-P._usage_cache_kind_path = lambda kind: (
+U._usage_cache_kind_path = lambda kind: (
     os.path.join(missing_dir, "usage-aggregate-cache-%s.json" % kind)
     if kind == "analytics" else real_kind_path(kind))
 try:
@@ -610,12 +612,12 @@ try:
     written = set(cache_files())
     check("坏掉的那一类没写出来", "analytics" not in written, sorted(written))
     check("其余四类照常写出来",
-          written == set(P._USAGE_CACHE_KINDS) - {"analytics"}, sorted(written))
+          written == set(U._USAGE_CACHE_KINDS) - {"analytics"}, sorted(written))
     check("写失败的那一类没有被记成已落盘",
-          "analytics" not in P._usage_cache_checkpointed,
-          P._usage_cache_checkpointed)
+          "analytics" not in U._usage_cache_checkpointed,
+          U._usage_cache_checkpointed)
 finally:
-    P._usage_cache_kind_path = real_kind_path
+    U._usage_cache_kind_path = real_kind_path
     if os.path.exists(missing_dir):
         shutil.rmtree(missing_dir, ignore_errors=True)
 make_checkpoint()

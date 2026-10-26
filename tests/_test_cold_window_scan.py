@@ -60,6 +60,8 @@ import time as _time
 _time.time = lambda: FROZEN
 
 import wb_proxy as P
+
+import wb_usage as U
 import wb_pricing
 
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
@@ -167,26 +169,26 @@ def cache_env(enabled=None, min_bytes=None, min_seconds=None, days=None):
 
 def restart():
     """清掉所有状态与 TTL 缓存，模拟进程重启（checkpoint 文件不动）。"""
-    P._usage_snap_state.clear()
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None,
+    U._usage_snap_state.clear()
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None,
                             "tail": b""})
-    P._analytics_state.clear()
-    P._series_state.clear()
-    P._snap_cache.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._analytics_cache.clear()
-    P._series_cache.clear()
-    P._usage_cache_forget()
-    P._usage_cache_progress.clear()
-    P._usage_cache_checkpointed.clear()
-    P._usage_cache_last_attempt = time.time()
-    P._usage_cache_digest_memo.clear()
+    U._analytics_state.clear()
+    U._series_state.clear()
+    U._snap_cache.clear()
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._analytics_cache.clear()
+    U._series_cache.clear()
+    U._usage_cache_forget()
+    U._usage_cache_progress.clear()
+    U._usage_cache_checkpointed.clear()
+    U._usage_cache_last_attempt = time.time()
+    U._usage_cache_digest_memo.clear()
 
 
 def snap_cold():
     """snapshot 状态「冷」的跨树判据：状态不存在（闭窗口不惊动状态）、或存在
     但没有可续折的数据（offset == 0 且没有日桶）。"""
-    st = P._usage_snap_state.get(None)
+    st = U._usage_snap_state.get(None)
     return st is None or (st["offset"] == 0 and not st["days"])
 
 
@@ -197,25 +199,25 @@ class FoldCounter(object):
         self.name = name
 
     def __enter__(self):
-        self.real = getattr(P, self.name)
+        self.real = getattr(U, self.name)
         self.calls = 0
 
         def counting(*args, **kwargs):
             self.calls += 1
             return self.real(*args, **kwargs)
 
-        setattr(P, self.name, counting)
+        setattr(U, self.name, counting)
         return self
 
     def __exit__(self, *exc):
-        setattr(P, self.name, self.real)
+        setattr(U, self.name, self.real)
         return False
 
 
 # --------------------------------------------------------------------------
 # 数据：最近四天各 9 行（午夜整点 1 行 + 每小时 1 行），今天 9 行
 # --------------------------------------------------------------------------
-DAYS = [P._local_midnight(FROZEN - back * 86400) for back in (3, 2, 1, 0)]
+DAYS = [U._local_midnight(FROZEN - back * 86400) for back in (3, 2, 1, 0)]
 TODAY0 = DAYS[-1]
 HOUR4 = TODAY0 + 4 * 3600
 HOUR6 = TODAY0 + 6 * 3600
@@ -242,13 +244,13 @@ write_log(ROWS)
 print("[0] 基线：关掉日桶的逐行口径（对照值），以及「状态是冷的」长什么样")
 cache_env(enabled=0, min_bytes=0, min_seconds=0, days=0)
 restart()
-REF_TODAY = canon(P._usage_snapshot_uncached(None, since=TODAY0, until=None))
-REF_HOUR4 = canon(P._usage_snapshot_uncached(None, since=HOUR4, until=None))
-REF_CLOSED = canon(P._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6))
-REF_ALL = canon(P._usage_snapshot_uncached())
-REF_AN_TODAY = canon(P._compute_usage_analytics_uncached(since=TODAY0,
+REF_TODAY = canon(U._usage_snapshot_uncached(None, since=TODAY0, until=None))
+REF_HOUR4 = canon(U._usage_snapshot_uncached(None, since=HOUR4, until=None))
+REF_CLOSED = canon(U._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6))
+REF_ALL = canon(U._usage_snapshot_uncached())
+REF_AN_TODAY = canon(U._compute_usage_analytics_uncached(since=TODAY0,
                                                          until=None))
-REF_AN_ALL = canon(P._compute_usage_analytics_uncached())
+REF_AN_ALL = canon(U._compute_usage_analytics_uncached())
 check("基线：今天窗口有内容，闭窗口是它的子集",
       json.loads(REF_TODAY)["requests"] == TODAY_ROWS
       and json.loads(REF_CLOSED)["requests"] == CLOSED_ROWS
@@ -256,32 +258,32 @@ check("基线：今天窗口有内容，闭窗口是它的子集",
       (json.loads(REF_TODAY)["requests"], json.loads(REF_CLOSED)["requests"],
        json.loads(REF_ALL)["requests"]))
 check("基线（关掉日桶）：状态里一个日桶都没有",
-      not (P._usage_snap_state.get(None) or {}).get("days")
-      and not (P._analytics_state.get(None) or {}).get("days"),
-      (P._usage_snap_state.get(None), P._analytics_state.get(None)))
+      not (U._usage_snap_state.get(None) or {}).get("days")
+      and not (U._analytics_state.get(None) or {}).get("days"),
+      (U._usage_snap_state.get(None), U._analytics_state.get(None)))
 
 print()
 print("[1] 冷态窗口请求走扫描、不折状态（T14 的主修法）")
 cache_env(enabled=0, min_bytes=0, min_seconds=0)
 restart()
 with FoldCounter("_fold_usage_snapshot") as c:
-    got_today = P._usage_snapshot_uncached(None, since=TODAY0, until=None)
+    got_today = U._usage_snapshot_uncached(None, since=TODAY0, until=None)
 check("冷态今天窗口：折的行数 == 窗口内的行数（不是全量）",
       c.calls == TODAY_ROWS and c.calls < TOTAL_ROWS,
       (c.calls, TODAY_ROWS, TOTAL_ROWS))
 check("冷态今天窗口：结果与逐行口径逐字节一致",
       canon(got_today) == REF_TODAY, first_diff(REF_TODAY, canon(got_today)))
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 check("冷态今天窗口：状态一行都没折（offset 仍是 0、日桶仍是空的）",
       state["offset"] == 0 and not state["days"],
       (state["offset"], state["days"]))
 with FoldCounter("_fold_usage_snapshot") as c:
-    again = P._usage_snapshot_uncached(None, since=TODAY0, until=None)
+    again = U._usage_snapshot_uncached(None, since=TODAY0, until=None)
 check("再来一次窗口请求：还是不折（状态没有被冻成「折一半」）",
       c.calls == TODAY_ROWS and canon(again) == REF_TODAY,
       (c.calls, canon(again) == REF_TODAY))
 with FoldCounter("_fold_usage_snapshot") as c:
-    hour_cold = P._usage_snapshot_uncached(None, since=HOUR4, until=None)
+    hour_cold = U._usage_snapshot_uncached(None, since=HOUR4, until=None)
 check("冷态整点窗口：折的行数 == 窗口内的行数",
       c.calls == HOUR4_ROWS, (c.calls, HOUR4_ROWS))
 check("冷态整点窗口：结果与逐行口径逐字节一致",
@@ -290,23 +292,23 @@ check("冷态整点窗口：结果与逐行口径逐字节一致",
 print()
 print("[2] 重折仍会发生：all-time 请求从零折到文件尾，状态转热")
 with FoldCounter("_fold_usage_snapshot") as c:
-    all_snap = P._usage_snapshot_uncached()
+    all_snap = U._usage_snapshot_uncached()
 check("all-time 请求：折的行数 == 全量行数（重折确实发生了）",
       c.calls == TOTAL_ROWS, (c.calls, TOTAL_ROWS))
 check("all-time 请求：结果与逐行口径逐字节一致",
       canon(all_snap) == REF_ALL, first_diff(REF_ALL, canon(all_snap)))
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 check("all-time 之后状态转热（offset 到文件尾、日桶折出来了）",
       state["offset"] > 0 and len(state["days"]) == len(DAYS),
       (state["offset"], sorted(state["days"])))
 with FoldCounter("_fold_usage_snapshot") as c:
-    hot_today = P._usage_snapshot_uncached(None, since=TODAY0, until=None)
+    hot_today = U._usage_snapshot_uncached(None, since=TODAY0, until=None)
 check("热态今天窗口：一行都不折（由存量日桶求和回答）", c.calls == 0, c.calls)
 check("冷态扫描 == 热态桶求和（逐字节）",
       canon(hot_today) == canon(got_today),
       first_diff(canon(got_today), canon(hot_today)))
 with FoldCounter("_fold_usage_snapshot") as c:
-    hot_hour = P._usage_snapshot_uncached(None, since=HOUR4, until=None)
+    hot_hour = U._usage_snapshot_uncached(None, since=HOUR4, until=None)
 check("热态整点窗口：一行都不折（由存量小时桶求和回答）", c.calls == 0, c.calls)
 check("整点窗口：冷态扫描 == 热态桶求和（逐字节）",
       canon(hot_hour) == canon(hour_cold),
@@ -317,27 +319,27 @@ print("[3] 价表内容变化（T14 的真实触发）：窗口不折，all-time
 write_pricing(PRICING_B)
 cache_env(enabled=0, min_bytes=0, min_seconds=0, days=0)
 restart()
-REF_TODAY_B = canon(P._usage_snapshot_uncached(None, since=TODAY0, until=None))
-REF_ALL_B = canon(P._usage_snapshot_uncached())
+REF_TODAY_B = canon(U._usage_snapshot_uncached(None, since=TODAY0, until=None))
+REF_ALL_B = canon(U._usage_snapshot_uncached())
 check("换了价表内容：真值确实变了（对照自检）",
       REF_TODAY_B != REF_TODAY and REF_ALL_B != REF_ALL)
 write_pricing(PRICING_B)      # 再把 mtime 推一格，保证新内容被读到
 cache_env(enabled=0, min_bytes=0, min_seconds=0)
 restart()
 with FoldCounter("_fold_usage_snapshot") as c:
-    got_today_b = P._usage_snapshot_uncached(None, since=TODAY0, until=None)
+    got_today_b = U._usage_snapshot_uncached(None, since=TODAY0, until=None)
 check("价表判废后：窗口请求只折窗口内的行（不付全量重折）",
       c.calls == TODAY_ROWS and c.calls < TOTAL_ROWS,
       (c.calls, TODAY_ROWS, TOTAL_ROWS))
 check("价表判废后：窗口结果按新价算，与逐行口径逐字节一致",
       canon(got_today_b) == REF_TODAY_B,
       first_diff(REF_TODAY_B, canon(got_today_b)))
-state = P._usage_snap_state[None]
+state = U._usage_snap_state[None]
 check("价表判废后：窗口请求之后状态仍是冷的（重折没被窗口偷做掉）",
       state["offset"] == 0 and not state["days"],
       (state["offset"], state["days"]))
 with FoldCounter("_fold_usage_snapshot") as c:
-    all_b = P._usage_snapshot_uncached()
+    all_b = U._usage_snapshot_uncached()
 check("价表判废后的 all-time 请求：从零折到文件尾（全量行数）",
       c.calls == TOTAL_ROWS, (c.calls, TOTAL_ROWS))
 check("价表判废后的 all-time 结果与逐行口径逐字节一致",
@@ -345,10 +347,10 @@ check("价表判废后的 all-time 结果与逐行口径逐字节一致",
 write_pricing(PRICING)
 cache_env(enabled=0, min_bytes=0, min_seconds=0, days=0)
 restart()
-REF_TODAY = canon(P._usage_snapshot_uncached(None, since=TODAY0, until=None))
-REF_HOUR4 = canon(P._usage_snapshot_uncached(None, since=HOUR4, until=None))
-REF_CLOSED = canon(P._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6))
-REF_ALL = canon(P._usage_snapshot_uncached())
+REF_TODAY = canon(U._usage_snapshot_uncached(None, since=TODAY0, until=None))
+REF_HOUR4 = canon(U._usage_snapshot_uncached(None, since=HOUR4, until=None))
+REF_CLOSED = canon(U._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6))
+REF_ALL = canon(U._usage_snapshot_uncached())
 
 print()
 print("[4] analytics：窗口半先扫描，all-time 半照折（它本来就是载荷的一半）")
@@ -356,24 +358,24 @@ cache_env(enabled=0, min_bytes=0, min_seconds=0)
 restart()
 pricing_on = P.wb_pricing.pricing_enabled()
 with FoldCounter("_fold_usage_analytics") as c:
-    an_cold = P._analytics_window(None, TODAY0, None, None, pricing_on)
+    an_cold = U._analytics_window(None, TODAY0, None, None, pricing_on)
 check("冷态 analytics 窗口半：折的行数 == 窗口内的行数",
       c.calls == TODAY_ROWS and c.calls < TOTAL_ROWS,
       (c.calls, TODAY_ROWS, TOTAL_ROWS))
 check("冷态 analytics 窗口半：状态一行都没折",
-      P._analytics_state[None]["offset"] == 0
-      and not P._analytics_state[None]["days"],
-      (P._analytics_state[None]["offset"], P._analytics_state[None]["days"]))
+      U._analytics_state[None]["offset"] == 0
+      and not U._analytics_state[None]["days"],
+      (U._analytics_state[None]["offset"], U._analytics_state[None]["days"]))
 with FoldCounter("_fold_usage_analytics") as c:
-    an_payload = P._compute_usage_analytics_uncached(since=TODAY0, until=None)
+    an_payload = U._compute_usage_analytics_uncached(since=TODAY0, until=None)
 check("analytics 端点：all-time 半照折（全量行数），窗口半由桶求和",
       c.calls == TOTAL_ROWS, (c.calls, TOTAL_ROWS))
 check("analytics 端点：整包与逐行口径逐字节一致",
       canon(an_payload) == REF_AN_TODAY,
       first_diff(REF_AN_TODAY, canon(an_payload)))
 with FoldCounter("_fold_usage_analytics") as c:
-    an_hot = P._analytics_window(None, TODAY0, None,
-                                 P._analytics_state[None]["offset"], pricing_on)
+    an_hot = U._analytics_window(None, TODAY0, None,
+                                 U._analytics_state[None]["offset"], pricing_on)
 check("热态 analytics 窗口半：一行都不折", c.calls == 0, c.calls)
 check("analytics 窗口半：冷态扫描 == 热态桶求和（逐字节）",
       canon(an_hot) == canon(an_cold),
@@ -384,16 +386,16 @@ print("[5] 与 T12 闭窗口闸门共存：闭窗口冷态扫描、热态走桶�
 cache_env(enabled=0, min_bytes=0, min_seconds=0)
 restart()
 with FoldCounter("_fold_usage_snapshot") as c:
-    closed_cold = P._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6)
+    closed_cold = U._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6)
 check("冷态闭窗口：一行都没折（状态不因闭窗口请求被重折）",
       c.calls == CLOSED_ROWS and snap_cold(),
-      (c.calls, CLOSED_ROWS, P._usage_snap_state.get(None)))
+      (c.calls, CLOSED_ROWS, U._usage_snap_state.get(None)))
 check("冷态闭窗口：结果与逐行口径逐字节一致",
       canon(closed_cold) == REF_CLOSED,
       first_diff(REF_CLOSED, canon(closed_cold)))
-P._usage_snapshot_uncached()      # 折到文件尾（重折照发生）
+U._usage_snapshot_uncached()      # 折到文件尾（重折照发生）
 with FoldCounter("_fold_usage_snapshot") as c:
-    closed_hot = P._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6)
+    closed_hot = U._usage_snapshot_uncached(None, since=HOUR4, until=HOUR6)
 check("热态闭窗口：最多只折窗口内的行（T12 树走桶求和 == 0，本树整段扫描"
       " == 窗口行数），绝不重折全量",
       c.calls in (0, CLOSED_ROWS), c.calls)
@@ -402,10 +404,10 @@ check("闭窗口：冷态扫描 == 热态（T12 走桶 / 本树走扫）逐字�
       first_diff(canon(closed_cold), canon(closed_hot)))
 cache_env(enabled=0, min_bytes=0, min_seconds=0)
 restart()
-an_closed_cold = P._analytics_window(None, HOUR4, HOUR6, None, pricing_on)
-P._compute_usage_analytics_uncached()
-an_closed_hot = P._analytics_window(None, HOUR4, HOUR6,
-                                    P._analytics_state[None]["offset"],
+an_closed_cold = U._analytics_window(None, HOUR4, HOUR6, None, pricing_on)
+U._compute_usage_analytics_uncached()
+an_closed_hot = U._analytics_window(None, HOUR4, HOUR6,
+                                    U._analytics_state[None]["offset"],
                                     pricing_on)
 check("analytics 闭窗口：冷态扫描 == 热态（T12 走桶 / 本树走扫）逐字节一致",
       canon(an_closed_cold) == canon(an_closed_hot),
@@ -415,37 +417,37 @@ print()
 print("[6] checkpoint 采纳不受影响：冷启动但 checkpoint 可用时窗口照旧采纳")
 cache_env(enabled=1, min_bytes=0, min_seconds=0)
 restart()
-P._usage_snapshot_uncached()          # 折一次并落盘
+U._usage_snapshot_uncached()          # 折一次并落盘
 restart()                             # 模拟进程重启（状态清空，checkpoint 留下）
 with FoldCounter("_fold_usage_snapshot") as c:
-    adopted = P._usage_snapshot_uncached(None, since=TODAY0, until=None)
+    adopted = U._usage_snapshot_uncached(None, since=TODAY0, until=None)
 check("冷启动 + 可用 checkpoint：窗口请求走采纳（一行都不折）",
       c.calls == 0, c.calls)
 check("冷启动 + 可用 checkpoint：结果与逐行口径逐字节一致",
       canon(adopted) == REF_TODAY, first_diff(REF_TODAY, canon(adopted)))
 check("冷启动 + 可用 checkpoint：状态确实是被采纳出来的（offset > 0）",
-      P._usage_snap_state[None]["offset"] > 0,
-      P._usage_snap_state[None]["offset"])
+      U._usage_snap_state[None]["offset"] > 0,
+      U._usage_snap_state[None]["offset"])
 cache_env(enabled=0, min_bytes=0, min_seconds=0)
 
 print()
 print("[7] series 不在价表失效范围内（复核件 §2）：价表变化不动它")
 cache_env(enabled=0, min_bytes=0, min_seconds=0, days=None)
 restart()
-ts = P._usage_timeseries_uncached(None, TODAY0, FROZEN, 3600)
-REF_TS = canon(P._usage_timeseries_scan(None, TODAY0, FROZEN, 3600))
+ts = U._usage_timeseries_uncached(None, TODAY0, FROZEN, 3600)
+REF_TS = canon(U._usage_timeseries_scan(None, TODAY0, FROZEN, 3600))
 check("series 窗口：层切片与整段扫描逐字节一致",
       canon(ts) == REF_TS, first_diff(REF_TS, canon(ts)))
-series_off = P._series_state[None]["offset"]
+series_off = U._series_state[None]["offset"]
 check("series 窗口：冷态请求把状态折起来了（它没有 all-time 重建入口，"
       "冷态改走扫描会让状态永不重建——所以 T14 不动它）",
       series_off > 0, series_off)
 write_pricing(PRICING_B)
 cache_env(enabled=0, min_bytes=0, min_seconds=0, days=None)
-ts_b = P._usage_timeseries_uncached(None, TODAY0, FROZEN, 3600)
+ts_b = U._usage_timeseries_uncached(None, TODAY0, FROZEN, 3600)
 check("价表内容变化：series 状态照旧热（折叠不算价，不被指纹判废）",
-      P._series_state[None]["offset"] == series_off,
-      (P._series_state[None]["offset"], series_off))
+      U._series_state[None]["offset"] == series_off,
+      (U._series_state[None]["offset"], series_off))
 check("价表内容变化：series 窗口结果逐字节不变（口径不受价表影响）",
       canon(ts_b) == REF_TS, first_diff(REF_TS, canon(ts_b)))
 write_pricing(PRICING)

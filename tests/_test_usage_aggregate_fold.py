@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_pricing
 import wb_proxy as P
+import wb_usage as U
 import wb_settings
 
 T0 = 1791000000.0
@@ -77,10 +78,10 @@ def fold_rows(rows):
     """
     stat = _new_fold()
     for r in rows:
-        if P.row_outcome(r) == "client_aborted":
+        if U.row_outcome(r) == "client_aborted":
             continue
         cost = wb_pricing.cost_for_row(dict(r))
-        if P.row_outcome(r) != "completed":
+        if U.row_outcome(r) != "completed":
             stat["errors"] += 1
         else:
             stat["requests"] += 1
@@ -176,8 +177,8 @@ class AggregateSkipsDetailsTests(AggregateHarness):
         original = wb_pricing._details_for
         wb_pricing._details_for = boom
         try:
-            analytics = P._compute_usage_analytics_uncached()
-            snap = P._usage_snapshot_uncached()
+            analytics = U._compute_usage_analytics_uncached()
+            snap = U._usage_snapshot_uncached()
         finally:
             wb_pricing._details_for = original
         # 明细被跳过，价本身照算：三档单价那部分才是被省掉的。
@@ -188,14 +189,14 @@ class AggregateSkipsDetailsTests(AggregateHarness):
         self.assertEqual(analytics["summary"]["all_time"]["errors"], 1)
 
     def test_the_payload_is_identical_when_details_are_skipped(self):
-        normal = P._compute_usage_analytics_uncached()
+        normal = U._compute_usage_analytics_uncached()
 
         def boom(*_args, **_kwargs):
             raise AssertionError("聚合路径不该构造悬停明细")
         original = wb_pricing._details_for
         wb_pricing._details_for = boom
         try:
-            lean = P._compute_usage_analytics_uncached()
+            lean = U._compute_usage_analytics_uncached()
         finally:
             wb_pricing._details_for = original
         self.assertEqual(normal, lean)
@@ -210,7 +211,7 @@ class AggregateSkipsDetailsTests(AggregateHarness):
 
         wb_pricing._details_for = counting
         try:
-            page = P.recent_usage(limit=100)
+            page = U.recent_usage(limit=100)
         finally:
             wb_pricing._details_for = original
         # 逐行展示：每一页行都调用一次明细，包括没价的行（整组 None）。
@@ -260,10 +261,10 @@ class SwitchReadCountTests(AggregateHarness):
 
     def test_a_scan_asks_the_switch_once(self):
         calls = self._counting_switch(True)
-        P._compute_usage_analytics_uncached()
+        U._compute_usage_analytics_uncached()
         self.assertEqual(len(calls), 1, "整表重建只该问一次总开关")
         del calls[:]
-        P._usage_snapshot_uncached()
+        U._usage_snapshot_uncached()
         self.assertEqual(len(calls), 1, "快照重建只该问一次总开关")
 
     def test_the_per_row_path_still_asks_per_row(self):
@@ -312,10 +313,10 @@ class SwitchReadCountTests(AggregateHarness):
 
         wb_pricing.pricing_enabled = flaky
         try:
-            first = P._usage_snapshot_uncached()
+            first = U._usage_snapshot_uncached()
             self.assertEqual(len(calls), 1)
             self.assertGreater(first["cost_cny"], 0, "本次扫描用开始时的开关")
-            second = P._usage_snapshot_uncached()
+            second = U._usage_snapshot_uncached()
             self.assertEqual(len(calls), 2)
             self.assertEqual(second["cost_cny"], 0, "下一次扫描才看到新值")
             self.assertEqual(second.get("cost_missing"), {})
@@ -329,14 +330,14 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
     """聚合结果 == 逐行全明细算价的手工折叠（口径不变的硬约束）。"""
 
     def test_the_all_time_summary_equals_a_manual_fold(self):
-        analytics = P._compute_usage_analytics_uncached()
+        analytics = U._compute_usage_analytics_uncached()
         expected = fold_rows(self.rows)
         for field in FOLD_FIELDS:
             self.assertEqual(analytics["summary"]["all_time"][field],
                              expected[field], field)
 
     def test_the_window_summary_covers_only_the_selected_rows(self):
-        analytics = P._compute_usage_analytics_uncached(since=T0 + 250,
+        analytics = U._compute_usage_analytics_uncached(since=T0 + 250,
                                                         until=T0 + 450)
         expected = fold_rows([r for r in self.rows
                               if T0 + 250 <= r["at"] <= T0 + 450])
@@ -348,7 +349,7 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
         self.assertEqual(analytics["summary"]["all_time"]["errors"], 1)
 
     def test_model_rows_fold_every_outcome(self):
-        analytics = P._compute_usage_analytics_uncached()
+        analytics = U._compute_usage_analytics_uncached()
         models = {m["model"]: m for m in analytics["models"]}
         for model in (MODEL_A, MODEL_B, self.builtin, MODEL_NONE):
             rows = [r for r in self.rows if r["model"] == model]
@@ -362,7 +363,7 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
     def test_the_model_distribution_keeps_the_successful_only_rule(self):
         # 模型分布（账号行的 window_models / all_models）只统计成功请求：失败的
         # 调用记成需求会误导。_bump_model_row 重构后这条规则必须原样。
-        analytics = P._compute_usage_analytics_uncached()
+        analytics = U._compute_usage_analytics_uncached()
         accounts = {a["uid"]: a for a in analytics["accounts"]}
         pills_b = accounts[ACCT_B]["window_models"]
         # acct-B 的 fold-model-a 只有一条失败请求 → 分布里不该出现。
@@ -380,7 +381,7 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
                                places=9)
 
     def test_account_rows_hold_both_buckets(self):
-        analytics = P._compute_usage_analytics_uncached(since=T0 + 250)
+        analytics = U._compute_usage_analytics_uncached(since=T0 + 250)
         accounts = {a["uid"]: a for a in analytics["accounts"]}
         for uid in (ACCT_A, ACCT_B):
             rows = [r for r in self.rows if r["account"] == uid]
@@ -393,12 +394,12 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
                                  expected_window[field], (uid, field))
 
     def test_the_snapshot_equals_a_manual_fold(self):
-        snap = P._usage_snapshot_uncached()
+        snap = U._usage_snapshot_uncached()
         expected_cost = 0.0
         missing = {}
         completed_tokens = 0
         for r in self.rows:
-            outcome = P.row_outcome(r)
+            outcome = U.row_outcome(r)
             if outcome == "client_aborted":
                 continue
             cost = wb_pricing.cost_for_row(dict(r))
@@ -417,9 +418,9 @@ class AggregateMatchesPerRowCostingTests(AggregateHarness):
     def test_the_key_rows_fold_the_same_way(self):
         # key_map 轴与 acct/model 同源：没有 key 字段的历史行落进 __before_keys__，
         # 这些行的数字必须与手工折叠一致。
-        analytics = P._compute_usage_analytics_uncached()
+        analytics = U._compute_usage_analytics_uncached()
         rows = {k["key"]: k for k in analytics["keys"]}
-        bucket = rows.get(P.KEY_BUCKET_BEFORE)
+        bucket = rows.get(U.KEY_BUCKET_BEFORE)
         self.assertIsNotNone(bucket)
         expected = fold_rows(self.rows)
         for field in FOLD_FIELDS:
@@ -441,14 +442,14 @@ class RowResultMemoTests(AggregateHarness):
 
     def setUp(self):
         super().setUp()
-        self._caps = (P._ROW_MEMO_MAX, P._ROW_COST_MEMO_MAX)
-        P._row_day_memo.clear()
-        P._row_cost_memo.clear()
+        self._caps = (U._ROW_MEMO_MAX, U._ROW_COST_MEMO_MAX)
+        U._row_day_memo.clear()
+        U._row_cost_memo.clear()
 
     def tearDown(self):
-        P._ROW_MEMO_MAX, P._ROW_COST_MEMO_MAX = self._caps
-        P._row_day_memo.clear()
-        P._row_cost_memo.clear()
+        U._ROW_MEMO_MAX, U._ROW_COST_MEMO_MAX = self._caps
+        U._row_day_memo.clear()
+        U._row_cost_memo.clear()
         super().tearDown()
 
     # ---- 工具 ----
@@ -462,35 +463,35 @@ class RowResultMemoTests(AggregateHarness):
         out = {}
         for names, key, fn in (
                 (("_snap_cache", "_usage_snap_state"), "snapshot",
-                 lambda: P._usage_snapshot_uncached()),
+                 lambda: U._usage_snapshot_uncached()),
                 (("_analytics_cache", "_analytics_state"), "analytics",
-                 lambda: P._compute_usage_analytics_uncached())):
+                 lambda: U._compute_usage_analytics_uncached())):
             for name in names:
-                getattr(P, name).clear()
+                getattr(U, name).clear()
             out[key] = fn()
         for name in ("_series_cache", "_series_state"):
-            getattr(P, name).clear()
-        out["series"] = P.usage_timeseries(
+            getattr(U, name).clear()
+        out["series"] = U.usage_timeseries(
             realm="all", range="custom", since=T0, until=T0 + 2 * 86400,
             bucket_seconds=86400, ttl=0)
-        out["snap_intl"] = P._usage_snapshot_uncached(realm="intl")
-        out["snap_cn"] = P._usage_snapshot_uncached(realm="cn")
-        out["an_intl"] = P._compute_usage_analytics_uncached(realm="intl")
+        out["snap_intl"] = U._usage_snapshot_uncached(realm="intl")
+        out["snap_cn"] = U._usage_snapshot_uncached(realm="cn")
+        out["an_intl"] = U._compute_usage_analytics_uncached(realm="intl")
         return out
 
     def _payload(self):
         return json.dumps(self._cold_views(), ensure_ascii=False)
 
     def _memo_off(self):
-        P._ROW_MEMO_MAX = 0
-        P._ROW_COST_MEMO_MAX = 0
-        P._row_day_memo.clear()
-        P._row_cost_memo.clear()
+        U._ROW_MEMO_MAX = 0
+        U._ROW_COST_MEMO_MAX = 0
+        U._row_day_memo.clear()
+        U._row_cost_memo.clear()
 
     def _memo_on(self):
-        P._ROW_MEMO_MAX, P._ROW_COST_MEMO_MAX = self._caps
-        P._row_day_memo.clear()
-        P._row_cost_memo.clear()
+        U._ROW_MEMO_MAX, U._ROW_COST_MEMO_MAX = self._caps
+        U._row_day_memo.clear()
+        U._row_cost_memo.clear()
 
     # ---- [1] 逐字节对拍 ----
 
@@ -511,7 +512,7 @@ class RowResultMemoTests(AggregateHarness):
 
     def test_each_row_is_day_keyed_and_priced_once_per_scan_batch(self):
         counts = {"strftime": 0, "cost": 0}
-        real_strftime = P.time.strftime
+        real_strftime = U.time.strftime
         real_cost = wb_pricing.cost_for_row
 
         def counted_strftime(fmt, *args, **kwargs):
@@ -523,7 +524,7 @@ class RowResultMemoTests(AggregateHarness):
             counts["cost"] += 1
             return real_cost(row, details=details, enabled=enabled)
 
-        P.time.strftime = counted_strftime
+        U.time.strftime = counted_strftime
         wb_pricing.cost_for_row = counted_cost
         try:
             self._memo_on()
@@ -537,7 +538,7 @@ class RowResultMemoTests(AggregateHarness):
             self._cold_views()
             plain = dict(counts)
         finally:
-            P.time.strftime = real_strftime
+            U.time.strftime = real_strftime
             wb_pricing.cost_for_row = real_cost
 
         n = len(self.rows)
@@ -558,22 +559,22 @@ class RowResultMemoTests(AggregateHarness):
     # ---- [3] 有界 ----
 
     def test_the_day_table_keeps_the_newest_keys_only(self):
-        P._ROW_MEMO_MAX = 3
-        P._row_day_memo.clear()
+        U._ROW_MEMO_MAX = 3
+        U._row_day_memo.clear()
         for ts in (10, 20, 30, 40, 50):
-            P._local_day_key(ts)
-        self.assertEqual(sorted(P._row_day_memo), [30, 40, 50])
+            U._local_day_key(ts)
+        self.assertEqual(sorted(U._row_day_memo), [30, 40, 50])
         # 比表里最旧的还旧的 ts 不进表，但答案照旧真算、照旧正确。
-        self.assertEqual(P._local_day_key(5),
+        self.assertEqual(U._local_day_key(5),
                          time.strftime("%Y-%m-%d", time.localtime(5)))
-        self.assertEqual(sorted(P._row_day_memo), [30, 40, 50])
+        self.assertEqual(sorted(U._row_day_memo), [30, 40, 50])
 
     def test_the_cost_table_is_bounded_too(self):
-        P._ROW_COST_MEMO_MAX = 2
-        P._row_cost_memo.clear()
-        P._usage_snapshot_uncached()
-        self.assertLessEqual(len(P._row_cost_memo), 2)
-        kept = [key[2] for key in P._row_cost_memo]
+        U._ROW_COST_MEMO_MAX = 2
+        U._row_cost_memo.clear()
+        U._usage_snapshot_uncached()
+        self.assertLessEqual(len(U._row_cost_memo), 2)
+        kept = [key[2] for key in U._row_cost_memo]
         self.assertIn(max(r["at"] for r in self.rows), kept)
 
     # ---- [4] 失效条件 ----
@@ -584,7 +585,7 @@ class RowResultMemoTests(AggregateHarness):
         改的是磁盘上的真文件（不是内部字段），所以这条同时钉住了「价表换代
         → 记忆条目整体失效」与「状态指纹照样作废重折」两件事。
         """
-        first = P._usage_snapshot_uncached()
+        first = U._usage_snapshot_uncached()
         self.assertGreater(first["cost_cny"], 0)
         path = wb_pricing.policies_path()
         lines = []
@@ -605,10 +606,10 @@ class RowResultMemoTests(AggregateHarness):
         # 路径指纹有个 1 秒 TTL（本进程之外写下的变更最迟 1 秒内可见）：
         # 测试不等这一秒，直接把它清掉，语义与「等过了 TTL」一致。
         wb_pricing._file_key_cache.clear()
-        second = P._usage_snapshot_uncached()
+        second = U._usage_snapshot_uncached()
         self.assertGreater(second["cost_cny"], first["cost_cny"])
         # 表里那条旧价必须已经作废：再折一遍仍是新价。
-        self.assertAlmostEqual(P._usage_snapshot_uncached()["cost_cny"],
+        self.assertAlmostEqual(U._usage_snapshot_uncached()["cost_cny"],
                                second["cost_cny"], places=9)
 
     def test_a_timezone_change_drops_the_day_table(self):
@@ -629,53 +630,53 @@ class RowResultMemoTests(AggregateHarness):
             def strftime(self, fmt, ts):
                 return self._key
 
-        real_time = P.time
+        real_time = U.time
         clock = _Clock(("A", "B"), "2001-01-01")
-        P.time = clock
+        U.time = clock
         try:
-            self.assertEqual(P._local_day_key(123), "2001-01-01")
-            self.assertEqual(P._local_day_key(456), "2001-01-01")
-            self.assertIn(456, P._row_day_memo)
+            self.assertEqual(U._local_day_key(123), "2001-01-01")
+            self.assertEqual(U._local_day_key(456), "2001-01-01")
+            self.assertIn(456, U._row_day_memo)
             clock._key = "2001-01-02"          # 时区没变：表照用
-            self.assertEqual(P._local_day_key(123), "2001-01-01")
+            self.assertEqual(U._local_day_key(123), "2001-01-01")
             clock.tzname = ("C", "D")          # tzset() 会重建这个元组
-            self.assertEqual(P._local_day_key(123), "2001-01-02")
-            self.assertNotIn(456, P._row_day_memo)
+            self.assertEqual(U._local_day_key(123), "2001-01-02")
+            self.assertNotIn(456, U._row_day_memo)
         finally:
-            P.time = real_time
+            U.time = real_time
 
     # ---- 形状与退化输入 ----
 
     def test_the_table_returns_exactly_what_cost_for_row_returns(self):
         """命中与未命中给出的 dict 与现算逐键同序、逐值相等。"""
-        pricing = P._pricing_inputs(True)
+        pricing = U._pricing_inputs(True)
         self.assertIsNotNone(pricing)
-        off_pricing = P._pricing_inputs(False)
+        off_pricing = U._pricing_inputs(False)
         for r in self.rows:
             for enabled, inputs in ((True, pricing), (False, off_pricing)):
                 want = wb_pricing.cost_for_row(dict(r), details=False,
                                                enabled=enabled)
-                miss = P._row_cost(dict(r), inputs, enabled)
-                hit = P._row_cost(dict(r), inputs, enabled)
+                miss = U._row_cost(dict(r), inputs, enabled)
+                hit = U._row_cost(dict(r), inputs, enabled)
                 self.assertEqual(list(miss.keys()), list(want.keys()))
                 self.assertEqual(list(hit.keys()), list(want.keys()))
                 self.assertEqual(miss, want)
                 self.assertEqual(hit, want)
 
     def test_degenerate_rows_behave_exactly_as_before(self):
-        pricing = P._pricing_inputs(True)
+        pricing = U._pricing_inputs(True)
         for empty in (None, {}, []):
             self.assertEqual(
-                P._row_cost(empty, pricing, True),
+                U._row_cost(empty, pricing, True),
                 wb_pricing.cost_for_row(empty, details=False, enabled=True))
         # 字段不可哈希（坏行）：两边都从同一处抛 TypeError，记忆不抢先。
         bad = {"model": ["x"], "at": T0}
         with self.assertRaises(TypeError):
-            P._row_cost(bad, pricing, True)
+            U._row_cost(bad, pricing, True)
         with self.assertRaises(TypeError):
             wb_pricing.cost_for_row(bad, details=False, enabled=True)
         # 价表读不出来（_pricing_inputs 返回 None）时不进表，照旧现算。
-        self.assertEqual(P._row_cost(dict(self.rows[0]), None, True),
+        self.assertEqual(U._row_cost(dict(self.rows[0]), None, True),
                          wb_pricing.cost_for_row(dict(self.rows[0]),
                                                  details=False, enabled=True))
 

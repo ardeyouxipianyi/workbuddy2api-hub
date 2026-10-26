@@ -14,6 +14,7 @@ import time
 import random
 import wb_tasks
 import wb_quota_scan
+import wb_runtime
 import wb_settings
 from wb_tasks import do_cat_travel
 
@@ -29,21 +30,10 @@ DAILY_CHAT_ABANDONED_MAX = 8
 
 
 def _proxy_module():
-    """返回**正在运行的那一份** wb_proxy。
+    """正在运行的那一份 wb_proxy（见 wb_runtime）。"""
+    return wb_runtime.gateway()
 
-    网关以 `python[w] wb_proxy.py` 启动时，主模块名为 `__main__`；模块里裸写
-    `import wb_proxy` 会再加载一份副本，副本的 LOG_STORE 是 None、区域暂停状态
-    也是另一份。调度器写的每条日志都会掉进黑洞，巡检看到的 `hold` 恒为 0。
-    """
-    import sys
-    main = sys.modules.get("__main__")
-    if main is not None and hasattr(main, "add_log_entry") and hasattr(main, "LOG_BUFFER"):
-        return main
-    cached = sys.modules.get("wb_proxy")
-    if cached is not None:
-        return cached
-    import wb_proxy as module
-    return module
+
 # Token 保活的提前量：距离到期多久就该续。
 #
 # 这个值必须大于巡检间隔，否则到期时刻落在两次巡检之间时，只能等到过期之后

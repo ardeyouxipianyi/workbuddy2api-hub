@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const html = require('./_dashboard_source.js').dashboardHtml();
 const marker = '  var VARS = [';
 const start = html.indexOf(marker);
 assert.ok(start > 0, 'the colour tuner block moved; update this test marker');

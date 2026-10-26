@@ -10,7 +10,7 @@
 #
 # 做的事：
 #   1) 准备应用源码，校验版本号与 Makefile 的 PKG_VERSION 一致
-#   2) 只挑 wb_*.py + dashboard.html 同步进 wrt/openwrt/workbuddy2api/files/usr/lib/workbuddy2api/
+#   2) 只挑 wb_*.py + dashboard.html + assets/ 同步进 wrt/openwrt/workbuddy2api/files/usr/lib/workbuddy2api/
 #   3) 把 wrt/openwrt/workbuddy2api 拷进 SDK/package/
 #   4) make package/workbuddy2api/compile（-j1，低配机器/容器上更稳）
 #   5) 产物拷到 wrt/apk/workbuddy2api-<版本>-r<发布号>.apk 并打印 sha256
@@ -58,7 +58,7 @@ echo "    源码版本: ${DETECTED_VER:-未知}    Makefile: $MAKE_VER-r${PKG_RE
 
 # ---- 2. 同步进包目录 --------------------------------------------------------
 
-echo "==> 2/5 同步应用源码进包目录（只带 wb_*.py + dashboard.html）"
+echo "==> 2/5 同步应用源码进包目录（只带 wb_*.py + dashboard.html + assets/）"
 DST="$REPO/openwrt/workbuddy2api/files/usr/lib/workbuddy2api"
 rm -rf "$DST"
 mkdir -p "$DST"
@@ -66,6 +66,7 @@ for f in "$APP_SRC"/wb_*.py; do
 	cp "$f" "$DST/"
 done
 cp "$APP_SRC/dashboard.html" "$DST/"
+cp -R "$APP_SRC/assets" "$DST/assets"
 ls "$DST" | wc -l | xargs echo "    文件数:"
 
 # ---- 3. 拷进 SDK ------------------------------------------------------------

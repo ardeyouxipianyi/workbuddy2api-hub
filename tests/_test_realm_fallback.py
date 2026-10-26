@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy
 import wb_settings
+import _dashboard_source  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOUBLE_EXIT_MODEL = "deepseek-v4.1-flash"   # 两个出口都提供
@@ -202,8 +203,7 @@ class PanelTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(HERE, "dashboard.html"), encoding="utf-8") as fh:
-            cls.html = fh.read()
+        cls.html = _dashboard_source.dashboard_html()
 
     def test_switch_exists(self):
         self.assertIn('id="setRealmFallback"', self.html)

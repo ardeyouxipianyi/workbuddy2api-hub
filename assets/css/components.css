@@ -1,0 +1,107 @@
+.modal-mask{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);
+  backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px;z-index:100}
+.modal-mask.show{display:flex}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  width:min(620px,100%);max-height:88vh;overflow:auto;box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.05)}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--line)}
+.modal-hd h2{margin:0;font-size:15px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--fg)}
+.modal-x{background:none;border:none;color:var(--dim);font-size:22px;line-height:1;padding:0 4px;cursor:pointer}
+.modal-x:hover{color:var(--fg)}
+.modal-bd{padding:18px 20px}
+.modal-ft{padding:14px 20px;border-top:1px solid var(--line);display:flex;
+  justify-content:flex-end;gap:8px}
+.login-link{display:block;word-break:break-all;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:12px 0;
+  color:var(--accent);text-decoration:none;font-size:12px}
+.login-link:hover{border-color:var(--accent);background:var(--panel)}
+.hint{color:var(--dim);font-size:12px;margin:8px 0}
+/* 标题旁的「!」帮助标记：默认只是一个低调的圆圈，悬停/聚焦/展开时变亮。
+   说明文本放在旁边的 .help-detail 里，点它才展开（默认 hidden），所以不占
+   版面高度。只做点击展开，不再挂悬停气泡——点了就能看到说明，两个入口
+   同时出现反而挡视线。 */
+.help-mark{display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;border-radius:50%;border:1px solid var(--line2);
+  color:var(--dim);font-size:10px;font-weight:700;line-height:1;cursor:pointer;
+  vertical-align:1px;margin-left:4px;user-select:none;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.help-mark:hover,.help-mark:focus-visible{color:var(--accent);border-color:var(--accent);
+  background:var(--accent-soft);outline:none}
+.help-mark.open{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+.help-detail{font-size:12px;line-height:1.6;color:var(--dim);margin-top:6px;
+  padding:8px 10px;border-left:2px solid var(--accent);background:var(--panel2);
+  border-radius:0 8px 8px 0;max-width:760px}
+.help-detail[hidden]{display:none}
+.step{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
+.step .n{flex:0 0 20px;height:20px;border-radius:50%;background:var(--panel2);
+  border:1px solid var(--line);color:var(--dim);font-size:11px;display:flex;
+  align-items:center;justify-content:center}
+.step.active .n{border-color:var(--accent);background:rgba(37,99,235,.1);color:var(--accent);font-weight:700}
+.step.done .n{border-color:var(--accent2);background:rgba(22,163,74,.1);color:var(--accent2);font-weight:700}
+.step .t{font-size:13px}
+footer{color:var(--dim);font-size:12px;text-align:center;margin-top:28px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.key-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:16px 20px;margin-bottom:12px;box-shadow:var(--shadow);
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+.key-card:hover{border-color:var(--line-hover);box-shadow:var(--shadow-md)}
+.key-card.disabled{opacity:.75;background:var(--panel2)}
+.key-card-main{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+.key-action-btn{
+  display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:20px;
+  font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg);transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;box-shadow:var(--shadow-sm);
+}
+.key-action-btn:hover{background:var(--panel2);border-color:var(--line-hover)}
+.key-action-btn.danger{
+  color:var(--bad);border-color:rgba(181,71,59,.3);background:rgba(181,71,59,.04);
+}
+.key-action-btn.danger:hover{
+  background:var(--bad);color:#ffffff;border-color:var(--bad);
+}
+.realm-badge-intl{color:#2c6e9e;background:rgba(106,155,204,.14);border:1px solid rgba(106,155,204,.35);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.realm-badge-cn{color:#a03c32;background:rgba(201,100,66,.12);border:1px solid rgba(201,100,66,.32);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:var(--think-soft);color:var(--think);border:1px solid rgba(138,106,150,.3);font-weight:600}
+.realm-filter{display:inline-flex;gap:6px;margin-left:8px}
+.realm-filter button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:11px}
+.realm-filter button.active{border-color:var(--accent);color:var(--accent);background:var(--panel)}
+/* 账号页页头的版本视图切换：与顶部主菜单同一套胶囊外观，只是按版本着色——
+   国际版走强调色、国内版走红色，与网关页那两张卡片一眼能对上。 */
+.realm-switch{display:inline-flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;border:1px solid var(--line);flex:0 0 auto}
+.realm-switch button{background:transparent;border:1px solid transparent;color:var(--dim);padding:5px 13px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.realm-switch button:hover{color:var(--fg);background:var(--panel)}
+.realm-switch button.active{background:var(--panel);color:var(--accent);border-color:var(--accent);box-shadow:var(--shadow-sm);font-weight:600}
+.realm-switch button.active#accountsRealmCn{color:var(--bad);border-color:var(--bad)}
+
+.realm-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:12px 16px;box-shadow:var(--shadow);cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;
+  position:relative;display:flex;flex-direction:column;justify-content:space-between;min-height:84px;
+}
+.realm-card:hover{border-color:var(--line-hover);transform:translateY(-1px);box-shadow:var(--shadow-md)}
+/* 选中态：描边 + 淡色填充双通道。只靠 1px 描边在小屏或暗色下不够醒目，
+   填充色让「当前视图」一眼可辨（M3 selected-container 的做法）。 */
+.realm-card.active{
+  border-color:var(--accent);background:var(--accent-selected-bg);
+  box-shadow:0 0 0 1px var(--accent), var(--shadow-md);
+}
+.realm-card.active#tabCn{
+  border-color:var(--bad);background:var(--bad-selected-bg);box-shadow:0 0 0 1px var(--bad), var(--shadow-md);
+}
+.realm-card.gateway-ctrl{
+  background:var(--panel2);cursor:default;border-color:var(--line);
+}
+.realm-card.gateway-ctrl:hover{transform:none;border-color:var(--line);box-shadow:var(--shadow)}
+.toggle-realm-btn{
+  background:var(--panel);border:1px solid var(--accent);color:var(--accent);
+  padding:8px 18px;font-size:13px;font-weight:600;border-radius:8px;box-shadow:var(--shadow-sm);cursor:pointer;
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+.toggle-realm-btn:hover{background:var(--panel2);box-shadow:var(--shadow-md)}
+/* 合并布局下版本切换插在区块之间，是网格里一个裸元素：给它留出与区块同样的间距，
+   否则贴着下面的区块边框。拆分布局里它在页头右侧，不受影响。 */
+.page-nav-body > #accountsRealmSwitch{margin:4px 0 12px;align-self:flex-start}

@@ -20,6 +20,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
+import _dashboard_source  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -91,15 +92,13 @@ class DashboardWiringTests(unittest.TestCase):
     """看板接线的结构断言（渲染细节由 JS 套件钉）。"""
 
     def test_dashboard_has_note_editing(self):
-        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
-            html = fh.read()
+        html = _dashboard_source.dashboard_html()
         self.assertIn("editAccountNote", html)
         self.assertIn("{uid: uid, note: next}", html)
         self.assertIn("+ 备注", html)
 
     def test_dashboard_sorts_note_accounts_first(self):
-        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
-            html = fh.read()
+        html = _dashboard_source.dashboard_html()
         self.assertIn("const nx = x[0].note ? 0 : 1, ny = y[0].note ? 0 : 1;", html)
 
 

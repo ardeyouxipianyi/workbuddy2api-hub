@@ -51,6 +51,7 @@ os.environ["ACCOUNTS_DIR"] = ACCOUNTS_DIR
 
 import wb_pricing                                                   # noqa: E402
 import wb_proxy as P                                                # noqa: E402
+import wb_usage as U  # noqa: E402
 import wb_settings                                                  # noqa: E402
 
 wb_pricing.set_data_dir(USAGE_DIR)
@@ -62,7 +63,7 @@ TIMELINE_FILE = wb_pricing.timeline_path()
 PRICING_FILE = os.path.join(_TMP, "pricing.json")
 os.environ["WB_PRICING_FILE"] = PRICING_FILE
 # 快照载荷里带着进程自己的 _usage["started"]：冻结它让各次折叠可比。
-P._usage["started"] = FROZEN
+U._usage["started"] = FROZEN
 
 PASS = FAIL = 0
 
@@ -150,28 +151,28 @@ def rewrite_policies(rows):
 
 def clear_states():
     """清掉五个聚合的状态、TTL 缓存与 checkpoint 读记忆（模拟一次重启）。"""
-    P._usage_snap_state.clear()
-    P._snap_cache.clear()
-    P._analytics_state.clear()
-    P._analytics_cache.clear()
-    P._series_cache.clear()
-    P._series_state.clear()
-    P._perf_cache.clear()
-    P._count_cache.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None,
+    U._usage_snap_state.clear()
+    U._snap_cache.clear()
+    U._analytics_state.clear()
+    U._analytics_cache.clear()
+    U._series_cache.clear()
+    U._series_state.clear()
+    U._perf_cache.clear()
+    U._count_cache.clear()
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None,
                             "tail": b""})
-    P._row_day_memo.clear()
-    P._row_cost_memo.clear()
-    P._usage_cache_forget()
-    P._usage_cache_progress.clear()
-    P._usage_cache_checkpointed.clear()
+    U._row_day_memo.clear()
+    U._row_cost_memo.clear()
+    U._usage_cache_forget()
+    U._usage_cache_progress.clear()
+    U._usage_cache_checkpointed.clear()
 
 
 def clear_cache_files():
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         try:
-            os.unlink(P._usage_cache_kind_path(kind))
+            os.unlink(U._usage_cache_kind_path(kind))
         except OSError:
             pass
 
@@ -277,14 +278,14 @@ def build_tables(bf_at=T0 + 5000, include_bf=True):
 # --------------------------------------------------------------------------
 def snap_payload():
     """快照载荷（三个 realm 视图都覆盖；都是无窗口的 all-time 折叠）。"""
-    return {"snap": P._usage_snapshot_uncached(),
-            "snap_intl": P._usage_snapshot_uncached(realm="intl"),
-            "snap_cn": P._usage_snapshot_uncached(realm="cn")}
+    return {"snap": U._usage_snapshot_uncached(),
+            "snap_intl": U._usage_snapshot_uncached(realm="intl"),
+            "snap_cn": U._usage_snapshot_uncached(realm="cn")}
 
 
 def analytics_payload():
-    return {"analytics": P._compute_usage_analytics_uncached(),
-            "analytics_intl": P._compute_usage_analytics_uncached(realm="intl")}
+    return {"analytics": U._compute_usage_analytics_uncached(),
+            "analytics_intl": U._compute_usage_analytics_uncached(realm="intl")}
 
 
 def payload():
@@ -312,8 +313,8 @@ class Counters(object):
         self._saved = None
 
     def __enter__(self):
-        real_snap = P._fold_usage_snapshot
-        real_an = P._fold_usage_analytics
+        real_snap = U._fold_usage_snapshot
+        real_an = U._fold_usage_analytics
         real_cost = wb_pricing.cost_for_row
         counts = self.counts
 
@@ -330,13 +331,13 @@ class Counters(object):
             return real_cost(*args, **kwargs)
 
         self._saved = (real_snap, real_an, real_cost)
-        P._fold_usage_snapshot = fold_snap
-        P._fold_usage_analytics = fold_an
+        U._fold_usage_snapshot = fold_snap
+        U._fold_usage_analytics = fold_an
         wb_pricing.cost_for_row = cost
         return self
 
     def __exit__(self, *exc):
-        P._fold_usage_snapshot, P._fold_usage_analytics, wb_pricing.cost_for_row = self._saved
+        U._fold_usage_snapshot, U._fold_usage_analytics, wb_pricing.cost_for_row = self._saved
         return False
 
     def reset(self):
@@ -345,7 +346,7 @@ class Counters(object):
 
 
 def state_of(realm=None):
-    return P._usage_snap_state[realm]["pricing"]
+    return U._usage_snap_state[realm]["pricing"]
 
 
 def refolded(counters):
@@ -365,7 +366,7 @@ KEPT = canon(payload())
 CHECKPOINT_RECORD = state_of()
 check("收窄后判定：记录是七字段的新形状",
       isinstance(CHECKPOINT_RECORD, dict)
-      and set(CHECKPOINT_RECORD) == set(P._PRICED_FIELDS), CHECKPOINT_RECORD)
+      and set(CHECKPOINT_RECORD) == set(U._PRICED_FIELDS), CHECKPOINT_RECORD)
 check("记录里 refs 收下了解析出来的 pid（显式引用 + 时间线解析）",
       set(CHECKPOINT_RECORD["refs"]) == {PID_REF, PID_OLD, PID_BF},
       CHECKPOINT_RECORD["refs"])
@@ -381,12 +382,12 @@ check("记录里 builtin 有内置价目表的摘要",
       and CHECKPOINT_RECORD["timeline"] is not None, CHECKPOINT_RECORD)
 
 # 收窄前的判定：任何一次请求都当价表变了（最激进的判废），数值必须一字不差。
-_real_used = P._pricing_used_unchanged
-P._pricing_used_unchanged = lambda record, pricing: False
+_real_used = U._pricing_used_unchanged
+U._pricing_used_unchanged = lambda record, pricing: False
 try:
     REFOLDED = canon(payload())
 finally:
-    P._pricing_used_unchanged = _real_used
+    U._pricing_used_unchanged = _real_used
 check("每次都判废（重折）时折出的载荷与保留状态时逐字节相同",
       KEPT == REFOLDED, first_diff(KEPT, REFOLDED))
 
@@ -550,7 +551,7 @@ def cache_env_nowrite():
 
 
 def kind_entry(kind, realm=None):
-    with io.open(P._usage_cache_kind_path(kind), encoding="utf-8") as fh:
+    with io.open(U._usage_cache_kind_path(kind), encoding="utf-8") as fh:
         data = json.load(fh)
     for entry in data["entries"]:
         if entry.get("realm") == realm:
@@ -559,7 +560,7 @@ def kind_entry(kind, realm=None):
 
 
 def save_kind(kind, data):
-    with io.open(P._usage_cache_kind_path(kind), "w", encoding="utf-8",
+    with io.open(U._usage_cache_kind_path(kind), "w", encoding="utf-8",
                  newline="\n") as fh:
         fh.write(json.dumps(data, ensure_ascii=False))
 
@@ -572,12 +573,12 @@ GOLDEN = canon(payload())
 _snap_file, _snap_entry = kind_entry("snapshot", None)
 _an_file, _an_entry = kind_entry("analytics", None)
 check("落盘的 snapshot 条目带新形状的 pricing 记录",
-      P._pricing_record_ok(_snap_entry["pricing"]), _snap_entry["pricing"])
+      U._pricing_record_ok(_snap_entry["pricing"]), _snap_entry["pricing"])
 check("落盘的 analytics 条目带新形状的 pricing 记录",
-      P._pricing_record_ok(_an_entry["pricing"]), _an_entry["pricing"])
+      U._pricing_record_ok(_an_entry["pricing"]), _an_entry["pricing"])
 check("新记录随状态一起过判定（不改磁盘也能通过）",
-      P._pricing_used_unchanged(
-          _snap_entry["pricing"], P._pricing_inputs(True)), None)
+      U._pricing_used_unchanged(
+          _snap_entry["pricing"], U._pricing_inputs(True)), None)
 check("顶层 schema 是 5", _snap_file.get("schema") == 5, _snap_file.get("schema"))
 check("记录很小（几十个 pid + 几个模型名，序列化后 < 1KB）",
       len(json.dumps(_snap_entry["pricing"], ensure_ascii=False)) < 1024,
@@ -592,9 +593,9 @@ check("重启后采纳 checkpoint：零重折",
       counters.counts)
 check("采纳后的载荷与冷折逐字节一致", got == GOLDEN, first_diff(GOLDEN, got))
 check("五类状态里的 snapshot / analytics 确实被采用",
-      P._usage_cache_checkpointed.get("snapshot", 0) > 0
-      and P._usage_cache_checkpointed.get("analytics", 0) > 0,
-      dict(P._usage_cache_checkpointed))
+      U._usage_cache_checkpointed.get("snapshot", 0) > 0
+      and U._usage_cache_checkpointed.get("analytics", 0) > 0,
+      dict(U._usage_cache_checkpointed))
 
 # 旧形状的 pricing 字段（v4 的 ["on", d1, d2, d3]）→ 拒
 _snap_file, _snap_entry = kind_entry("snapshot", None)

@@ -25,6 +25,8 @@ sys.path.insert(0, ROOT)
 from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 
 import wb_proxy as proxy          # noqa: E402
+
+import wb_models as MC  # noqa: E402
 import wb_settings as settings    # noqa: E402
 
 API_KEY = {"name": "client key", "key": "sk-client-abc", "enabled": True}

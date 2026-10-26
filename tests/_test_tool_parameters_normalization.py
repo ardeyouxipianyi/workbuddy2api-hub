@@ -30,6 +30,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402
 _TMP = isolated_data_dirs("wb-tool-params-norm-")
 
 import wb_proxy as P
+import wb_transforms as T
 
 PASS = FAIL = 0
 
@@ -46,14 +47,14 @@ def check(label, cond, extra=""):
 
 print("[1] Zero-argument tool parameters: {} gain type: object and properties: {}")
 fn = {"name": "get_time", "description": "time", "parameters": {}}
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 check("type is object", fn["parameters"].get("type") == "object", fn["parameters"])
 check("properties is dict", isinstance(fn["parameters"].get("properties"), dict), fn["parameters"])
 
 print()
 print("[2] Missing type with properties gains type: object")
 fn = {"name": "search", "parameters": {"properties": {"q": {"type": "string"}}}}
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 check("type added", fn["parameters"].get("type") == "object", fn["parameters"])
 check("properties preserved", "q" in fn["parameters"].get("properties", {}), fn["parameters"])
 
@@ -61,22 +62,22 @@ print()
 print("[3] None or non-dict parameters normalized to valid object schema")
 for val in (None, [], "str", True):
     fn = {"name": "test", "parameters": val}
-    P._normalize_tool_parameters(fn)
+    T._normalize_tool_parameters(fn)
     check("val=%r -> valid schema" % (val,),
           fn["parameters"] == {"type": "object", "properties": {}}, fn["parameters"])
 
 print()
 print("[4] required field cleaned up")
 fn = {"name": "t1", "parameters": {"type": "object", "properties": {"a": {}}, "required": None}}
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 check("required None dropped", "required" not in fn["parameters"], fn["parameters"])
 
 fn = {"name": "t2", "parameters": {"type": "object", "properties": {"a": {}}, "required": "a"}}
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 check("required string wrapped into list", fn["parameters"].get("required") == ["a"], fn["parameters"])
 
 fn = {"name": "t3", "parameters": {"type": "object", "properties": {"a": {}, "b": {}}, "required": ["a", None, "b"]}}
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 check("required list filtered None", fn["parameters"].get("required") == ["a", "b"], fn["parameters"])
 
 print()
@@ -143,7 +144,7 @@ tool_calls = [
         "function": {"name": "fn6", "arguments": True}
     }
 ]
-res = P.sanitize_tool_calls(tool_calls)
+res = T.sanitize_tool_calls(tool_calls)
 check("dict arguments converted to JSON string", res[0]["function"]["arguments"] == '{"city": "Beijing"}', res[0]["function"]["arguments"])
 check("None arguments converted to empty JSON object", res[1]["function"]["arguments"] == "{}", res[1]["function"]["arguments"])
 check("string arguments untouched", res[2]["function"]["arguments"] == '{"city":"Shanghai"}', res[2]["function"]["arguments"])
@@ -166,7 +167,7 @@ fn = {
         }
     }
 }
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 p = fn["parameters"]
 check("dict mapped to object", p.get("type") == "object", p)
 check("int mapped to integer", p["properties"]["a"].get("type") == "integer", p)
@@ -196,7 +197,7 @@ fn = {
         }
     }
 }
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 p = fn["parameters"]
 check("top_val description stripped", "description" not in p["properties"]["top_val"], p)
 check("top_val title stripped", "title" not in p["properties"]["top_val"], p)
@@ -217,7 +218,7 @@ fn = {
         }
     }
 }
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 p = fn["parameters"]
 check("items converted to dict", isinstance(p["properties"]["coords"]["items"], dict), p)
 check("items type preserved", p["properties"]["coords"]["items"].get("type") == "number", p)
@@ -242,7 +243,7 @@ fn = {
         }
     }
 }
-P._normalize_tool_parameters(fn)
+T._normalize_tool_parameters(fn)
 p = fn["parameters"]
 check("$defs Config type mapped to object", p["$defs"]["Config"].get("type") == "object", p)
 check("$defs timeout type mapped to integer", p["$defs"]["Config"]["properties"]["timeout"].get("type") == "integer", p)

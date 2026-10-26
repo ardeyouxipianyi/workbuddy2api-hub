@@ -22,6 +22,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
+import _dashboard_source  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -125,8 +126,7 @@ class SetDisabledModelsTests(unittest.TestCase):
 
 class DashboardWiringTests(unittest.TestCase):
     def test_dashboard_has_denylist_editing(self):
-        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
-            html = fh.read()
+        html = _dashboard_source.dashboard_html()
         self.assertIn("editAccountDisabledModels", html)
         self.assertIn("{uid: uid, disabledModels: denyList}", html)
         self.assertIn("+ 禁用模型", html)
@@ -134,8 +134,7 @@ class DashboardWiringTests(unittest.TestCase):
 
     def test_dashboard_uses_a_checkbox_picker_not_a_prompt(self):
         """面板用「启用的模型」复选框列表：默认全选，取消勾选 = 禁用。"""
-        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
-            html = fh.read()
+        html = _dashboard_source.dashboard_html()
         # 默认全选：勾选状态 = 不在禁用名单里
         self.assertIn("const picked = new Set(models.filter(m => !denied.has(m)));", html)
         # 取消勾选 -> 落进禁用名单
@@ -147,8 +146,7 @@ class DashboardWiringTests(unittest.TestCase):
         self.assertIn("'#mdmNone'", html)
 
     def test_dashboard_reads_the_field_from_the_payload(self):
-        with open(os.path.join(ROOT, "dashboard.html"), encoding="utf-8") as fh:
-            html = fh.read()
+        html = _dashboard_source.dashboard_html()
         self.assertIn("a.disabledModels || []", html)
 
 

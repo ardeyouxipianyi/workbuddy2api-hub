@@ -15,9 +15,10 @@ import datetime
 import json
 import os
 import re
-import sys
 import threading
 import time
+
+import wb_runtime
 
 HISTORY_NAME = "activity_history.jsonl"
 
@@ -91,11 +92,8 @@ def history_path():
 
 
 def _gateway():
-    """真正在跑的那个网关模块（容器里是 `python wb_proxy.py`，即 __main__）。"""
-    main = sys.modules.get("__main__")
-    if main is not None and hasattr(main, "log"):
-        return main
-    return sys.modules.get("wb_proxy")
+    """真正在跑的那个网关模块（见 wb_runtime）。"""
+    return wb_runtime.gateway()
 
 
 def _log(message):

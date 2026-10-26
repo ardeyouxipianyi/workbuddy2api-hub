@@ -32,6 +32,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 import wb_accounts
 import wb_settings
 import wb_proxy as P
+import wb_usage as U
 
 
 def row(at, account, model, tokens, credit=0.0, outcome="completed"):
@@ -43,8 +44,8 @@ def row(at, account, model, tokens, credit=0.0, outcome="completed"):
 
 
 def reset_cache():
-    with P._daily_usage_lock:
-        P._daily_usage.update({"day": "", "totals": None, "credits": None,
+    with U._daily_usage_lock:
+        U._daily_usage.update({"day": "", "totals": None, "credits": None,
                                "models": None, "offset": 0, "at": 0.0})
 
 
@@ -82,7 +83,7 @@ class DailyUsageFoldTests(unittest.TestCase):
         reset_cache()
 
     def test_scan_folds_credits_and_per_model_tokens(self):
-        midnight = P._local_midnight()
+        midnight = U._local_midnight()
         rows = [
             row(midnight - 3600, "acct-A", "gpt-6-astra", 1000, credit=99.0),
             row(midnight + 60, "acct-A", "gpt-6-astra", 1000, credit=30.5),
@@ -94,7 +95,7 @@ class DailyUsageFoldTests(unittest.TestCase):
         with io.open(P.USAGE_LOG, "w", encoding="utf-8") as fh:
             for r in rows:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-        stats = P.daily_usage_stats(ttl=0)
+        stats = U.daily_usage_stats(ttl=0)
         # Yesterday's rows stay out, and a cancellation is not a consumed
         # request - neither its tokens nor its credit count.
         self.assertEqual(stats["tokens"], {"acct-A": 1500, "acct-B": 700})
@@ -104,7 +105,7 @@ class DailyUsageFoldTests(unittest.TestCase):
             "acct-B": {"hy4-preview": 700},
         })
         # The original reader keeps its shape for existing callers.
-        self.assertEqual(P.daily_tokens_by_account(ttl=0),
+        self.assertEqual(U.daily_tokens_by_account(ttl=0),
                          {"acct-A": 1500, "acct-B": 700})
 
         # The fold resumes from its byte offset: a row appended after the
@@ -112,7 +113,7 @@ class DailyUsageFoldTests(unittest.TestCase):
         with io.open(P.USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row(midnight + 300, "acct-B", "glm-5.3", 100,
                                     credit=1.5)) + "\n")
-        stats = P.daily_usage_stats(ttl=0)
+        stats = U.daily_usage_stats(ttl=0)
         self.assertEqual(stats["tokens"]["acct-B"], 800)
         self.assertEqual(stats["credits"]["acct-B"], 4.0)
         self.assertEqual(stats["models"]["acct-B"], {"hy4-preview": 700, "glm-5.3": 100})
@@ -291,7 +292,7 @@ class CreditGuardPoolTests(unittest.TestCase):
 
 class FreeModelViewTests(unittest.TestCase):
     def test_free_table_is_built_per_realm_from_the_catalogue(self):
-        view = P.free_models_by_realm()
+        view = U.free_models_by_realm()
         # The bundled snapshot marks this one free on the international exit;
         # the domestic catalogue carries it as paid, so it must not appear
         # there - the same id, two answers.
@@ -301,11 +302,11 @@ class FreeModelViewTests(unittest.TestCase):
         self.assertIn("hy4-preview-f", view["cn"])
         # A paid id is in neither table.
         self.assertNotIn("gpt-6-astra", view["intl"])
-        self.assertTrue(P.credits_is_free("x0.00"))
-        self.assertTrue(P.credits_is_free(" x0.00 "))
-        self.assertFalse(P.credits_is_free("x0.34 credits"))
-        self.assertFalse(P.credits_is_free(""))
-        self.assertFalse(P.credits_is_free(None))
+        self.assertTrue(U.credits_is_free("x0.00"))
+        self.assertTrue(U.credits_is_free(" x0.00 "))
+        self.assertFalse(U.credits_is_free("x0.34 credits"))
+        self.assertFalse(U.credits_is_free(""))
+        self.assertFalse(U.credits_is_free(None))
 
 
 if __name__ == "__main__":

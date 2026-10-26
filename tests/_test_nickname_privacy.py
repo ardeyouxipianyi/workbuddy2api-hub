@@ -400,8 +400,13 @@ class SourceLevelTest(unittest.TestCase):
     """把「哪个出口该用哪个 hook」钉在源码上，防止将来被人改回去。"""
 
     def setUp(self):
-        with open(os.path.join(REPO, "wb_proxy.py"), encoding="utf-8") as fh:
-            self.src = fh.read()
+        # Handler methods live in wb_proxy.py and the wb_routes_*.py mixins.
+        parts = []
+        for name in sorted(os.listdir(REPO)):
+            if name == "wb_proxy.py" or (name.startswith("wb_routes_") and name.endswith(".py")):
+                with open(os.path.join(REPO, name), encoding="utf-8") as fh:
+                    parts.append(fh.read())
+        self.src = "\n".join(parts)
 
     def _body(self, name):
         start = self.src.index("    def %s(" % name)

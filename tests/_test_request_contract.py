@@ -11,6 +11,8 @@ from _isolated_dirs import isolated_data_dirs
 
 _TMP = isolated_data_dirs("wb-request-contract-")
 import wb_proxy as P
+import wb_translate as X
+import wb_transforms as T
 
 FLAG = "WB_PRESERVE_REQUEST_CONTRACT"
 SCHEMA = {"type": "object", "properties": {"code": {"type": "integer"}},
@@ -43,15 +45,15 @@ class RequestContractTests(unittest.TestCase):
 
     def test_default_is_off(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(P.preserve_request_contract_enabled())
+            self.assertFalse(T.preserve_request_contract_enabled())
 
     def test_flag_spellings(self):
         for value in ("1", "true", "YES", " on "):
             with self.subTest(value=value), mock.patch.dict(os.environ, {FLAG: value}):
-                self.assertTrue(P.preserve_request_contract_enabled())
+                self.assertTrue(T.preserve_request_contract_enabled())
         for value in ("0", "false", "", "no", "typo"):
             with self.subTest(value=value), mock.patch.dict(os.environ, {FLAG: value}):
-                self.assertFalse(P.preserve_request_contract_enabled())
+                self.assertFalse(T.preserve_request_contract_enabled())
 
     def test_json_schema_mapping_and_wire_body(self):
         fmt = {"type": "json_schema", "name": "fixture", "description": "fixture schema",
@@ -105,24 +107,24 @@ class RequestContractTests(unittest.TestCase):
     def test_nested_namespace_strict_is_already_preserved(self):
         for value in ("0", "1"):
             with self.subTest(value=value), mock.patch.dict(os.environ, {FLAG: value}):
-                flat, mapping = P.expand_namespace_tools(self.namespace(False, nested=True))
+                flat, mapping = X.expand_namespace_tools(self.namespace(False, nested=True))
                 self.assertIs(flat[0]["strict"], False)
                 self.assertEqual(mapping, {"lookup_fixture": "fixture"})
 
     def test_namespace_missing_strict_stays_missing(self):
         tools = self.namespace()
         del tools[0]["tools"][0]["strict"]
-        self.assertNotIn("strict", P.expand_namespace_tools(tools)[0][0])
+        self.assertNotIn("strict", X.expand_namespace_tools(tools)[0][0])
 
     def test_namespace_does_not_mutate_request(self):
         tools = self.namespace()
         before = copy.deepcopy(tools)
-        P.expand_namespace_tools(tools)
+        X.expand_namespace_tools(tools)
         self.assertEqual(tools, before)
 
     def test_legacy_namespace_flat_strict_is_unchanged(self):
         with mock.patch.dict(os.environ, {FLAG: "0"}):
-            self.assertNotIn("strict", P.expand_namespace_tools(self.namespace())[0][0])
+            self.assertNotIn("strict", X.expand_namespace_tools(self.namespace())[0][0])
 
     def test_tool_arguments_and_results_are_exact(self):
         messages = self.tool_turn()
@@ -144,7 +146,7 @@ class RequestContractTests(unittest.TestCase):
     def test_object_arguments_are_still_serialized_when_preserving(self):
         """#446 and this flag must not cancel each other out."""
         calls = [{"function": {"name": "fixture", "arguments": {"code": 11 - 128}}}]
-        out = P.sanitize_tool_calls(calls)
+        out = T.sanitize_tool_calls(calls)
         self.assertEqual(out[0]["function"]["arguments"], '{"code": -117}')
 
     def test_legacy_function_result_preserved(self):
@@ -170,7 +172,7 @@ class RequestContractTests(unittest.TestCase):
 
     def test_malformed_tool_calls_remain_tolerated(self):
         for calls in (None, [], "fixture", [None, {}]):
-            self.assertEqual(P.sanitize_tool_calls(calls), calls)
+            self.assertEqual(T.sanitize_tool_calls(calls), calls)
 
 
 if __name__ == "__main__":

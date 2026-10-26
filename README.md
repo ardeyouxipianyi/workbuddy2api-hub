@@ -176,19 +176,32 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 209 个套件：156 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - 226 个套件：167 个 Python + 59 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：157 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 212 个套件：158 个 Python + 54 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
-- 211 个套件：158 个 Python + 53 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
+- 看板套件通过 `tests/_dashboard_source.js`（Python 套件用 `tests/_dashboard_source.py`）读取页面：它把 `assets/` 下的样式与脚本按页面加载顺序拼回去，直接读 `dashboard.html` 只能看到外链标签。
+
+### 7. 代码结构
+
+后端按职责分层，`wb_proxy.py` 只保留运行态（账号池、目录、CLI）、HTTP 入口与上游调用：
+
+| 模块 | 职责 |
+|---|---|
+| `wb_proxy.py` | 启动、运行态全局量、`Handler` 的协议路由（chat / responses / messages / 面板基础路由）、上游连接与重试 |
+| `wb_routes_settings.py` / `wb_routes_accounts.py` / `wb_routes_agents.py` / `wb_routes_ops.py` | `Handler` 的面板路由 mixin：设置、账号池、一键配置、任务/更新/代理槽 |
+| `wb_translate.py` | Responses API、Anthropic Messages 与 Chat Completions 互转，网关代跑的网页工具 |
+| `wb_transforms.py` | 请求修复：指纹清洗、工具调用配对、DSML 解析、参数归一 |
+| `wb_wire.py` | SSE 读取、usage 缓存字段归一、token 估算等无状态原语 |
+| `wb_usage.py` | `usage.jsonl` 记账与所有统计（快照、看板、时序、剩余用量、聚合缓存） |
+| `wb_models.py` | 模型目录：远程配置、本机配置、缓存与每日刷新 |
+| `wb_runtime.py` | 取得正在运行的网关模块（以脚本启动时它是 `__main__`，不能再 `import wb_proxy`） |
+
+拆出去的模块用 `_gw()`（即 `wb_runtime.gateway()`）在调用时读取网关运行态，因为 CLI 会在导入后改写这些全局量。测试打桩按「调用方在哪儿查这个名字」选目标：模块内部调用的函数打在该模块上，`Handler` 调用的打在 `wb_proxy` 上。
+
+前端 `dashboard.html` 只放页面结构与两段必须在首帧前执行的内联脚本（面板闸门、主题与页签），其余由 `/assets/` 路由提供：
+
+- `assets/css/`：`base`（主题令牌与基础排版）、`tables`、`accounts`、`components`、`layout`（顶栏与页内导航）、`logs`、`mobile`（≤640px / ≤400px）、`analytics`、`select`、`tuner`。
+- `assets/js/`：按功能分文件的经典脚本，共享同一个全局作用域、按页面中的顺序加载；`boot.js` 必须最后加载，因为它启动面板时会用到前面所有文件定义的状态。新增文件要同时登记到 `dashboard.html` 与 `release/portable.txt`（有测试核对）。
 
 ---
 
@@ -494,6 +507,9 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 - **v1.8.0 发布**：汇总 v1.7.33 之后的 #640、#642、#643、#645/#647，并补齐 #578、#618、#625 的发布记录。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v180)**；下一版的改动继续写在本段。
+- **看板手机端适配整理，数据看板改用全局主题令牌**：手机（≤640px）上两行高的顶栏不再吸顶，只保留页内区块导航吸顶，可视区多出约 110px；按钮、下拉、输入框统一不低于 36px（行内小按钮 32px、勾选框 20px），按钮文字不再折成两行；数据看板 KPI 由三列 100px 改为两列，时间范围按钮独占一行铺满，标题不再被挤出屏幕。数据看板原先另有一套写死的调色板，切到 Material / MiuiX 风格时靠脚本逐项复制，部分颜色（热力图、图表）跟不上；现在直接引用全局令牌，主题与深浅色切换自动生效。同时删除已无对应元素的旧时序图绘制函数与约 30 条失效样式，补齐 `--blue` / `--mono`，修正引用不存在的 `--ok`。 / Phone layout cleanup and shared theme tokens for the analytics page: on phones (≤640px) the two-row header no longer sticks, only the in-page section nav does (about 110px more viewport); buttons, selects and inputs are at least 36px tall (inline mini buttons 32px, checkboxes 20px) and button labels no longer wrap; analytics KPIs use two columns instead of three 100px ones, the range buttons get their own full-width row and the title no longer gets pushed off screen. The analytics page used to carry its own hard-coded palette that a script copied over on every style switch, and some colours (heatmap, charts) lagged behind under Material / MiuiX; it now references the global tokens directly. Also removed the legacy time-series renderer whose canvas no longer exists and about 30 dead style rules, added `--blue` / `--mono`, and fixed references to the undefined `--ok`.
+- **修复区块双滚动条，统一交互细节**：「面板窗口限高」默认值由 640px 改为 0（不限）：区块随页面滚动，不再出现「区块一根、表格一根」的双纵向滚动条；手动设了限高时，区块内的表格容器也只保留横向滚动。另外：全站按钮/输入框的过渡只作用于颜色、边框、阴影与位移（原来 `transition: all` 连布局属性一起动），统一键盘焦点环与输入框聚焦高亮，切换页签加 180ms 淡入（系统开启「减少动态效果」时关闭），合并布局下的「国际版 / 国内版」切换与下方区块留出间距。已存过限高的安装保持原值。 / Fix the double scrollbars and tidy interaction details: the panel window height cap now defaults to 0 (no cap) instead of 640px, so sections scroll with the page instead of showing one scrollbar for the section and another for the table inside it; with a cap set, tables inside a section only scroll sideways. Also: transitions on buttons and inputs now cover colour, border, shadow and transform only (they used `transition: all`, which animated layout too), one keyboard focus ring and input focus highlight across the panel, a 180ms fade when switching tabs (off under reduced motion), and spacing below the international / China switch in the merged layout. Installs that already saved a cap keep it.
+- **代码分层重构（行为不变）**：`wb_proxy.py` 从约 2.3 万行拆到约 7600 行，记账统计、模型目录、协议互转、请求修复、面板路由分别移入 `wb_usage` / `wb_models` / `wb_translate` / `wb_transforms` / `wb_wire` / `wb_routes_*`，模块职责见「一、快速启动 → 7. 代码结构」。`dashboard.html` 从约 1.8 万行拆成页面结构 + `assets/css`（10 个）+ `assets/js`（23 个），由新的 `/assets/` 路由提供（只认 `css/`、`js/` 两个目录与固定文件名形状，带 ETag 回源校验）。顺带修掉：同一份按 Key 并发计数器被定义了两次（后一份在导入时覆盖前一份）；`NON_ACCOUNT_FILES` 重复定义；四处各写一份的「找正在运行的网关模块」合并为 `wb_runtime.gateway()`；色彩配置在未自定义时也把深色值写进看板页，导致浅色模式下数据看板仍是深色，现在只有改过颜色才挂覆盖层，且覆盖层对主题风格同样生效。Docker、便携包清单（含 app 档位）与 OpenWrt apk/ipk 打包都已带上 `assets/`；新增的 `assets/` 文件由测试核对是否已登记进清单。 / Layered refactor, no behaviour change: `wb_proxy.py` went from about 23k lines to about 7.6k; usage accounting, the model catalogue, protocol translation, request repairs and the panel routes moved into `wb_usage` / `wb_models` / `wb_translate` / `wb_transforms` / `wb_wire` / `wb_routes_*` (see "Quick start → 7. Code layout"). `dashboard.html` went from about 18k lines to the page markup plus `assets/css` (10 files) and `assets/js` (23 files), served by a new `/assets/` route (only the `css/` and `js/` folders and a fixed file-name shape, revalidated with an ETag). Fixed along the way: the per-key concurrency tracker was defined twice (the second copy replaced the first at import); `NON_ACCOUNT_FILES` was defined twice; four separate "find the running gateway module" helpers are now one `wb_runtime.gateway()`; the colour tuner wrote dark values onto the analytics page even when nothing was customised, so the analytics page stayed dark in light mode - the override is now only installed after a colour is changed, and it also wins over the theme style. Docker, the portable manifest (including the app profile) and the OpenWrt apk/ipk packaging ship `assets/`; a test checks every file under `assets/` is listed in the manifest.
 - **修正 CN 专属模型判定，并给 OpenCode 写入真实上下文上限**（#618 / #625）：`minimax-` 曾被当成整个模型家族的 CN 专属前缀，于是国际版也提供的 `minimax-m3.1-flash` 被本地 400 拦下。现在只保留确定的 CN 独占项（`deepseek-v4-pro*` 与显式 `minimax-m3`），同族其他模型按出口实际目录判断。OpenCode 一键配置此前只写空的模型条目，客户端只能回落到自己的 200k 默认值；现在把网关目录中的 `context_window` / `max_output` 写进 `limit.context` / `limit.output`，没有规格的条目仍保持空对象。新增回归覆盖。 / Narrow the China-only model gate and give OpenCode the real context limit (#618 / #625): `minimax-` used to mark the whole family as CN-exclusive, so the globally served `minimax-m3.1-flash` was refused locally with a 400. Only the confirmed China-only entries remain (`deepseek-v4-pro*` and the explicit `minimax-m3`); other members of the family follow the actual catalogue of the selected exit. OpenCode's one-click config used to write empty model entries, so it fell back to its own 200k default; the gateway's catalogue `context_window` / `max_output` now go into `limit.context` / `limit.output`, while entries without specs stay empty objects. Regression coverage added.
 - **流式回复在真实静默期发送 SSE 心跳**（#578）：上游思考期间可能长时间一个字节都不发，而客户端会把静默误判为断流；只在每次阻塞读之前检查心跳，恰好无法覆盖它。Chat、Responses 与 Anthropic Messages 三条流式路径现在共用后台 `SSEHeartbeat`：每 15 秒无写入就发送合法的 `: keepalive` 注释帧，与业务帧共用锁，保证不会截断 JSON；响应正常时不会多插帧，流结束后线程立即停止。新增 `tests/_test_stream_keepalive.py`（9 项，含读线程阻塞期间仍收到心跳与并发写入完整性），并复跑流式 id、usage 帧、断流错误帧与重试套件。 / Keep SSE streams alive through real upstream silence (#578): while the model is thinking the upstream may send nothing for longer than the client's idle window, and checking a heartbeat only before the next blocking read cannot cover that gap. Chat, Responses and Anthropic Messages now share a background `SSEHeartbeat`: after 15 idle seconds it writes a valid `: keepalive` comment frame under the same lock as application writes, so JSON frames cannot be split; responsive streams gain no extra frames and the thread stops as soon as the stream ends. Added `tests/_test_stream_keepalive.py` (9 checks, including heartbeat delivery while the reader is blocked and write integrity under contention), and re-ran the stream id, usage-frame, abort-frame and retry suites.
 

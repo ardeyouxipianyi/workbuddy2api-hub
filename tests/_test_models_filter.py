@@ -14,6 +14,8 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as proxy
+
+import wb_models as MC
 import wb_settings as S
 
 PASS = FAIL = 0

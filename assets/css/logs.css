@@ -1,0 +1,27 @@
+.log-line{display:flex;align-items:flex-start;gap:8px;padding:3px 6px;border-radius:4px;font-family:Consolas,Monaco,'Courier New',monospace;font-size:12px;line-height:1.55;transition:background .1s}
+.log-line:hover{background:rgba(255,255,255,.05)}
+.log-ts{color:var(--terminal-dim);font-variant-numeric:tabular-nums;flex-shrink:0;user-select:none}
+.log-lvl{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;flex-shrink:0;text-align:center;min-width:46px;user-select:none}
+.log-lvl.lvl-INFO{background:rgba(106,155,204,.22);color:#8ab4d9}
+.log-lvl.lvl-WARN{background:rgba(217,178,95,.2);color:#d9b25f}
+.log-lvl.lvl-ERROR{background:rgba(217,123,114,.22);color:#e0948c}
+.log-lvl.lvl-DEBUG{background:rgba(165,162,154,.2);color:var(--terminal-fg)}
+.log-tag{font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;flex-shrink:0;background:rgba(165,162,154,.14);color:var(--terminal-fg);user-select:none}
+.log-tag.tag-chat{background:rgba(191,163,204,.18);color:#c5a3d1}
+.log-tag.tag-scheduler{background:rgba(143,174,120,.18);color:#9dbb87}
+.log-tag.tag-tasks{background:rgba(217,178,95,.18);color:#d9c07a}
+.log-tag.tag-accounts{background:rgba(138,180,217,.18);color:#8ab4d9}
+.log-tag.tag-auth{background:rgba(224,148,140,.18);color:#e0948c}
+.log-tag.tag-system{background:rgba(124,121,111,.2);color:var(--terminal-fg)}
+/* 细分出来的模块标签各有配色；catalog/auth 早先就被推断出来，只是一直没有
+   自己的颜色，和 system 的灰底混在一起。 */
+.log-tag.tag-catalog{background:rgba(143,186,173,.18);color:#8fbaad}
+.log-tag.tag-agents{background:rgba(166,160,204,.18);color:#a6a0cc}
+.log-tag.tag-pricing{background:rgba(217,160,107,.18);color:#d9a06b}
+.log-tag.tag-egress{background:rgba(134,188,200,.18);color:#86bcc8}
+.log-tag.tag-upstream{background:rgba(210,156,180,.18);color:#d29cb4}
+.log-tag.tag-update{background:rgba(156,182,216,.18);color:#9cb6d8}
+.log-tag.tag-usage{background:rgba(148,195,179,.18);color:#94c3b3}
+.log-tag.tag-webtools{background:rgba(181,194,118,.18);color:#b5c276}
+.log-msg{color:var(--terminal-fg);flex:1;word-break:break-all;white-space:pre-wrap}
+.log-empty{padding:48px 24px;text-align:center;color:var(--terminal-dim);font-size:13px;font-family:inherit}

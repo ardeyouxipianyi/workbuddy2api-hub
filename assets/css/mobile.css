@@ -1,0 +1,157 @@
+/* ===== Phone: ≤640px ===== */
+@media (max-width: 640px){
+  header{padding:10px 12px;gap:8px}
+  /* 让 header-left / header-right 的子项直接参与 header 的 flex 排布：标题、
+     GitHub、语言、主题四个都待在顶部同一行（order 1-4），顶层页签（order 5）
+     独占下一整行、摆不下横向滚动，状态行（order 6）最后。display:contents 只在
+     本断点生效，宽屏 header-left / header-right 的两栏布局不受影响。 */
+  .header-left,.header-right{display:contents!important}
+  /* 真机上标题文字渲染比桌面模拟更宽：h1 必须可收缩（min-width:0 + 允许省略号），
+     否则它的 min-content 会把 GitHub/语言/主题挤到下一行。 */
+  header h1{font-size:15px;flex:1 1 0%;min-width:0;order:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  header h1 span{font-size:11px;margin-left:6px}
+  .gh-link{width:36px;height:36px;flex-shrink:0;order:2}
+  .lang-btn{flex-shrink:0;order:3}
+  .theme-dropdown-wrap{flex-shrink:0;order:4}
+  .theme-btn{width:36px;height:36px}
+  /* 窄屏下主 Tab 一排摆不下就横向滚动，而不是把行内容顶出导航条：5 个 Tab 的
+     min-content 和已经超过这段留给导航的宽度（右侧按钮组占了 84px），继续用
+     flex:1 平分只会把按钮压到 min-content 并溢出（issue #246 实测 320px 溢出
+     59px、414px 起就不等宽）。做法与 .page-nav 在 ≤860px 时一致：按钮保持
+     可读宽度，摆不下就滚动；放得下时仍然平分整行。 */
+  .main-nav{display:flex;width:100%;flex-basis:100%;gap:2px;padding:3px;order:5;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:thin}
+  .main-nav-btn{flex:1;justify-content:center;padding:8px 2px;font-size:12px;min-height:36px;white-space:nowrap}
+  .meta{width:100%;text-align:left;font-size:11px;line-height:1.5;order:6}
+  /* Table → card */
+  .table-wrap{overflow:visible}
+  table.data-cards{min-width:0!important;display:block}
+  table.data-cards thead{display:none}
+  table.data-cards tbody{display:block}
+  table.data-cards tr{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:5px 8px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:var(--shadow-sm)}
+  table.data-cards td{display:flex;align-items:baseline;justify-content:space-between;
+    gap:12px;grid-column:span 6;border:none;padding:1px 0;text-align:left!important;
+    font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+  table.data-cards td::before{content:attr(data-label);color:var(--dim);font-size:11px;
+    font-weight:600;flex-shrink:0}
+  table.data-cards td:not([data-label])::before{content:none}
+  /* 限额表：护栏名与说明占整块，三个作用域各一行 */
+  table.limits-cards td.limit-name{display:block;padding-bottom:6px}
+  table.data-cards td[colspan]{grid-column:span 6;justify-content:center;text-align:center!important}
+  table.data-cards td[colspan]::before{content:none}
+  /* 冷却 / 达限整行走左对齐：它属于账号卡片的一部分，跟账号名对齐才像同一块
+     内容；居中会让它看起来是表格的一条汇总横幅。 */
+  table.account-cards tr.cool-row td{justify-content:flex-start;text-align:left!important}
+  /* Account card: grouped layout */
+  /* 版本 / 状态两列在手机卡里不单独占位：徽章收进账号名右侧同一行（acct-name-row
+     内的 .acct-mobile-badges），省掉两行空白。 */
+  table.account-cards td:nth-child(1){display:none}
+  table.account-cards td:nth-child(3){display:none}
+  .acct-mobile-badges{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+  table.account-cards td:nth-child(1)::before,
+  table.account-cards td:nth-child(2)::before,
+  table.account-cards td:nth-child(3)::before{content:none}
+  table.account-cards td:nth-child(2){order:1;grid-column:span 6;flex-direction:column;align-items:flex-start;gap:2px}
+  /* 移动端账号卡「今日活动」行内化：上游默认两行（标签一行、状态徽章又独占一行），
+     改成标签与徽章同排一行；国内版双徽章摆不下时靠 flex-wrap 自动换行。 */
+  table.account-cards td:nth-child(4){order:4;grid-column:span 6;justify-content:flex-start;flex-wrap:wrap;gap:4px 6px}
+  table.account-cards td:nth-child(4)::before{font-size:10px}
+  /* 出口（第 5 列）与权重（第 6 列）并成一行：出口下拉在前、权重在后，
+     两者都是「标签：控件」的行内形态（权重显示成「权重：1」）。
+     两列高度必须一致，否则出口的 34px 下拉会比权重的 22px 下拉高出一截，
+     同一行看起来参差不齐。这里把两个 select 统一到 34px、并让两格
+     align-items:center，标签与控件在中线上对齐。 */
+  table.account-cards td:nth-child(5),
+  table.account-cards td:nth-child(6){order:5;flex-direction:row;align-items:center;
+    justify-content:flex-start;gap:4px;min-width:0;min-height:36px}
+  table.account-cards td:nth-child(5){grid-column:span 3}
+  table.account-cards td:nth-child(6){grid-column:span 3}
+  table.account-cards td:nth-child(6)::before{content:'权重：'}
+  table.account-cards td:nth-child(5) .slot-select{width:auto;max-width:none;min-height:34px;height:34px;flex:1 1 auto;min-width:0}
+  table.account-cards td:nth-child(6) .mini-select{min-height:34px;height:34px;padding:0 6px;align-self:center}
+  /* 积分（第 7 列）与请求（第 8 列）：各占一半、铺满整行，左右边缘分别与上一行
+     的「出口」「权重」对齐；两格等高、内容水平垂直居中。以前各占 1/3 宽，右边
+     留空一截，看着像没铺满。 */
+  table.account-cards td:nth-child(7),
+  table.account-cards td:nth-child(8){order:6;grid-column:span 3;
+    flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    padding:6px 4px;min-height:48px;
+    background:var(--panel2);border-radius:8px;text-align:center}
+  table.account-cards td:nth-child(7) .credit-stack{width:100%;align-items:center}
+  table.account-cards td:nth-child(7) .credit-main,
+  table.account-cards td:nth-child(7) .credit-meta{justify-content:center}
+  /* 积分格（第 7 列）：column-reverse 会把 ::before 的「积分」列标签排到最底部，
+     与「明细」按钮错行。隐藏列标签——PC 版这一格本来就只有数值和「明细」，
+     手机上也保持一致，不再额外加一个「积分」字样去挤那一行。 */
+  table.account-cards td:nth-child(7)::before{content:none}
+  table.account-cards td:nth-child(8)::before{font-size:10px}
+  table.account-cards td.acct-actions{order:7;grid-column:span 6;justify-content:flex-start}
+  table.account-cards td.acct-actions::before{content:none}
+  table.account-cards .acct-actions-col{flex-direction:row;flex-wrap:wrap;align-items:flex-start;
+    justify-content:flex-start;gap:6px}
+  table.account-cards .acct-actions-row{flex-wrap:wrap;gap:6px}
+  table.account-cards .acct-actions button.mini{min-height:32px;padding:6px 12px}
+  table.account-cards .slot-select{max-width:none;width:100%;min-height:40px}
+  /* 账号工具栏：打卡按钮（每日活跃/Buddy 加油站）与「添加」同一行并靠右，
+     不再单独占一整行。 */
+  #accountsBody .toolbar .tb-checkin{margin-left:auto;flex-shrink:0}
+  /* Forms stack */
+  #pageSettings section > div[style*="display:flex"]{flex-wrap:wrap}
+  #pageSettings input:not([type=checkbox]), #pageSettings select{min-height:40px;font-size:13px}
+  #pageSettings .slot-input{font-size:13px}
+  table.data-cards td[data-label="启用"]{justify-content:space-between}
+  table.data-cards td[data-label="启用"] input[type=checkbox]{width:20px;height:20px}
+  /* Logs */
+  #logTerminalBody{height:60vh!important}
+  #pageLogs .toolbar{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #pageLogs .toolbar button{width:100%;min-height:34px}
+  #pageLogs > div > div[style*="display:flex"]{flex-wrap:wrap}
+  .log-line{flex-wrap:wrap;gap:4px}
+  .log-msg{min-width:0;flex-basis:100%}
+  /* 手机上 header（两行，约 110px）不再吸顶，只让页内区块导航吸在顶边：两条吸顶栏
+     叠起来要吃掉五分之一屏。主菜单随页面滚走，区块导航里的「回到顶部」一下就回来。
+     syncPageNavOffset 按 header 的实际 position 折算偏移，这里改了它会跟着变。 */
+  header{position:static}
+  /* 触控目标下限：按钮 / 下拉 / 输入框至少 36px，行内 mini 按钮 32px，勾选框 20px。
+     按钮文字不折行（「一键分配代理」折成两行比按钮本身还难点），一行放不下由
+     工具栏 / 按钮组自己换行。 */
+  .main-page button,.main-page select,.main-page .cs-trigger,
+  .main-page input:not([type=checkbox]):not([type=radio]){min-height:36px}
+  .main-page button.mini,.main-page .chiprow button,.main-page .seg button,
+  .main-page .dimtabs button,.main-page .id-btn,.main-page .page-nav-item{min-height:32px}
+  .main-page button{white-space:nowrap}
+  .main-page input[type=checkbox],.main-page input[type=radio]{width:20px;height:20px}
+  .tb-group{flex-wrap:wrap}
+  /* Dialogs */
+  .modal-mask{padding:10px;align-items:flex-start}
+  .modal{width:100%;max-height:94vh;border-radius:12px;margin-top:6px}
+  .modal-hd{padding:12px 14px}
+  .modal-bd{padding:14px}
+  .modal-ft{padding:12px 14px;flex-wrap:wrap}
+  .modal-ft button{flex:1;min-height:38px}
+  .modal table td, .modal table th{padding:7px 8px}
+}
+/* ===== Small phone: ≤400px ===== */
+@media (max-width: 400px){
+  header h1{font-size:14px}
+  /* 小屏再挤一点：5 个 Tab 在 375px（iPhone SE/mini 一档）正好塞进一行 */
+  .main-nav{gap:1px;padding:2px}
+  .main-nav-btn{font-size:11px;padding:7px 2px}
+  #cards{grid-template-columns:1fr 1fr;gap:6px}
+  #cards .card .v{font-size:16px}
+  table.data-cards tr{padding:10px}
+  .log-ts{font-size:11px}
+}
+@media (max-width: 860px){
+  /* 窄屏统计条：把「积分消耗」与「请求成功率」对调，让积分消耗落在最后、
+     独占一整行。积分卡的副行是「估算价值: ¥49.57 / $6.68」这类长文本，
+     和别的卡挤成半宽时会被 nowrap + ellipsis 截成「$6...」；独占一行后
+     宽度够，再允许换行就能完整显示。
+     只改窄屏的排列顺序，PC 三列布局与卡片内容一字未动。 */
+  #cards .card:nth-child(2){order:3}
+  #cards .card:nth-child(3){order:2}
+  #cards .card:nth-child(2){grid-column:1/-1}
+  #cards .card:nth-child(2) .s{white-space:normal;overflow:visible;text-overflow:clip}
+}

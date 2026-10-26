@@ -1,0 +1,99 @@
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;margin-bottom:20px;box-shadow:var(--shadow)}
+/* 面板窗口限高：每个窗口（区块 + 日志终端）超过限高时在窗口内部滚动、标题行
+   吸顶，整页不再被单个窗口拉长。--win-max-h 由脚本按设置写入；body 没挂
+   win-capped（限高 0 = 不限）时下面三条整条不生效，版式与从前一致。
+   区块自带的 padding-top 挪给吸顶的首行（它要盖住滚上来的内容），故置 0；
+   首行的 margin 也折成 padding，否则吸顶后下方那条 margin 会漏出滚动内容。 */
+body.win-capped .main-page section{max-height:var(--win-max-h);overflow-y:auto;padding-top:0}
+/* 看板页的面板用 #pageAnalytics .panel{overflow:hidden}（ID 选择器）做圆角
+   裁剪，优先级压过上一条，限高模式下 section 的滚动被裁掉——内容超出限高
+   后既看不到也滚不动。这里把滚动权还给限高模式下的看板面板。 */
+body.win-capped #pageAnalytics section.panel{overflow-y:auto}
+/* 看板面板本身是唯一的纵向滚动上下文；pbody 只保留表格横向溢出。
+   overflow-y:clip 防止 overflow-x:auto 按 CSS 规则隐式生成第二根纵向滚动条。 */
+body.win-capped #pageAnalytics section.panel .pbody{overflow-y:clip!important;max-height:none!important;overscroll-behavior:auto}
+body.win-capped .main-page section>:first-child{position:sticky;top:0;z-index:3;
+  background:var(--panel);padding-top:18px;margin-bottom:0!important;padding-bottom:14px}
+body.win-capped #logTerminalBody{max-height:var(--win-max-h)}
+/* 区块已经是纵向滚动容器，里面的表格容器只管横向：overflow-x:auto 会按 CSS 规则
+   把 overflow-y 也算成 auto，再长出一根纵向滚动条（双滚动条）。clip 掐掉它。 */
+body.win-capped .main-page section .table-wrap{overflow-y:clip}
+section h2{margin:0 0 14px;font-size:13px;font-weight:700;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.6px}
+section h2 em{color:var(--fg);font-style:normal;text-transform:none;letter-spacing:0;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+/* 网关模型清单：固定列布局 + 百分比列宽 → 占满整行、消除右侧空位；
+   单元格 nowrap 防止长模型 ID / 思考档位换行，超长用省略号兜底。 */
+#modelsTable{table-layout:fixed}
+#modelsTable th,#modelsTable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 消费倍率列可能同时放「倍率」和「Pro Only」两枚胶囊；固定列宽下
+   nowrap 会把第二枚裁掉，允许换行只让这一类行变高（#527）。 */
+#modelsTable td.rate-cell{white-space:normal;line-height:1.8}
+#modelsTable td[data-label="思考档位"]{white-space:nowrap}
+/* 采样参数：放不下时 chips 折行显示完整，不截断 */
+#modelsTable td[data-label="默认采样参数"]{white-space:normal}
+/* 模型 ID 前的「一键配置」勾选框。勾选只决定一键配置写进客户端的模型清单，
+   不改网关路由；label 把勾选框和 ID 包在一起，点 ID 也能勾。排序只认表头
+   （见 sortHeaderAt），点勾选框不会触发排序。单元格用类名定位，别用
+   data-label——i18n 会把 data-label 翻成英文 / 繁中。 */
+#modelsTable .model-pick{width:14px;height:14px;margin:0;flex-shrink:0;cursor:pointer}
+#modelsTable td.model-id-cell label{display:inline-flex;align-items:center;gap:7px;max-width:100%;cursor:pointer}
+#modelsTable td.model-id-cell b{overflow:hidden;text-overflow:ellipsis}
+th,td{text-align:right;padding:9px 12px;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;vertical-align:middle}
+th{color:var(--dim);font-weight:600;font-size:12px;white-space:nowrap;background:var(--panel2)}
+/* 积分扣减 / 获取历史：外层容器自己纵向滚动，表头不钉住的话滑到下面就看不出
+   哪列是哪列。表头本来就有 --panel2 底色（不透明），加 sticky 即可盖住滚上来的行。 */
+#creditHistoryTable thead th,#creditGrantsTable thead th{position:sticky;top:0;z-index:2;
+  box-shadow:inset 0 -1px 0 var(--line)}
+th:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
+th:last-child{border-top-right-radius:8px;border-bottom-right-radius:8px}
+th:first-child,td:first-child{text-align:left}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--panel2)}
+/* 表头排序。手型、箭头都是运行时挂到 <th> 上的（见 applyTableSort），源码标记
+   一个字不动——积分扣减历史表的表头必须保持裸 <th>，有测试写死。 */
+th.sortable{position:relative;cursor:pointer;user-select:none;-webkit-user-select:none}
+th.sortable:hover{color:var(--fg)}
+/* 表头可以 Tab 聚焦、回车/空格触发，焦点得看得见。用 focus-visible，鼠标点过
+   之后不留一圈框。 */
+th.sortable:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* 箭头绝对定位在单元格右端，不占布局宽度——行内塞一个箭头会让矩阵那类 13 列的表
+   宽出 150px，把数据行的 td 挤到折行。右侧 3px 落在 th 既有的 12px 右内边距里，
+   文字右对齐到 12px 处，不会压到。 */
+.sort-arrow{position:absolute;right:3px;top:50%;transform:translateY(-50%);
+  font-size:9px;line-height:1;color:var(--accent)}
+/* 没在排的列不常驻箭头：悬停 / 聚焦该列时才浮出，默认表头保持干净（常驻的
+   淡色双向箭头在行数多、列数多的广角截图里像一排脏点）。 */
+.sort-arrow.idle{color:var(--dim);opacity:0}
+th.sortable:hover .sort-arrow.idle,
+th.sortable:focus-visible .sort-arrow.idle{opacity:1}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+/* 输入 / 输出 / 思考：三个数字应该在一行内读完，不拆行 */
+.triple{white-space:nowrap}
+.bar-fill{height:6px;border-radius:3px;background:var(--accent);min-width:2px;display:inline-block;vertical-align:middle}
+.bar-fill.think{background:var(--think)}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;border-radius:8px}
+.table-wrap table{min-width:720px}
+#recent table th, #recent table td{text-align:center}
+#recent table th:first-child, #recent table td:first-child{text-align:center}
+#recent table td.mono{font-variant-numeric:tabular-nums}
+/* 限额表：一列一个作用域，输入框右对齐，同列数字才对得齐 */
+.limit-input{width:100%;max-width:200px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit;text-align:right}
+.limit-input::placeholder{color:var(--dim);opacity:.75}
+@media (max-width: 860px){
+  header{padding:12px 16px}
+  main{padding:16px 12px 60px}
+  section{padding:14px 14px;border-radius:12px}
+  /* 窄屏区块的 padding 是 14px，吸顶首行的 padding-top 跟着缩，否则顶部会
+     多出一道 4px 的空隙漏出滚动内容。 */
+  body.win-capped .main-page section>:first-child{padding-top:14px}
+  #cards{grid-template-columns:1fr;gap:0}
+  #cards .card{padding:10px 14px}
+  #cards .card+.card{border-left:none;border-top:1px solid var(--line)}
+  #cards .card .v{font-size:18px}
+  .toolbar{gap:6px}
+  .toolbar button{padding:5px 10px;font-size:11px}
+}

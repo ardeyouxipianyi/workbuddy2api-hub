@@ -1,0 +1,163 @@
+.main-nav{display:inline-flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;border:1px solid var(--line)}
+.main-nav-btn{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.main-nav-btn:hover{color:var(--fg);background:var(--panel)}
+.main-nav-btn.active{background:var(--panel);color:var(--fg);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:600}
+/* 项目仓库入口：与顶部导航同行，但不作为一个 Tab 标签。 */
+.gh-link{display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.gh-link:hover{color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);text-decoration:none;box-shadow:var(--shadow-md)}
+.gh-link svg{width:17px;height:17px;display:block;fill:currentColor}
+
+/* 顶栏图标按钮：控制台显隐 / 关闭服务，与 gh-link 同款几何。 */
+.hdr-icon-btn{display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  cursor:pointer;padding:0;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.hdr-icon-btn:hover{color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);box-shadow:var(--shadow-md)}
+.hdr-icon-btn svg{width:16px;height:16px;display:block}
+.hdr-icon-btn:disabled{opacity:.45;cursor:default}
+.hdr-icon-danger:hover{color:var(--bad);border-color:var(--bad)}
+@media (max-width:640px){.hdr-icon-btn{width:36px;height:36px}}
+
+/* 顶部右侧区域与主题切换组件 (黑白单色、极简线条Outline、符合规范) */
+.header-right{display:flex;align-items:center;gap:10px}
+.theme-dropdown-wrap{position:relative;display:inline-flex}
+.theme-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:32px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  cursor:pointer;padding:0;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+.theme-btn:hover{
+  color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);box-shadow:var(--shadow-md);
+}
+.theme-btn-icon{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+.theme-btn-icon svg{width:16px;height:16px;display:block}
+.theme-dropdown{
+  display:none;position:absolute;top:calc(100% + 6px);right:0;
+  min-width:130px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:4px;box-shadow:var(--shadow-md);
+  z-index:100;backdrop-filter:blur(8px);
+}
+.theme-dropdown.open{display:block;animation:themePop .12s cubic-bezier(0,0,.2,1)}
+@keyframes themePop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.theme-option{
+  width:100%;display:flex;align-items:center;gap:8px;padding:7px 10px;
+  border-radius:6px;border:none;background:transparent;color:var(--fg);
+  font-size:12px;cursor:pointer;text-align:left;transition:background .12s ease;
+  box-shadow:none;
+}
+.theme-option:hover{background:var(--panel2)}
+.theme-opt-icon{width:14px;height:14px;flex-shrink:0;color:var(--dim)}
+.theme-option:hover .theme-opt-icon{color:var(--fg)}
+.theme-opt-text{flex:1;font-weight:500}
+.theme-opt-check{width:13px;height:13px;flex-shrink:0;opacity:0;color:var(--accent)}
+.theme-option.active .theme-opt-check{opacity:1}
+.theme-option.active{font-weight:600;color:var(--accent)}
+.theme-option.active .theme-opt-icon{color:var(--accent)}
+.theme-sep{height:1px;background:var(--line);margin:4px 6px}
+.lang-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:34px;height:32px;padding:0 8px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);box-shadow:var(--shadow-sm);
+  cursor:pointer;font:inherit;font-size:12px;font-weight:700;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+.lang-btn:hover{
+  color:var(--fg);border-color:var(--line-hover);
+  background:var(--panel2);box-shadow:var(--shadow-md);
+}
+@media (max-width: 640px){
+  .lang-btn{min-width:36px;height:36px;padding:0 6px;font-size:12px}
+}
+
+[data-theme="dark"] .badge.ok{color:#9dbb87;background:rgba(143,174,120,.16);border-color:rgba(143,174,120,.34)}
+[data-theme="dark"] .badge.s{color:#8ab4d9;background:rgba(106,155,204,.18);border-color:rgba(106,155,204,.36)}
+[data-theme="dark"] .badge.off{color:var(--terminal-fg);background:rgba(165,162,154,.14);border-color:rgba(165,162,154,.24)}
+[data-theme="dark"] .badge.warn{color:#d9b25f;background:rgba(217,178,95,.16);border-color:rgba(217,178,95,.35)}
+[data-theme="dark"] .badge.bad{color:#d97b72;background:rgba(217,123,114,.16);border-color:rgba(217,123,114,.35)}
+[data-theme="dark"] .cool-pill{color:#d9b25f;background:rgba(217,178,95,.18);border-color:rgba(217,178,95,.38)}
+[data-theme="dark"] .realm-badge-intl{color:#8ab4d9;background:rgba(106,155,204,.2);border-color:rgba(106,155,204,.4)}
+[data-theme="dark"] .realm-badge-cn{color:#e09a80;background:rgba(201,100,66,.22);border-color:rgba(201,100,66,.42)}
+[data-theme="dark"] .realm-switch button.active#accountsRealmCn{color:var(--bad);border-color:var(--bad)}
+[data-theme="dark"] .modal-mask{background:rgba(0,0,0,.65)}
+/* The page sections are toggled by a class so the inline head script can
+   choose one before the body is parsed, avoiding a flash of the wrong
+   page on every reload. */
+.main-page{display:none}
+.main-page.active{display:block}
+/* 设置页「顶部页签显示」收起的页面：靠 hidden 属性，而不是内联 display ——
+   「智能体配置」的入口在不可用时也是自己改 display 收起来的，两套机制各管各的
+   才不会互相把对方放出来。作者样式本就压过 [hidden] 的 UA 样式，所以这里显式
+   声明一次，免得以后给这两个选择器加 display 时又悄悄失效。 */
+.main-nav-btn[hidden],.main-page[hidden]{display:none!important}
+/* 页面级两栏：左侧区块导航由 initPageNav() 依据页面内的 section 现场生成，
+   这里的样式只描述外观，既不预设任何页面，也不预设任何区块。给页面加
+   .page-nav-on 即可启用，区块不足两项的页面不加这个类，保持单栏。 */
+.main-page.page-nav-on.active{display:grid;grid-template-columns:196px minmax(0,1fr);gap:20px;align-items:start}
+.main-page.page-nav-on > *{grid-column:2;min-width:0}
+/* 内容包在 .page-nav-body 里，grid 就只有两项，1 / -1 才真的跨满整个内容区
+   （否则它只跨第 1 行，首行被撑成侧栏高度）；区块间距也仍只由 section 自己
+   的 margin 决定，不会被行间距再叠一次。 */
+.main-page.page-nav-on > .page-sidebar{grid-column:1;grid-row:1 / -1;position:sticky;
+  top:var(--page-nav-top,84px);z-index:6;background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;padding:10px;box-shadow:var(--shadow);
+  max-height:calc(100vh - var(--page-nav-top,84px) - 20px);overflow:auto}
+.page-sidebar-title{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.6px;padding:6px 10px 8px}
+.page-nav{display:flex;flex-direction:column;gap:2px}
+.page-nav-item{appearance:none;background:transparent;border:1px solid transparent;color:var(--dim);
+  text-align:left;padding:8px 10px;border-radius:8px;font:inherit;font-size:13px;line-height:1.35;
+  cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease;overflow-wrap:anywhere}
+.page-nav-item:hover{color:var(--fg);background:var(--panel2)}
+.page-nav-item.active{color:var(--fg);background:var(--panel2);border-color:var(--line);font-weight:600}
+/* 回到顶部：排在区块清单上方，所以留出与清单的间距 */
+button.page-nav-top{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;
+  margin-bottom:8px;padding:7px 10px;border-radius:8px;font-size:12px;font-weight:600;
+  background:var(--panel2);border:1px solid var(--line);color:var(--fg);box-shadow:none;
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);color:var(--accent)}
+.page-sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.page-sidebar-toggle{appearance:none;flex:0 0 auto;width:22px;height:22px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;border-radius:6px;
+  border:1px solid var(--line);background:var(--panel2);color:var(--dim);
+  font:inherit;font-size:12px;line-height:1;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.page-sidebar-toggle:hover{color:var(--fg);border-color:var(--line-hover)}
+/* 收起侧栏：整列压成一条细轨，只留展开按钮，把宽度让给内容区。窄屏下导航
+   本来就是一条横栏，没有可收的余地，所以这套样式只在宽屏生效。 */
+@media (min-width:861px){
+  .main-page.page-nav-on.page-nav-collapsed.active{grid-template-columns:44px minmax(0,1fr);gap:12px}
+  .main-page.page-nav-on.page-nav-collapsed > .page-sidebar{padding:6px 4px;overflow:hidden}
+  .main-page.page-nav-on.page-nav-collapsed .page-sidebar-title,
+  .main-page.page-nav-on.page-nav-collapsed .page-nav,
+  .main-page.page-nav-on.page-nav-collapsed button.page-nav-top{display:none}
+  .main-page.page-nav-on.page-nav-collapsed .page-sidebar-head{justify-content:center;padding:0}
+}
+.main-page.page-nav-on section{scroll-margin-top:var(--page-nav-top,84px)}
+/* 点击导航后短暂描边，明确「跳到这里了」 */
+.main-page.page-nav-on section.page-nav-flash{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:860px){
+  .main-page.page-nav-on.active{grid-template-columns:minmax(0,1fr);gap:14px}
+  .main-page.page-nav-on > *{grid-column:1}
+  .main-page.page-nav-on > .page-sidebar{grid-row:auto;max-height:none;overflow:visible;padding:8px;
+    border-radius:12px;background:var(--header-bg);backdrop-filter:blur(10px);
+    display:flex;align-items:center;gap:8px}
+  .page-sidebar-title{display:none}
+  /* 窄屏导航是横向胶囊行，收不起来，连收起按钮一起藏掉 */
+  .page-sidebar-head{display:none}
+  .page-nav{flex:1 1 auto;min-width:0;flex-direction:row;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
+    scrollbar-width:thin}
+  .page-nav-item{white-space:nowrap;padding:7px 12px;border-radius:999px;
+    background:var(--panel2);border-color:var(--line)}
+  /* 窄屏下导航是横向滚动的胶囊行，回到顶部钉在左端不跟着滚 */
+  button.page-nav-top{width:auto;flex:0 0 auto;margin-bottom:0;padding:7px 12px;border-radius:999px;
+    white-space:nowrap}
+}
+.range-btn{background:transparent;border:none;color:var(--dim);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .15s ease}
+.range-btn:hover{color:var(--fg)}
+.range-btn.active{background:var(--accent);color:#fff;font-weight:600;box-shadow:var(--shadow-sm)}
+.model-pill{display:inline-flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;margin:2px 4px 2px 0;white-space:nowrap}

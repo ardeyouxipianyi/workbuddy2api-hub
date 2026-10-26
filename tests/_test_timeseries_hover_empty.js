@@ -17,7 +17,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const html = require('./_dashboard_source.js').dashboardHtml();
 
 /** The source between "cv.onmousemove =" and its matching closing brace. */
 function hoverSource() {

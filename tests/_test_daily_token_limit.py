@@ -29,6 +29,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 import wb_accounts
 import wb_settings
 import wb_proxy as P
+import wb_usage as U
 
 
 def row(at, account, total, outcome="completed"):
@@ -40,8 +41,8 @@ def row(at, account, total, outcome="completed"):
 
 
 def reset_cache():
-    with P._daily_usage_lock:
-        P._daily_usage.update({"day": "", "totals": None, "offset": 0, "at": 0.0})
+    with U._daily_usage_lock:
+        U._daily_usage.update({"day": "", "totals": None, "offset": 0, "at": 0.0})
 
 
 class DailyTokenLimitTests(unittest.TestCase):
@@ -59,7 +60,7 @@ class DailyTokenLimitTests(unittest.TestCase):
             self.assertEqual(wb_settings.set_daily_token_limit(directory, "abc"), 0)
 
     def test_scan_counts_today_only_and_resumes_incrementally(self):
-        midnight = P._local_midnight()
+        midnight = U._local_midnight()
         rows = [
             row(midnight - 3600, "acct-A", 999999),   # yesterday: ignored
             row(midnight + 60, "acct-A", 1200),       # today
@@ -70,25 +71,25 @@ class DailyTokenLimitTests(unittest.TestCase):
         with io.open(P.USAGE_LOG, "w", encoding="utf-8") as fh:
             for r in rows:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-        self.assertEqual(P.daily_tokens_by_account(ttl=0),
+        self.assertEqual(U.daily_tokens_by_account(ttl=0),
                     {"acct-A": 2000, "acct-B": 300})
 
         # The counter resumes from its byte offset: a row appended after the
         # first scan is folded in without recounting the file.
         with io.open(P.USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row(midnight + 300, "acct-B", 100)) + "\n")
-        self.assertEqual(P.daily_tokens_by_account(ttl=0),
+        self.assertEqual(U.daily_tokens_by_account(ttl=0),
                     {"acct-A": 2000, "acct-B": 400})
 
         # A row still being written (no trailing newline) is left for the next
         # scan instead of being half-counted.
         with io.open(P.USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row(midnight + 400, "acct-A", 50)))
-        self.assertEqual(P.daily_tokens_by_account(ttl=0),
+        self.assertEqual(U.daily_tokens_by_account(ttl=0),
                     {"acct-A": 2000, "acct-B": 400})
         with io.open(P.USAGE_LOG, "a", encoding="utf-8") as fh:
             fh.write("\n")
-        self.assertEqual(P.daily_tokens_by_account(ttl=0),
+        self.assertEqual(U.daily_tokens_by_account(ttl=0),
                     {"acct-A": 2050, "acct-B": 400})
 
     def test_guard_blocks_at_threshold_and_needs_a_count(self):
@@ -219,7 +220,7 @@ class GuardClearTests(unittest.TestCase):
             # spend there; assigning the field by hand would be overwritten by
             # the (empty) scan the guard performs.
             with io.open(P.USAGE_LOG, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(row(P._local_midnight() + 60, "uid-one", 600))
+                fh.write(json.dumps(row(U._local_midnight() + 60, "uid-one", 600))
                          + "\n")
             reset_cache()
 
@@ -227,7 +228,7 @@ class GuardClearTests(unittest.TestCase):
             P.POOL, P.ACCOUNTS_DIR = pool, directory
             try:
                 wb_settings.set_daily_token_limit(directory, 500)
-                P.apply_daily_guards(refresh=True)
+                U.apply_daily_guards(refresh=True)
                 self.assertEqual(account.daily_token_limit, 500)
                 self.assertTrue(account.daily_limit_blocked())
                 self.assertFalse(account.ready())
@@ -235,7 +236,7 @@ class GuardClearTests(unittest.TestCase):
                 # Only the settings file changes here: the account object, and
                 # the non-zero limit it was last given, are the very same ones.
                 wb_settings.set_daily_token_limit(directory, 0)
-                P.apply_daily_guards(refresh=True)
+                U.apply_daily_guards(refresh=True)
                 self.assertEqual(account.daily_token_limit, 0)
                 self.assertFalse(account.daily_limit_blocked())
                 self.assertTrue(account.ready())
@@ -256,7 +257,7 @@ class GuardClearTests(unittest.TestCase):
                 wb_settings.set_limit(directory, "daily_credit_limit", "global", 50)
                 wb_settings.set_limit(directory, "model_daily_token_limit",
                                       "global", 4000)
-                P.apply_daily_guards(refresh=True)
+                U.apply_daily_guards(refresh=True)
                 self.assertEqual(account.daily_token_limit, 500)
                 self.assertEqual(account.daily_credit_limit, 50)
                 self.assertEqual(account.model_daily_token_limit, 4000)
@@ -264,7 +265,7 @@ class GuardClearTests(unittest.TestCase):
                 for key in ("daily_token_limit", "daily_credit_limit",
                             "model_daily_token_limit"):
                     wb_settings.set_limit(directory, key, "global", 0)
-                P.apply_daily_guards(refresh=True)
+                U.apply_daily_guards(refresh=True)
                 self.assertEqual(account.daily_token_limit, 0)
                 self.assertEqual(account.daily_credit_limit, 0)
                 self.assertEqual(account.model_daily_token_limit, 0)

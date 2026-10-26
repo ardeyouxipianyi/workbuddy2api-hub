@@ -20,6 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as proxy
 
+import wb_usage as U
+import wb_translate as X
+
 
 def _chat_stream(text):
     chunk = {
@@ -106,16 +109,16 @@ class TriggerTests(unittest.TestCase):
 class SummaryCodecTests(unittest.TestCase):
     def test_round_trip(self):
         blob = proxy._encode_compaction_summary("the summary")
-        self.assertEqual("the summary", proxy._decode_compaction_summary(blob))
+        self.assertEqual("the summary", X._decode_compaction_summary(blob))
 
     def test_plain_text_is_kept(self):
         # A foreign provider may return the summary unencoded; dropping it would
         # lose the only copy of the compacted context.
-        self.assertEqual("plain text", proxy._decode_compaction_summary("plain text"))
+        self.assertEqual("plain text", X._decode_compaction_summary("plain text"))
 
     def test_empty(self):
-        self.assertEqual("", proxy._decode_compaction_summary(""))
-        self.assertEqual("", proxy._decode_compaction_summary(None))
+        self.assertEqual("", X._decode_compaction_summary(""))
+        self.assertEqual("", X._decode_compaction_summary(None))
 
 
 class RequestTranslationTests(unittest.TestCase):
@@ -153,7 +156,7 @@ class RequestTranslationTests(unittest.TestCase):
     def test_client_supplied_summary_prompt_is_not_duplicated(self):
         payload = self._payload()
         payload["input"] = payload["input"][:-1] + [
-            {"type": "message", "role": "user", "content": proxy.COMPACTION_PROMPT},
+            {"type": "message", "role": "user", "content": X.COMPACTION_PROMPT},
             {"type": "compaction_trigger"},
         ]
         chat = proxy.responses_to_chat(payload)
@@ -217,14 +220,14 @@ class ResponseTests(unittest.TestCase):
         items = [i for i in self._items(body) if i.get("type") == "compaction"]
         self.assertEqual(1, len(items))
         self.assertIn("handoff summary",
-                      proxy._decode_compaction_summary(items[0]["encrypted_content"]))
+                      X._decode_compaction_summary(items[0]["encrypted_content"]))
 
     def test_stream_item_carries_a_real_summary(self):
         stub = self._run("real summary", True)
         items = [i for i in self._items(stub.wfile.buf.decode())
                  if i.get("type") == "compaction"]
         self.assertEqual("real summary",
-                         proxy._decode_compaction_summary(items[0]["encrypted_content"]))
+                         X._decode_compaction_summary(items[0]["encrypted_content"]))
 
     def test_nonstream_returns_the_item(self):
         stub = self._run("nonstream summary", False)
@@ -232,7 +235,7 @@ class ResponseTests(unittest.TestCase):
         output = stub.json_body.get("output") or []
         self.assertEqual(["compaction"], [o.get("type") for o in output])
         self.assertEqual("nonstream summary",
-                         proxy._decode_compaction_summary(output[0]["encrypted_content"]))
+                         X._decode_compaction_summary(output[0]["encrypted_content"]))
 
     def test_empty_summary_is_an_error_not_an_empty_item(self):
         proxy.record_error = lambda *a, **k: None

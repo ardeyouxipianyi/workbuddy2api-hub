@@ -17,7 +17,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
+const html = require('./_dashboard_source.js').dashboardHtml();
 
 // Inline attributes, e.g. onclick="setAnalyticsRange('today')".
 const HANDLER_ATTR = /\son(?:click|change|input|submit|keydown|keyup|blur|focus)\s*=\s*"([^"]*)"/g;

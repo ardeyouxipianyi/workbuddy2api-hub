@@ -196,6 +196,9 @@ for _f in "$APP_SRC"/wb_*.py; do
 	install_file "$_f" "$DATA" "usr/lib/workbuddy2api/$(basename "$_f")" 0644
 done
 install_file "$APP_SRC/dashboard.html" "$DATA" usr/lib/workbuddy2api/dashboard.html 0644
+for _f in "$APP_SRC"/assets/css/*.css "$APP_SRC"/assets/js/*.js; do
+	install_file "$_f" "$DATA" "usr/lib/workbuddy2api/${_f#"$APP_SRC"/}" 0644
+done
 
 mkdir -p "$CTRL"
 write_control "$PKG/Makefile" workbuddy2api net feeds/base/workbuddy2api "" "$CTRL/control"

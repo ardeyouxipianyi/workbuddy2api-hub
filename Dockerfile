@@ -11,6 +11,7 @@ RUN apk add --no-cache tzdata ca-certificates &&     cp /usr/share/zoneinfo/${TZ
 
 # Copy application files (Zero external pip dependencies needed)
 COPY wb_*.py dashboard.html ./
+COPY assets ./assets
 
 # Create data directories
 RUN mkdir -p /app/accounts /app/usage

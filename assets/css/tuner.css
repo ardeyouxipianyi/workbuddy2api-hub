@@ -1,0 +1,20 @@
+#tunerBox{display:none;position:fixed;top:64px;right:14px;z-index:99999;width:258px;background:var(--panel);
+  border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-md);
+  font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg)}
+#tunerBox.open{display:block}
+#tunerHead{display:flex;align-items:center;gap:6px;padding:7px 10px;background:var(--panel2);
+  border-bottom:1px solid var(--line);border-radius:10px 10px 0 0;cursor:move;user-select:none;font-weight:600}
+#tunerHead #tunerTheme{margin-left:auto;font-weight:400;font-size:11px;color:var(--dim)}
+#tunerClose{border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:0 5px;color:var(--dim)}
+#tunerClose:hover{color:var(--fg)}
+#tunerRows{padding:6px 10px;max-height:56vh;overflow:auto}
+.tuner-row{display:flex;align-items:center;gap:7px;padding:2.5px 0}
+.tuner-row label{width:50px;flex-shrink:0;font-size:11px;color:var(--dim)}
+.tuner-row input[type=color]{width:28px;height:20px;border:1px solid var(--line);border-radius:4px;padding:0;cursor:pointer;background:none}
+.tuner-row code{font-size:10px;color:var(--dim);width:56px;font-family:ui-monospace,Consolas,monospace}
+.tuner-row .ratio{margin-left:auto;font-size:10px;font-weight:600;color:var(--dim);white-space:nowrap}
+.tuner-row .ratio.ok{color:var(--accent2)}
+.tuner-row .ratio.low{color:var(--warn)}
+#tunerFoot{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
+#tunerFoot button{flex:1;padding:5px 0;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--panel);cursor:pointer;color:var(--fg)}
+#tunerFoot button:hover{background:var(--panel2)}

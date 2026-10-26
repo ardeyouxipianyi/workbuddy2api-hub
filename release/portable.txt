@@ -17,12 +17,45 @@
 #   Dockerfile / docker-compose* / quick-deploy.sh —— Docker 部署路径，不进便携包
 #   tests/  .github/  release/  wrt/  scripts/ —— 开发与发布工具，不进便携包
 #
-# tests/_test_release_assets.py 会断言：仓库里每个 wb_*.py 都在这份清单里
+# tests/_test_release_assets.py 会断言：仓库里每个 wb_*.py 与 assets/ 下每个文件都在这份清单里
 # （新增模块忘了登记会直接红），且清单里的路径都存在。
 
 LICENSE
 README.md
 dashboard.html
+assets/css/accounts.css
+assets/css/analytics.css
+assets/css/base.css
+assets/css/components.css
+assets/css/layout.css
+assets/css/logs.css
+assets/css/mobile.css
+assets/css/select.css
+assets/css/tables.css
+assets/css/tuner.css
+assets/js/accounts-io.js
+assets/js/accounts.js
+assets/js/agents.js
+assets/js/analytics-panel.js
+assets/js/analytics.js
+assets/js/boot.js
+assets/js/dashboard.js
+assets/js/format.js
+assets/js/gateway.js
+assets/js/i18n.js
+assets/js/keys-slots.js
+assets/js/logs.js
+assets/js/models.js
+assets/js/nav.js
+assets/js/panel.js
+assets/js/select.js
+assets/js/settings-daily-chat.js
+assets/js/settings-system.js
+assets/js/settings.js
+assets/js/shell.js
+assets/js/tabs.js
+assets/js/tasks.js
+assets/js/tuner.js
 console_tail.py
 ops/aliyun/install-updater.sh
 ops/aliyun/workbuddy2api-hub-updater.py
@@ -59,23 +92,33 @@ wb_fingerprint.py
 wb_identity.py
 wb_ipintel.py
 wb_logstore.py
+wb_models.py
 wb_modelsdev.py
 wb_pricing.py
 wb_probes.py
 wb_prompt.py
 wb_proxy.py
 wb_quota_scan.py
+wb_routes_accounts.py
+wb_routes_agents.py
+wb_routes_ops.py
+wb_routes_settings.py
+wb_runtime.py
 wb_scheduler.py
 wb_settings.py
 wb_tasks.py
 wb_tiers.py
-wb_updates.py
+wb_transforms.py
+wb_translate.py
 wb_update_apply.py
 wb_update_external.py
 wb_update_portable.py
 wb_update_request.py
+wb_updates.py
 wb_upstream_pool.py
+wb_usage.py
 wb_webagent.py
 wb_webprompts.py
 wb_webtools.py
 wb_window_probe.py
+wb_wire.py

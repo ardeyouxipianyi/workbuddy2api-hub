@@ -21,6 +21,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-upstream-repairs-")
 
 import wb_proxy as P
+import wb_transforms as T
 
 PASS = FAIL = 0
 
@@ -309,7 +310,7 @@ check("plain text is not silently accepted", P.is_truncated_arguments("not json"
 mixed_calls = [{"id": "ok", "function": {"name": "f", "arguments": '{"a":1}'}},
                {"id": "cut", "function": {"name": "f", "arguments": '{"a":'}},
                {"id": "noargs", "function": {"name": "f", "arguments": ""}}]
-kept_calls = P.drop_truncated_tool_calls(mixed_calls)
+kept_calls = T.drop_truncated_tool_calls(mixed_calls)
 check("only the truncated call is dropped",
       [c["id"] for c in kept_calls] == ["ok", "noargs"])
 

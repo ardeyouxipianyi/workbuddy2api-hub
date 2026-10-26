@@ -46,6 +46,7 @@ os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_accounts
 import wb_proxy as P
+import wb_usage as U
 
 MODEL = "deepseek-v4.1-flash"
 MODEL_B = "hy4"
@@ -121,33 +122,33 @@ def clear_daily():
         os.unlink(P.ESTIMATE_DAILY_FILE)
     except OSError:
         pass
-    P._estimate_daily_cache["entry"] = ((P.ESTIMATE_DAILY_FILE, None, None), {})
+    U._estimate_daily_cache["entry"] = ((P.ESTIMATE_DAILY_FILE, None, None), {})
 
 
 def clear_checkpoint():
     try:
-        os.unlink(P._usage_cache_kind_path("remaining"))
+        os.unlink(U._usage_cache_kind_path("remaining"))
     except OSError:
         pass
 
 
 def restart_fold():
     """清掉内存折叠与 TTL 缓存，等价于一次进程重启。"""
-    with P._remaining_state_lock:
-        P._remaining_state.clear()
-        P._remaining_state.update({
+    with U._remaining_state_lock:
+        U._remaining_state.clear()
+        U._remaining_state.update({
             "events": [], "keys": set(), "usage": {}, "day": "",
             "log": {"offset": 0, "key": None, "tail": b""},
             "file": {"offset": 0, "key": None, "tail": b""},
         })
-    with P._remaining_cache_lock:
-        P._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
+    with U._remaining_cache_lock:
+        U._remaining_cache.update({"at": 0.0, "built_at": 0.0, "data": None})
     # 写盘节流的两张表也是进程内存：重启后它们同样清空（否则删掉文件重折
     # 一次会被「这个 offset 已经写过了」挡掉，测试里什么都写不出来）。
-    with P._usage_cache_lock:
-        P._usage_cache_progress.clear()
-        P._usage_cache_checkpointed.clear()
-        P._usage_cache_last_attempt = time.time()
+    with U._usage_cache_lock:
+        U._usage_cache_progress.clear()
+        U._usage_cache_checkpointed.clear()
+        U._usage_cache_last_attempt = time.time()
 
 
 def reload_checkpoint_cache():
@@ -157,8 +158,8 @@ def reload_checkpoint_cache():
     是 _usage_cache_forget()；它自己取锁，所以必须在下面那段之前调用。v3 的
     _usage_cache_loaded / _usage_cache_read_result 仍保留给旧布局的读取路径。
     """
-    P._usage_cache_forget()
-    with P._usage_cache_lock:
+    U._usage_cache_forget()
+    with U._usage_cache_lock:
         P._usage_cache_loaded = False
         P._usage_cache_read_result = None
 
@@ -178,7 +179,7 @@ def account(uid, nickname="", realm="intl"):
 
 
 def payload(accounts, now):
-    return P._remaining_payload(now=now, accounts=accounts)
+    return U._remaining_payload(now=now, accounts=accounts)
 
 
 def find_row(data, uid, model=MODEL):
@@ -189,26 +190,26 @@ def find_row(data, uid, model=MODEL):
 
 
 def pair_buffer(uid, model=MODEL):
-    with P._remaining_state_lock:
-        return P._remaining_state["usage"].get((uid, model))
+    with U._remaining_state_lock:
+        return U._remaining_state["usage"].get((uid, model))
 
 
 class CountingFold(object):
-    """把 P._fold_remaining 换成计数器：采纳成功时折叠行数必须是 0。"""
+    """把 U._fold_remaining 换成计数器：采纳成功时折叠行数必须是 0。"""
 
     def __enter__(self):
         self.n = 0
-        self.real = P._fold_remaining
+        self.real = U._fold_remaining
 
         def counting(row, state):
             self.n += 1
             return self.real(row, state)
 
-        P._fold_remaining = counting
+        U._fold_remaining = counting
         return self
 
     def __exit__(self, *exc):
-        P._fold_remaining = self.real
+        U._fold_remaining = self.real
         return False
 
 
@@ -227,7 +228,7 @@ def legacy_buffers(rows):
             continue
         if row.get("status") == 429 or row.get("error") or row.get("usage_missing"):
             continue
-        if P.row_outcome(row) == "client_aborted":
+        if U.row_outcome(row) == "client_aborted":
             continue
         key = (uid, model)
         buf = usage.get(key)
@@ -236,13 +237,13 @@ def legacy_buffers(rows):
         tokens = int(row.get("total_tokens") or 0)
         buf["at"].append(float(at))
         buf["cum"].append((buf["cum"][-1] if buf["cum"] else 0) + tokens)
-        P._pair_trim(buf, at - P._REMAINING_KEEP_SECONDS)
+        U._pair_trim(buf, at - U._REMAINING_KEEP_SECONDS)
     return usage
 
 
 def rewrite_as_legacy(rows):
     """把 checkpoint 文件里的 remaining 缓冲换成旧版（日志顺序）形态。"""
-    path = pathlib.Path(P._usage_cache_kind_path("remaining"))
+    path = pathlib.Path(U._usage_cache_kind_path("remaining"))
     data = json.loads(path.read_text(encoding="utf-8"))
     entry = data["entries"][0]
     buffers = legacy_buffers(rows)
@@ -304,7 +305,7 @@ def naive(uid, lo, hi, model=MODEL):
                if row.get("account") == uid and row.get("model") == model
                and row.get("at") and lo <= row["at"] <= hi
                and row.get("status") != 429 and not row.get("error")
-               and P.row_outcome(row) != "client_aborted")
+               and U.row_outcome(row) != "client_aborted")
 
 
 def is_sorted(values):
@@ -327,7 +328,7 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
         """在当前日志上折一遍并强制落盘；返回冷折载荷。"""
         cache_env(min_bytes=1, min_seconds=0)
         data = payload(ACCOUNTS, now=NOW)
-        self.assertTrue(os.path.exists(P._usage_cache_kind_path("remaining")),
+        self.assertTrue(os.path.exists(U._usage_cache_kind_path("remaining")),
                         "折过一遍之后应该写出 checkpoint")
         return data
 
@@ -363,9 +364,9 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
         self.assertTrue(is_sorted(buf["at"]))
         self.assertEqual(buf["at"], [1090.0, 1100.0, 1100.0])
         self.assertEqual(buf["cum"], [20, 30, 35])
-        self.assertEqual(P._range_sum(buf, 1095.0, 2000.0), 15)
-        self.assertEqual(P._range_sum(buf, 1000.0, 1095.0), 20)
-        self.assertEqual(P._range_sum(buf, 1000.0, 2000.0), 35)
+        self.assertEqual(U._range_sum(buf, 1095.0, 2000.0), 15)
+        self.assertEqual(U._range_sum(buf, 1000.0, 1095.0), 20)
+        self.assertEqual(U._range_sum(buf, 1000.0, 2000.0), 35)
         # 旧版顺序（追加序）上的同一套二分：这两个窗口的值就是被修掉的
         # 「少算」形态，钉在这里防止退回。
         legacy = legacy_buffers(rows)[("acct-A", MODEL)]
@@ -373,8 +374,8 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
 
         def old_range_sum(buffer, lo, hi):
             at, cum = buffer["at"], buffer["cum"]
-            j = P.bisect.bisect_left(at, lo, buffer["head"])
-            k = P.bisect.bisect_right(at, hi, buffer["head"])
+            j = U.bisect.bisect_left(at, lo, buffer["head"])
+            k = U.bisect.bisect_right(at, hi, buffer["head"])
             if k <= j:
                 return 0
             low = cum[j - 1] if j > 0 else buffer["base"]
@@ -397,8 +398,8 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
         # 都算进来或都不算，二分给出的窗口和跟着乱序漂。
         buf = pair_buffer("acct-A", MODEL)
         self.assertTrue(is_sorted(buf["at"]))
-        self.assertEqual(P._range_sum(buf, RESET, RESET + 0.001), 111)
-        self.assertEqual(P._range_sum(buf, RESET - 0.001, RESET), 222)
+        self.assertEqual(U._range_sum(buf, RESET, RESET + 0.001), 111)
+        self.assertEqual(U._range_sum(buf, RESET - 0.001, RESET), 222)
 
     # ------------------------------------------------------------------
     # 采纳：乱序日志写出的 checkpoint、旧版形态、坏数据
@@ -406,7 +407,7 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
     def test_out_of_order_log_adopts_after_a_restart(self):
         first = self.fold_once()
         # 写入侧已经有序：新 checkpoint 不会再因为乱序被拒。
-        written = json.loads(pathlib.Path(P._usage_cache_kind_path("remaining"))
+        written = json.loads(pathlib.Path(U._usage_cache_kind_path("remaining"))
                              .read_text(encoding="utf-8"))
         for pair in written["entries"][0]["usage"].values():
             self.assertTrue(is_sorted(pair["at"]))
@@ -443,13 +444,13 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
         # 形状校验先一步拦下它（cum 非降），_pair_repair 的负增量检查是同一
         # 契约的第二道防线。
         first = self.fold_once()
-        path = pathlib.Path(P._usage_cache_kind_path("remaining"))
+        path = pathlib.Path(U._usage_cache_kind_path("remaining"))
         data = json.loads(path.read_text(encoding="utf-8"))
         entry = data["entries"][0]
         pair = entry["usage"][next(iter(entry["usage"]))]
         pair["at"] = list(reversed(pair["at"]))
         pair["cum"] = list(reversed(pair["cum"]))
-        self.assertFalse(P._usage_cache_remaining_ok(entry))
+        self.assertFalse(U._usage_cache_remaining_ok(entry))
         with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(data, ensure_ascii=False))
         with CountingFold() as counted:
@@ -463,7 +464,7 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
     def test_legacy_checkpoint_with_an_empty_live_region_is_rejected(self):
         # head == len：存活区为空，整理不出任何条目 -> 整份拒绝、退回冷折。
         first = self.fold_once()
-        path = pathlib.Path(P._usage_cache_kind_path("remaining"))
+        path = pathlib.Path(U._usage_cache_kind_path("remaining"))
         data = json.loads(path.read_text(encoding="utf-8"))
         entry = data["entries"][0]
         pair = entry["usage"][next(iter(entry["usage"]))]
@@ -527,29 +528,29 @@ class RemainingCheckpointOrderTests(unittest.TestCase):
         # 必须留在存活区：追加路径先把死前缀按 _pair_trim 的规则压掉再插入。
         buf = {"at": [], "cum": [], "head": 0, "base": 0}
         for i in range(700):
-            P._pair_append(buf, 1000000.0 + i, 2)
-        P._pair_trim(buf, 1000000.0 + 400)      # 死前缀 400 > 512 不成立
+            U._pair_append(buf, 1000000.0 + i, 2)
+        U._pair_trim(buf, 1000000.0 + 400)      # 死前缀 400 > 512 不成立
         self.assertEqual(buf["head"], 400)
-        P._pair_append(buf, 1000000.0 + 300, 7)  # 比整个死前缀都老
+        U._pair_append(buf, 1000000.0 + 300, 7)  # 比整个死前缀都老
         self.assertEqual(buf["head"], 0)
         self.assertTrue(is_sorted(buf["at"]))
         self.assertEqual(buf["base"], 400 * 2)
         self.assertEqual(len(buf["at"]), 301)
-        self.assertEqual(P._range_sum(buf, 1000000.0 + 300, 1000000.0 + 300), 7)
-        self.assertEqual(P._range_sum(buf, 1000000.0 + 399, 1000000.0 + 401), 4)
+        self.assertEqual(U._range_sum(buf, 1000000.0 + 300, 1000000.0 + 300), 7)
+        self.assertEqual(U._range_sum(buf, 1000000.0 + 399, 1000000.0 + 401), 4)
 
     def test_pair_repair_rejects_unrepairable_buffers(self):
         good = {"at": [2.0, 1.0], "cum": [5, 9], "head": 0, "base": 0}
-        self.assertTrue(P._pair_repair(good))
+        self.assertTrue(U._pair_repair(good))
         self.assertEqual(good["at"], [1.0, 2.0])
         self.assertEqual(good["cum"], [4, 9])
         self.assertEqual(good["base"], 0)
         backwards = {"at": [1.0, 2.0], "cum": [9, 5], "head": 0, "base": 0}
-        self.assertFalse(P._pair_repair(backwards))
+        self.assertFalse(U._pair_repair(backwards))
         empty = {"at": [1.0], "cum": [5], "head": 1, "base": 0}
-        self.assertFalse(P._pair_repair(empty))
+        self.assertFalse(U._pair_repair(empty))
         mismatched = {"at": [1.0], "cum": [5, 6], "head": 0, "base": 0}
-        self.assertFalse(P._pair_repair(mismatched))
+        self.assertFalse(U._pair_repair(mismatched))
 
     # ------------------------------------------------------------------
     # 两个独立进程：冷折 vs 采纳，公开路径逐字节一致
@@ -574,6 +575,7 @@ _t.time = lambda: FROZEN
 sys.path.insert(0, __ROOT__)
 import wb_accounts
 import wb_proxy as P
+import wb_usage as U
 
 class _Pool(object):
     accounts = [
@@ -583,14 +585,14 @@ class _Pool(object):
 
 P.POOL = _Pool()
 folded = {"n": 0}
-real = P._fold_remaining
+real = U._fold_remaining
 
 def counting(row, state):
     folded["n"] += 1
     return real(row, state)
 
-P._fold_remaining = counting
-payload = P.remaining_usage(ttl=0)
+U._fold_remaining = counting
+payload = U.remaining_usage(ttl=0)
 with io.open(os.environ["WB_CHILD_OUT"], "w", encoding="utf-8",
              newline="\n") as fh:
     json.dump({"payload": payload, "folded": folded["n"]}, fh,

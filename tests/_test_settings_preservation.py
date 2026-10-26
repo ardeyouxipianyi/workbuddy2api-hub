@@ -124,6 +124,7 @@ class UsageRetentionTests(unittest.TestCase):
 
     def test_readers_prefer_env_then_setting_then_default(self):
         import wb_proxy as P
+        import wb_usage as U
         with tempfile.TemporaryDirectory() as directory:
             self._write(directory, {"usage": {"hour_keep_hours": 72,
                                               "day_keep_days": 8}})
@@ -136,17 +137,17 @@ class UsageRetentionTests(unittest.TestCase):
                 for key in saved:
                     os.environ.pop(key, None)
                 try:
-                    self.assertEqual(P._usage_day_keep_days(), 8)
-                    self.assertEqual(P._usage_hour_keep_hours(), 72)
+                    self.assertEqual(U._usage_day_keep_days(), 8)
+                    self.assertEqual(U._usage_hour_keep_hours(), 72)
                     # snapshot 的小时层按天剪枝，跟着同一个「小时层保留」走。
-                    self.assertEqual(P._usage_hour_keep_days(), 3)
+                    self.assertEqual(U._usage_hour_keep_days(), 3)
                     # 环境变量仍然优先（现场调 / 测试里来回切）。
                     os.environ["WB_USAGE_DAY_KEEP_DAYS"] = "2"
                     os.environ["WB_USAGE_HOUR_KEEP_HOURS"] = "24"
                     os.environ["WB_USAGE_HOUR_KEEP_DAYS"] = "1"
-                    self.assertEqual(P._usage_day_keep_days(), 2)
-                    self.assertEqual(P._usage_hour_keep_hours(), 24)
-                    self.assertEqual(P._usage_hour_keep_days(), 1)
+                    self.assertEqual(U._usage_day_keep_days(), 2)
+                    self.assertEqual(U._usage_hour_keep_hours(), 24)
+                    self.assertEqual(U._usage_hour_keep_days(), 1)
                 finally:
                     for key, value in saved.items():
                         if value is None:

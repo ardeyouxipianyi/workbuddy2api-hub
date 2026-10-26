@@ -245,6 +245,18 @@ class ManifestTests(unittest.TestCase):
         listed = set(tools.read_manifest())
         self.assertEqual([n for n in on_disk if n not in listed], [])
 
+    def test_every_dashboard_asset_is_listed(self):
+        # dashboard.html loads its CSS / JS from assets/; one missing file is a
+        # blank or unstyled panel on the user's machine, so the list is checked
+        # against the folder, the same way as the modules above.
+        on_disk = sorted(
+            "assets/%s/%s" % (kind, name)
+            for kind in ("css", "js")
+            for name in os.listdir(os.path.join(ROOT, "assets", kind)))
+        self.assertTrue(on_disk, "assets/ is empty?")
+        listed = set(tools.read_manifest())
+        self.assertEqual([n for n in on_disk if n not in listed], [])
+
     def test_launchers_and_dashboard_are_listed(self):
         listed = tools.read_manifest()
         for name in ("dashboard.html", "console_tail.py", "wb_proxy.py", "README.md", "LICENSE",
@@ -460,6 +472,7 @@ class PortableZipTests(unittest.TestCase):
             app = manifest["profiles"]["app"]
             self.assertIn("wb_proxy.py", app)
             self.assertIn("dashboard.html", app)
+            self.assertIn("assets/js/boot.js", app)
             self.assertNotIn("pricing/pricing.json", app)
             self.assertNotIn("start-wb-proxy.bat", app)
             self.assertTrue(set(app) <= set(files))

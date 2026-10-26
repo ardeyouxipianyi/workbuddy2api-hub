@@ -10,6 +10,7 @@ os.environ["WB_PROXY_USAGE_DIR"] = _startup_dir.name
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_proxy as P
+import wb_translate as X
 
 PASS = FAIL = 0
 
@@ -110,7 +111,7 @@ print()
 print("[1b] tool_result keeps images structured")
 img_block = {"type": "image", "source": {"type": "base64",
              "media_type": "image/png", "data": "bbb"}}
-mixed = P._anthropic_tool_result_content([
+mixed = X._anthropic_tool_result_content([
     {"type": "text", "text": "screenshot read"}, img_block,
     {"type": "document", "source": {"type": "text", "data": "doc"}},
 ])
@@ -122,10 +123,10 @@ check("image part kept as image_url",
 check("document part becomes text",
       mixed[2]["type"] == "text" and "doc" in mixed[2]["text"], mixed)
 check("pure text tool_result stays a string",
-      P._anthropic_tool_result_content("a.txt") == "a.txt")
+      X._anthropic_tool_result_content("a.txt") == "a.txt")
 check("text error result is prefixed",
-      P._anthropic_tool_result_content("boom", True) == "error: boom")
-err_parts = P._anthropic_tool_result_content([img_block], True)
+      X._anthropic_tool_result_content("boom", True) == "error: boom")
+err_parts = X._anthropic_tool_result_content([img_block], True)
 check("image error result gets an error text part",
       err_parts[0] == {"type": "text", "text": "error:"}, err_parts)
 
@@ -144,11 +145,11 @@ check("messages_to_chat keeps the image part",
 
 print()
 print("[2] budget thinking maps to effort")
-check("disabled -> none", P.anthropic_effort_from_messages({"thinking": {"type": "disabled"}}) == "none")
-check("enabled low", P.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 1000}}) == "low")
-check("enabled medium", P.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 9000}}) == "medium")
-check("enabled high", P.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 17000}}) == "high")
-check("enabled xhigh", P.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 40000}}) == "xhigh")
+check("disabled -> none", X.anthropic_effort_from_messages({"thinking": {"type": "disabled"}}) == "none")
+check("enabled low", X.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 1000}}) == "low")
+check("enabled medium", X.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 9000}}) == "medium")
+check("enabled high", X.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 17000}}) == "high")
+check("enabled xhigh", X.anthropic_effort_from_messages({"thinking": {"type": "enabled", "budget_tokens": 40000}}) == "xhigh")
 
 print()
 print("[3] chat response maps to an Anthropic message")

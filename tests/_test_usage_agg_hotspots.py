@@ -43,11 +43,13 @@ os.environ["ACCOUNTS_DIR"] = ACCOUNTS_DIR
 
 import wb_proxy as P
 
+import wb_usage as U
+
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
 P.POOL = None                     # 归属只走行自己的字段/模型前缀，可确定
 P.CURRENT_REALM = "intl"
 # 计数 TTL 归零：本套件每次都要走「未缓存」路径，TTL 行为另有专门断言。
-P._COUNT_TTL = 0.0
+U._COUNT_TTL = 0.0
 # 关闭 checkpoint：本套件只测这两个读者，别让落盘状态掺进来。
 os.environ["WB_USAGE_CACHE"] = "0"
 
@@ -168,7 +170,7 @@ write_log(LOG_LINES)
 print("[1] perf_stats 窗口预过滤：与关掉预过滤（旧路径）逐字段对拍")
 
 _real_json = P.json
-_orig_line_outside = P._line_outside_window
+_orig_line_outside = U._line_outside_window
 
 
 class JsonCounter(object):
@@ -198,13 +200,13 @@ def perf_with(sample, realm, since, until, prefilter=True):
     _real_json.loads = counter.loads_hook
     try:
         if prefilter:
-            P._line_outside_window = _orig_line_outside
+            U._line_outside_window = _orig_line_outside
         else:
-            P._line_outside_window = lambda *a, **k: False
+            U._line_outside_window = lambda *a, **k: False
         try:
-            out = P._perf_stats_uncached(sample, realm, since=since, until=until)
+            out = U._perf_stats_uncached(sample, realm, since=since, until=until)
         finally:
-            P._line_outside_window = _orig_line_outside
+            U._line_outside_window = _orig_line_outside
     finally:
         _real_json.loads = old_loads
     return out, counter.loads
@@ -244,9 +246,9 @@ check("对拍：八个窗口/realm/采样组合全部逐字段一致", ok_same)
 check("预过滤真的省解析（有可省行时严格变少，无省可省时持平）", ok_loads)
 
 # 直接钉几个数字：预过滤不许把窗口内的行丢掉，也不许把窗外行算进来。
-perf_today = P._perf_stats_uncached(5000, None, since=TODAY0, until=None)
-perf_all = P._perf_stats_uncached(5000, None)
-perf_cn_today = P._perf_stats_uncached(5000, "cn", since=TODAY0, until=None)
+perf_today = U._perf_stats_uncached(5000, None, since=TODAY0, until=None)
+perf_all = U._perf_stats_uncached(5000, None)
+perf_cn_today = U._perf_stats_uncached(5000, "cn", since=TODAY0, until=None)
 check("today 窗口只数窗口内（含重复 at 行的最后值、整数 at 行）",
       perf_today["sampled"] == 9, perf_today["sampled"])
 check("all 数到全部可解析行", perf_all["sampled"] == len(LOG_LINES) - 1,
@@ -295,7 +297,7 @@ def ref_count(realm=None):
                 if '"realm"' in line:
                     continue          # realm 字段存在但值不同
                 try:
-                    if P.row_matches_realm(json.loads(line), realm):
+                    if U.row_matches_realm(json.loads(line), realm):
                         n += 1
                 except Exception:
                     pass
@@ -308,7 +310,7 @@ def ref_count(realm=None):
 
 def count_via_uncached(realm):
     """走未缓存入口（含 realm_scope 归一化），绕开 TTL 缓存。"""
-    return P._count_usage_rows_uncached(P.realm_scope(realm))
+    return U._count_usage_rows_uncached(U.realm_scope(realm))
 
 
 def compare_all(label):
@@ -317,7 +319,7 @@ def compare_all(label):
     ok = True
     for realm in (None, "intl", "cn", "all"):
         got = count_via_uncached(realm)
-        want = ref_count(P.realm_scope(realm))
+        want = ref_count(U.realm_scope(realm))
         detail[realm] = (got, want)
         ok = ok and got == want
     check(label, ok, detail)
@@ -333,7 +335,7 @@ check("没有 realm 字段的老行按模型前缀归属（gpt-* -> intl，minim
       (count_via_uncached("intl"), ref_count("intl"),
        count_via_uncached("cn"), ref_count("cn")))
 check("realm_scope('all') 与 None 同值（总数）",
-      P.count_usage_rows("all") == P.count_usage_rows(None))
+      U.count_usage_rows("all") == U.count_usage_rows(None))
 
 # 追加：增量只数新字节，结果与全量对拍
 append_log([
@@ -343,16 +345,16 @@ append_log([
 ])
 compare_all("追加后：增量结果仍与全量一致")
 check("折叠推进到了文件尾（没有每次重扫全文件）",
-      P._count_state["offset"] == os.path.getsize(USAGE_LOG),
-      (P._count_state["offset"], os.path.getsize(USAGE_LOG)))
+      U._count_state["offset"] == os.path.getsize(USAGE_LOG),
+      (U._count_state["offset"], os.path.getsize(USAGE_LOG)))
 
 # 0 新字节：一个 json.loads 都不许发生
 counter = JsonCounter()
 old_loads = _real_json.loads
 _real_json.loads = counter.loads_hook
 try:
-    n_none = P._count_usage_rows_uncached(None)
-    n_cn = P._count_usage_rows_uncached("cn")
+    n_none = U._count_usage_rows_uncached(None)
+    n_cn = U._count_usage_rows_uncached("cn")
 finally:
     _real_json.loads = old_loads
 check("0 新字节的调用完全不解析日志（loads=0）", counter.loads == 0,
@@ -365,7 +367,7 @@ counter2 = JsonCounter()
 old_loads = _real_json.loads
 _real_json.loads = counter2.loads_hook
 try:
-    P._count_usage_rows_uncached(None)
+    U._count_usage_rows_uncached(None)
 finally:
     _real_json.loads = old_loads
 check("计数桩自检：有新字节时确实解析了新增行（loads>0）",
@@ -409,9 +411,9 @@ with io.open(USAGE_LOG, "a", encoding="utf-8", newline="\n") as fh:
 check("半行不数：总数停在最后一个完整行", count_via_uncached(None) == len(LOG_LINES),
       (count_via_uncached(None), len(LOG_LINES)))
 check("半行不数：realm 计数与全量一致（半行对 realm 无贡献）",
-      all(count_via_uncached(r) == ref_count(P.realm_scope(r))
+      all(count_via_uncached(r) == ref_count(U.realm_scope(r))
           for r in ("intl", "cn")),
-      {r: (count_via_uncached(r), ref_count(P.realm_scope(r)))
+      {r: (count_via_uncached(r), ref_count(U.realm_scope(r)))
        for r in ("intl", "cn")})
 append_log([', "realm": "intl"}'])
 check("半行补全后总数与全量一致（收敛到旧实现的数字）",
@@ -445,17 +447,17 @@ check("截掉坏行后再追加：折叠继续（+1）",
       (count_via_uncached(None), partial + 1))
 
 # TTL 缓存：默认 TTL 内不重算，过期后重算并跟上新行
-P._COUNT_TTL = 30.0
-P._count_cache.clear()
-first = P.count_usage_rows("cn")
+U._COUNT_TTL = 30.0
+U._count_cache.clear()
+first = U.count_usage_rows("cn")
 append_log([jline(row(TODAY0 + 1500, "m-b", "u2", "cn"))])
-check("TTL 内命中缓存（不重算）", P.count_usage_rows("cn") == first,
-      (P.count_usage_rows("cn"), first))
-P._COUNT_TTL = 0.0
-P._count_cache.clear()
+check("TTL 内命中缓存（不重算）", U.count_usage_rows("cn") == first,
+      (U.count_usage_rows("cn"), first))
+U._COUNT_TTL = 0.0
+U._count_cache.clear()
 check("TTL 过期后重算并跟上新行",
-      P.count_usage_rows("cn") == ref_count("cn"),
-      (P.count_usage_rows("cn"), ref_count("cn")))
+      U.count_usage_rows("cn") == ref_count("cn"),
+      (U.count_usage_rows("cn"), ref_count("cn")))
 
 shutil.rmtree(_TMP, ignore_errors=True)
 print()

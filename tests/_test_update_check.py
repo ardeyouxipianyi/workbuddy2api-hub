@@ -34,6 +34,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-update-check-")
 
 import wb_proxy as proxy  # noqa: E402
+import wb_update_request  # noqa: E402
 import wb_settings  # noqa: E402
 import wb_updates  # noqa: E402
 
@@ -689,7 +690,7 @@ class RouteTests(unittest.TestCase):
             worker = checker(d, FakeFetcher([release("v1.6.18")]))
             worker.check(manual=True)
             with mock.patch.object(proxy, "UPDATES", worker), \
-                    mock.patch.object(proxy.wb_update_request, "request_install",
+                    mock.patch.object(wb_update_request, "request_install",
                                       return_value={"state": "queued", "version": "1.6.18"}) as queue:
                 request = self.Request()
                 request._route_update_install()

@@ -58,6 +58,8 @@ import time as _time
 _time.time = lambda: FROZEN
 
 import wb_proxy as P
+
+import wb_usage as U
 import wb_pricing
 
 P.ACCOUNTS_DIR = ACCOUNTS_DIR
@@ -67,7 +69,7 @@ wb_pricing.set_settings_dir(ACCOUNTS_DIR)
 USAGE_LOG = P.USAGE_LOG
 # checkpoint 在 v4 里一类一份文件：这里给出合并视图与按类读写，用例里
 # data["snapshot"] / data["series"] 的写法不用改。
-KIND_FILES = {kind: P._usage_cache_kind_path(kind) for kind in P._USAGE_CACHE_KINDS}
+KIND_FILES = {kind: U._usage_cache_kind_path(kind) for kind in U._USAGE_CACHE_KINDS}
 
 
 def cache_files():
@@ -78,7 +80,7 @@ def clear_cache_files():
     for path in KIND_FILES.values():
         if os.path.exists(path):
             os.unlink(path)
-P._usage["started"] = FROZEN
+U._usage["started"] = FROZEN
 
 PASS = FAIL = 0
 
@@ -248,19 +250,19 @@ def cache_env_off():
 
 def restart():
     """清掉所有状态、TTL 缓存与「已读过 checkpoint」的记忆，模拟进程重启。"""
-    P._usage_snap_state.clear()
-    P._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
-    P._analytics_state.clear()
-    P._series_state.clear()
-    P._snap_cache.clear()
-    P._byacct_cache.update({"at": 0.0, "data": None})
-    P._analytics_cache.clear()
-    P._series_cache.clear()
-    P._usage_cache_forget()
-    P._usage_cache_progress.clear()
-    P._usage_cache_checkpointed.clear()
-    P._usage_cache_last_attempt = time.time()
-    P._usage_cache_digest_memo.clear()
+    U._usage_snap_state.clear()
+    U._byacct_state.update({"buckets": None, "offset": 0, "key": None, "tail": b""})
+    U._analytics_state.clear()
+    U._series_state.clear()
+    U._snap_cache.clear()
+    U._byacct_cache.update({"at": 0.0, "data": None})
+    U._analytics_cache.clear()
+    U._series_cache.clear()
+    U._usage_cache_forget()
+    U._usage_cache_progress.clear()
+    U._usage_cache_checkpointed.clear()
+    U._usage_cache_last_attempt = time.time()
+    U._usage_cache_digest_memo.clear()
 
 
 # --------------------------------------------------------------------------
@@ -268,21 +270,21 @@ def restart():
 # --------------------------------------------------------------------------
 def window_raw(since, until=None, realm=None):
     """窗口半的原始折叠（走桶：两端落格点时由存量桶求和，否则冷路径）。"""
-    return P._usage_snapshot_window(realm, since, until)
+    return U._usage_snapshot_window(realm, since, until)
 
 
 def snap_window(since, until=None, realm=None):
     """公开入口的窗口结果（带 started / accounts_map 等装饰，冻结时钟后可比）。"""
-    return P._usage_snapshot_uncached(realm, since=since, until=until)
+    return U._usage_snapshot_uncached(realm, since=since, until=until)
 
 
 def series_window(since, until=None, bucket=None, realm="all"):
-    return P.usage_timeseries(realm=realm, range="custom", since=since,
+    return U.usage_timeseries(realm=realm, range="custom", since=since,
                               until=until, bucket_seconds=bucket, ttl=0)
 
 
 def an_window(since, until=None, realm=None):
-    return P._compute_usage_analytics_uncached(realm, since=since, until=until)
+    return U._compute_usage_analytics_uncached(realm, since=since, until=until)
 
 
 def ref_window(since, until=None, realm=None):
@@ -341,13 +343,13 @@ class ScanCounter(object):
                 return original(*args, **kwargs)
             return counting
         for name in self.NAMES:
-            self.original[name] = getattr(P, name)
-            setattr(P, name, make(name, self.original[name]))
+            self.original[name] = getattr(U, name)
+            setattr(U, name, make(name, self.original[name]))
         return self
 
     def __exit__(self, *exc):
         for name, fn in self.original.items():
-            setattr(P, name, fn)
+            setattr(U, name, fn)
         return False
 
 
@@ -357,7 +359,7 @@ class ScanCounter(object):
 def cache_data():
     """五个 kind 文件的合并视图：{kind: entries}（缺失/读不出的当空表）。"""
     merged = {}
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         try:
             with io.open(KIND_FILES[kind], encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -371,11 +373,11 @@ def cache_data():
 
 def save_cache(data):
     """把合并视图写回 kind 文件（保持 v4 的包装形状；空表不写）。"""
-    for kind in P._USAGE_CACHE_KINDS:
+    for kind in U._USAGE_CACHE_KINDS:
         entries = data.get(kind) or []
         if not entries:
             continue
-        payload = {"schema": P._USAGE_CACHE_SCHEMA, "kind": kind,
+        payload = {"schema": U._USAGE_CACHE_SCHEMA, "kind": kind,
                    "written_at": time.time(), "entries": entries}
         io.open(KIND_FILES[kind], "w", encoding="utf-8", newline="\n").write(
             json.dumps(payload, ensure_ascii=False))
@@ -414,8 +416,8 @@ def make_checkpoint():
 
 def live():
     """把三份状态都折到文件尾（快照 + analytics + 时间序列）。"""
-    P._usage_alltime_snapshot(None)
-    P._compute_usage_analytics_uncached(None)
+    U._usage_alltime_snapshot(None)
+    U._compute_usage_analytics_uncached(None)
     series_window(DAY_LO, DAY_HI)
 
 
@@ -429,10 +431,10 @@ def direct_adopt_snapshot():
     state = {"snap": None, "offset": 0, "key": None, "pricing": None,
              "realm": None, "tail": b"", "days": {}, "days_floor": None,
              "hours_floor_at": None, "hits": [], "hits_overflow": False}
-    with P._usage_snap_state_lock:
-        ok = P._usage_cache_adopt_snapshot(
-            None, state, P._usage_log_key(),
-            P._pricing_inputs(P.wb_pricing.pricing_enabled()), P._realm_inputs())
+    with U._usage_snap_state_lock:
+        ok = U._usage_cache_adopt_snapshot(
+            None, state, U._usage_log_key(),
+            U._pricing_inputs(P.wb_pricing.pricing_enabled()), U._realm_inputs())
     return ok, state
 
 
@@ -470,17 +472,17 @@ print()
 print("[1] 边沿账：只记整秒行；闸门按 until 放行/拦下")
 cache_env_nowrite()
 restart()
-P._usage_alltime_snapshot(None)
-state = P._usage_snap_state[None]
+U._usage_alltime_snapshot(None)
+state = U._usage_snap_state[None]
 check("账里就是三个整秒行（日志顺序）",
       state["hits"] == [int(x) for x in INT_ROWS], state["hits"])
 check("账没溢出（hits_overflow False）", state["hits_overflow"] is False)
 check("闸门：until 不在账里（TODAY0）→ 放行",
-      P._closed_window_edge_ok(state, DAY_HI) is True)
+      U._closed_window_edge_ok(state, DAY_HI) is True)
 check("闸门：until 恰好在账里（HOUR_LO）→ 拦下",
-      P._closed_window_edge_ok(state, HOUR_LO) is False)
+      U._closed_window_edge_ok(state, HOUR_LO) is False)
 check("闸门：账溢出 → 一律拦下",
-      P._closed_window_edge_ok({"hits": [], "hits_overflow": True}, DAY_HI)
+      U._closed_window_edge_ok({"hits": [], "hits_overflow": True}, DAY_HI)
       is False)
 
 print()
@@ -490,26 +492,26 @@ cache_env_nowrite()
 restart()
 # 在 #301 之后，冷状态下的窗口请求改走冷扫描以避免全量重折阻塞；
 # 先发一次 all-time 请求让状态与日/小时桶转热，后续窗口请求才能走桶！
-P._usage_alltime_snapshot(None)
-P._compute_usage_analytics_uncached(None)
+U._usage_alltime_snapshot(None)
+U._compute_usage_analytics_uncached(None)
 with ScanCounter() as counter:
     got = canon(window_raw(DAY_LO, DAY_HI))
 check("日格点闭窗口：桶路径回答、扫描 0 次、与改动前口径逐字节一致",
       got == REF_DAY and counter.calls == 0,
       (first_diff(REF_DAY, got), counter.calls, counter.per))
-cold_days = canon(P._scan_usage_snapshot_window_days(None, DAY_LO, DAY_HI))
+cold_days = canon(U._scan_usage_snapshot_window_days(None, DAY_LO, DAY_HI))
 check("日格点闭窗口：桶路径 == 按日分组冷路径（逐字节）",
       got == cold_days, first_diff(cold_days, got))
 REF_HOUR = canon(ref_window(HOUR_LO, HOUR_HI))
 cache_env_nowrite()
 restart()
-P._usage_alltime_snapshot(None)
+U._usage_alltime_snapshot(None)
 with ScanCounter() as counter:
     got = canon(window_raw(HOUR_LO, HOUR_HI))
 check("小时格点闭窗口：桶路径回答、扫描 0 次、与改动前口径逐字节一致",
       got == REF_HOUR and counter.calls == 0,
       (first_diff(REF_HOUR, got), counter.calls, counter.per))
-cold_hours = canon(P._scan_usage_snapshot_window_hours(None, HOUR_LO, HOUR_HI))
+cold_hours = canon(U._scan_usage_snapshot_window_hours(None, HOUR_LO, HOUR_HI))
 check("小时格点闭窗口：桶路径 == 按小时分组冷路径（逐字节）",
       got == cold_hours, first_diff(cold_hours, got))
 REF_AN = canon(ref_an(DAY_LO, DAY_HI))
@@ -556,12 +558,12 @@ print("[3] 边界行 = since / 窗口内整点：必须计入（左闭与桶内�
 # 「去掉那行会怎样」反向钉一次：少掉它，令牌数就不对了。
 cache_env_nowrite()
 restart()
-P._usage_alltime_snapshot(None)
+U._usage_alltime_snapshot(None)
 window_raw(DAY_LO, DAY_HI)
-no_left = P._empty_stats()
-for key in sorted(P._usage_snap_state[None]["days"]):
+no_left = U._empty_stats()
+for key in sorted(U._usage_snap_state[None]["days"]):
     if key >= DAY1_KEY and key < TODAY_KEY:
-        P._add_usage_snapshot(no_left, P._usage_snap_state[None]["days"][key])
+        U._add_usage_snapshot(no_left, U._usage_snap_state[None]["days"][key])
 check("左闭：at == since 的行在日桶里（含它就多 330 令牌）",
       no_left["total_tokens"] == 1540
       and DAY_OBJ["total_tokens"] == 1540,
@@ -595,8 +597,8 @@ cache_env_nowrite()
 restart()
 # 在 #301 之后，冷状态下的窗口请求改走冷扫描以避免全量重折阻塞；
 # 先发一次 all-time 请求让状态与日/小时桶转热，后续窗口请求才能走桶！
-P._usage_alltime_snapshot(None)
-P._compute_usage_analytics_uncached(None)
+U._usage_alltime_snapshot(None)
+U._compute_usage_analytics_uncached(None)
 with ScanCounter() as counter:
     got = canon(window_raw(DAY_LO, DAY_HI))
 check("at == until（午夜整秒行）：闸门拦住桶路径、退回扫描、逐字节一致",
@@ -687,10 +689,10 @@ overflow_rows = [row(HOUR_LO + 30 + i, "m-a", "u1", 10, 1)
 write_log(ROWS + overflow_rows)
 cache_env_nowrite()
 restart()
-P._usage_alltime_snapshot(None)
-state = P._usage_snap_state[None]
+U._usage_alltime_snapshot(None)
+state = U._usage_snap_state[None]
 check("账溢出标记亮起（记满后停记）", state["hits_overflow"] is True
-      and len(state["hits"]) == P._CLOSED_WINDOW_HITS_MAX,
+      and len(state["hits"]) == U._CLOSED_WINDOW_HITS_MAX,
       (state["hits_overflow"], len(state["hits"])))
 for label, kwargs in (("日格点", dict(since=DAY_LO, until=DAY_HI)),
                       ("小时格点", dict(since=HOUR_LO, until=HOUR_HI))):
@@ -728,15 +730,15 @@ check("analytics 条目带 hits（同一份账）",
       analytics_entry(data, None).get("hits") == [int(x) for x in INT_ROWS],
       analytics_entry(data, None).get("hits"))
 check("_usage_cache_hits_ok：合法形状通过",
-      P._usage_cache_hits_ok([], False) and P._usage_cache_hits_ok([1, 2], True))
+      U._usage_cache_hits_ok([], False) and U._usage_cache_hits_ok([1, 2], True))
 check("_usage_cache_hits_ok：缺键/非列表/非整数/非严格 bool 一律拒",
-      not P._usage_cache_hits_ok(None, False)
-      and not P._usage_cache_hits_ok([], None)
-      and not P._usage_cache_hits_ok("x", False)
-      and not P._usage_cache_hits_ok([1.5], False)
-      and not P._usage_cache_hits_ok([True], False)
-      and not P._usage_cache_hits_ok([], 1)
-      and not P._usage_cache_hits_ok([], 0))
+      not U._usage_cache_hits_ok(None, False)
+      and not U._usage_cache_hits_ok([], None)
+      and not U._usage_cache_hits_ok("x", False)
+      and not U._usage_cache_hits_ok([1.5], False)
+      and not U._usage_cache_hits_ok([True], False)
+      and not U._usage_cache_hits_ok([], 1)
+      and not U._usage_cache_hits_ok([], 0))
 # 采用：合法条目 accept，hits 装进状态。
 ok, adopted_state = direct_adopt_snapshot()
 check("合法条目：adopt 返回 True", ok is True)
@@ -749,8 +751,8 @@ cache_env_read()
 restart()
 got = canon(window_raw(DAY_LO, DAY_HI))
 check("重启（采用 checkpoint）后闭窗口与冷折逐字节一致",
-      got == BASE_DAY and "snapshot" in P._usage_cache_checkpointed,
-      (first_diff(BASE_DAY, got), sorted(P._usage_cache_checkpointed)))
+      got == BASE_DAY and "snapshot" in U._usage_cache_checkpointed,
+      (first_diff(BASE_DAY, got), sorted(U._usage_cache_checkpointed)))
 # 采纳回来的账参与闸门：把 until 加进账里 → 该窗口必须退回扫描。
 make_checkpoint()
 data = cache_data()
@@ -790,8 +792,8 @@ cache_env_read()
 restart()
 got = canon(window_raw(DAY_LO, DAY_HI))
 check("旧格式被拒后一次性重折：闭窗口结果与冷折一致",
-      got == BASE_DAY and "snapshot" not in P._usage_cache_checkpointed,
-      (first_diff(BASE_DAY, got), sorted(P._usage_cache_checkpointed)))
+      got == BASE_DAY and "snapshot" not in U._usage_cache_checkpointed,
+      (first_diff(BASE_DAY, got), sorted(U._usage_cache_checkpointed)))
 # series 与 analytics 的旧格式条目同样被拒（两份都要重折一次）。
 make_checkpoint()
 data = cache_data()
@@ -805,11 +807,11 @@ restart()
 got_series = canon(series_window(DAY_LO, DAY_HI))
 got_an = canon(an_window(DAY_LO, DAY_HI))
 check("旧格式：series 条目被拒（没进已采纳表）",
-      "series" not in P._usage_cache_checkpointed,
-      sorted(P._usage_cache_checkpointed))
+      "series" not in U._usage_cache_checkpointed,
+      sorted(U._usage_cache_checkpointed))
 check("旧格式：analytics 条目被拒（没进已采纳表）",
-      "analytics" not in P._usage_cache_checkpointed,
-      sorted(P._usage_cache_checkpointed))
+      "analytics" not in U._usage_cache_checkpointed,
+      sorted(U._usage_cache_checkpointed))
 check("旧格式被拒后：series 闭窗口与冷折一致", got_series == BASE_SER_HOUR,
       first_diff(BASE_SER_HOUR, got_series))
 check("旧格式被拒后：analytics 闭窗口与冷折一致", got_an == BASE_AN_DAY,
@@ -852,14 +854,14 @@ for label, kwargs in cases:
 cache_env_nowrite()
 restart()
 series_window(DAY_LO, DAY_HI)
-state = P._series_state[None]
-float_slice = P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY)
-float_scan = P._usage_timeseries_scan(None, DAY_LO, DAY_HI, 3600)
+state = U._series_state[None]
+float_slice = U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY)
+float_scan = U._usage_timeseries_scan(None, DAY_LO, DAY_HI, 3600)
 check("step=3600：切片直接调用与整段扫描逐字节一致",
       float_slice is not None and canon(float_slice) == canon(float_scan),
       first_diff(canon(float_scan), canon(float_slice or {})))
-day_slice = P._series_slice(state, None, DAY2_LO, DAY_HI, 86400, DAY2_KEY)
-day_scan = P._usage_timeseries_scan(None, DAY2_LO, DAY_HI, 86400)
+day_slice = U._series_slice(state, None, DAY2_LO, DAY_HI, 86400, DAY2_KEY)
+day_scan = U._usage_timeseries_scan(None, DAY2_LO, DAY_HI, 86400)
 check("step=86400：切片直接调用与整段扫描逐字节一致",
       day_slice is not None and canon(day_slice) == canon(day_scan),
       first_diff(canon(day_scan), canon(day_slice or {})))
@@ -877,9 +879,9 @@ check("切片不吐窗口外的 credit 行（上界之后的两条 credit 不在
 cache_env_nowrite()
 restart()
 series_window(MIN_LO, MIN_HI)
-min_slice = P._series_slice(P._series_state[None], None, MIN_LO, MIN_HI, 60,
+min_slice = U._series_slice(U._series_state[None], None, MIN_LO, MIN_HI, 60,
                             TODAY_KEY)
-min_scan = P._usage_timeseries_scan(None, MIN_LO, MIN_HI, 60)
+min_scan = U._usage_timeseries_scan(None, MIN_LO, MIN_HI, 60)
 check("step=60：切片直接调用与整段扫描逐字节一致",
       min_slice is not None and canon(min_slice) == canon(min_scan),
       first_diff(canon(min_scan), canon(min_slice or {})))
@@ -897,7 +899,7 @@ check("关掉日桶：series 与 analytics 闭窗口与基线一致",
 cache_env_nowrite()
 restart()
 check("日桶关掉时窗口路径连状态都不碰（没有可用的层）",
-      not P._usage_snap_state and not P._series_state)
+      not U._usage_snap_state and not U._series_state)
 cache_env()
 
 print()
@@ -907,42 +909,42 @@ print("[10] 夏令时假时区：闭窗口跨切换日照样正确，格点被�
 cache_env_nowrite()
 restart()
 series_window(DAY_LO, DAY_HI)
-state = P._series_state[None]
+state = U._series_state[None]
 check("对齐闭窗口本来就走切片",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
 state["days"][TODAY_KEY]["at"] += 3600        # 假装这一天少了/多了 3600 秒
 check("日桶 at 不落在 86400 格点上时闭窗口切片放弃（退回扫描）",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
 state["days"][TODAY_KEY]["at"] -= 3600
 hours = state["days"][TODAY_KEY]["hours"]
 h_key = sorted(hours, key=int)[0]
 hours[h_key]["at"] += 60
 check("小时子桶 at 与日桶对不上时切片放弃",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
 hours[h_key]["at"] -= 60
 check("恢复后切片又能用",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
 state["hits"].append(int(DAY_HI))
 check("账里补进 until（整秒行）→ 闭窗口切片放弃（闸门）",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is None)
 state["hits"].remove(int(DAY_HI))
 check("账里去掉 until 后切片又能用",
-      P._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
+      U._series_slice(state, None, DAY_LO, DAY_HI, 3600, DAY1_KEY) is not None)
 # snapshot 侧同一条：把今天的小时桶 at 挪 1800 秒 → 小时层拒绝服务。
 cache_env_nowrite()
 restart()
-P._usage_alltime_snapshot(None)
+U._usage_alltime_snapshot(None)
 window_raw(HOUR_LO, HOUR_HI)
-snap_state = P._usage_snap_state[None]
+snap_state = U._usage_snap_state[None]
 check("对齐的小时闭窗口本来就走层",
-      P._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None)
+      U._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None)
       is not None)
 snap_state["days"][TODAY_KEY]["at"] += 1800
 check("小时桶 at 与日桶对不上时小时层拒绝（退回冷路径）",
-      P._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None) is None)
+      U._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None) is None)
 snap_state["days"][TODAY_KEY]["at"] -= 1800
 check("恢复后小时层又能用",
-      P._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None)
+      U._usage_snapshot_window_from_hours(None, HOUR_LO, HOUR_HI, None)
       is not None)
 
 if hasattr(time, "tzset"):
@@ -986,7 +988,7 @@ if hasattr(time, "tzset"):
             ref = canon(ref_window(M27, M28))
             cache_env_nowrite()
             restart()
-            P._usage_alltime_snapshot(None)
+            U._usage_alltime_snapshot(None)
             with ScanCounter() as counter:
                 got = canon(window_raw(M27, M28))
             check("夏令时：切换后规则日闭窗口走日桶（扫描 0 次）、逐字节一致",
@@ -1013,7 +1015,7 @@ if hasattr(time, "tzset"):
             cache_env_nowrite()
             restart()
             series_window(M24, M28, bucket=86400)
-            sliced = P._series_slice(P._series_state[None], None, M24, M28,
+            sliced = U._series_slice(U._series_state[None], None, M24, M28,
                                      86400,
                                      time.strftime("%Y-%m-%d",
                                                    time.localtime(M24)))

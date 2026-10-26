@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import wb_accounts
 import wb_proxy as proxy
+import wb_models as MC
 import wb_settings as S
 import wb_tiers
 
@@ -142,21 +143,21 @@ class AvailabilityTests(unittest.TestCase):
 
     def test_no_pool_advertises_everything(self):
         with mock.patch.object(proxy, "POOL", None):
-            self.assertTrue(proxy.models_available_for("pro-model", "intl"))
+            self.assertTrue(MC.models_available_for("pro-model", "intl"))
 
     def test_no_enabled_account_hides_everything(self):
         self.pool.accounts = [make_account("a", enabled=False)]
         with mock.patch.object(proxy, "POOL", self.pool):
-            self.assertFalse(proxy.models_available_for("free-model", "intl"))
+            self.assertFalse(MC.models_available_for("free-model", "intl"))
 
     def test_pro_model_needs_a_paid_account(self):
         self.pool.accounts = [make_account("free")]
         with mock.patch.object(proxy, "POOL", self.pool):
-            self.assertTrue(proxy.models_available_for("free-model", "intl"))
-            self.assertFalse(proxy.models_available_for("pro-model", "intl"))
+            self.assertTrue(MC.models_available_for("free-model", "intl"))
+            self.assertFalse(MC.models_available_for("pro-model", "intl"))
         self.pool.accounts.append(make_account("paid", paid=True))
         with mock.patch.object(proxy, "POOL", self.pool):
-            self.assertTrue(proxy.models_available_for("pro-model", "intl"))
+            self.assertTrue(MC.models_available_for("pro-model", "intl"))
 
 
 class FakeRequest(object):

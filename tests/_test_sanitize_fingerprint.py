@@ -10,26 +10,27 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-fingerprint-")
 
 import wb_proxy as P
+import wb_transforms as T
 
 class FingerprintSanitizationTests(unittest.TestCase):
     def test_omo_junior_fingerprint_neutralized(self):
         fp = "Sisyphus-Junior - Focused executor from OhMyOpenCode"
         # 1. Exact string rewritten
-        self.assertEqual(P.sanitize_text(fp), "Sisyphus-Junior - Focused executor")
+        self.assertEqual(T.sanitize_text(fp), "Sisyphus-Junior - Focused executor")
 
         # 2. Case insensitive
-        self.assertEqual(P.sanitize_text(fp.lower()), "Sisyphus-Junior - Focused executor")
+        self.assertEqual(T.sanitize_text(fp.lower()), "Sisyphus-Junior - Focused executor")
 
         # 3. Embedded in context
         text = f"You are a subagent. {fp}. Complete the task."
         expected = "You are a subagent. Sisyphus-Junior - Focused executor. Complete the task."
-        self.assertEqual(P.sanitize_text(text), expected)
+        self.assertEqual(T.sanitize_text(text), expected)
 
     def test_omo_partial_tokens_untouched(self):
         # Tokens alone should not be stripped or modified
-        self.assertEqual(P.sanitize_text("Sisyphus-Junior alone"), "Sisyphus-Junior alone")
-        self.assertEqual(P.sanitize_text("from OhMyOpenCode alone"), "from OhMyOpenCode alone")
-        self.assertEqual(P.sanitize_text("Sisyphus master agent"), "Sisyphus master agent")
+        self.assertEqual(T.sanitize_text("Sisyphus-Junior alone"), "Sisyphus-Junior alone")
+        self.assertEqual(T.sanitize_text("from OhMyOpenCode alone"), "from OhMyOpenCode alone")
+        self.assertEqual(T.sanitize_text("Sisyphus master agent"), "Sisyphus master agent")
 
     def test_sanitize_messages_covers_all_roles_and_tool_args(self):
         fp = "Sisyphus-Junior - Focused executor from OhMyOpenCode"
@@ -71,35 +72,35 @@ class DshHarnessChannelFingerprintTests(unittest.TestCase):
     CLEAN = "You are a helpful AI assistant."
 
     def test_exact_phrase_rewritten(self):
-        self.assertEqual(P.sanitize_text(self.FP), self.CLEAN)
+        self.assertEqual(T.sanitize_text(self.FP), self.CLEAN)
 
     def test_case_insensitive(self):
-        self.assertEqual(P.sanitize_text(self.FP.upper()), self.CLEAN)
-        self.assertEqual(P.sanitize_text(self.FP.lower()), self.CLEAN)
+        self.assertEqual(T.sanitize_text(self.FP.upper()), self.CLEAN)
+        self.assertEqual(T.sanitize_text(self.FP.lower()), self.CLEAN)
 
     def test_coding_agent_sentence_rewritten(self):
-        self.assertEqual(P.sanitize_text(self.FP2), self.CLEAN)
+        self.assertEqual(T.sanitize_text(self.FP2), self.CLEAN)
 
     def test_built_on_variant_rewritten(self):
-        self.assertEqual(P.sanitize_text("You are an AI assistant built on DeepSeek."),
+        self.assertEqual(T.sanitize_text("You are an AI assistant built on DeepSeek."),
                          self.CLEAN)
 
     def test_embedded_in_system_prompt(self):
         text = self.FP + "\n\nYou are a coding agent."
-        out = P.sanitize_text(text)
+        out = T.sanitize_text(text)
         self.assertEqual(out, self.CLEAN + "\n\nYou are a coding agent.")
-        self.assertFalse(P.has_fingerprint(out))
+        self.assertFalse(T.has_fingerprint(out))
 
     def test_idempotent(self):
-        once = P.sanitize_text(self.FP)
-        self.assertEqual(P.sanitize_text(once), once)
+        once = T.sanitize_text(self.FP)
+        self.assertEqual(T.sanitize_text(once), once)
 
     def test_partial_phrases_untouched(self):
         # 只有连续整句是已确认的指纹；不构成自述句的文本不整句替换。
         for text in ("You are an AI agent.",
                      "You are free to use tools built by the user."):
-            self.assertEqual(P.sanitize_text(text), text)
-            self.assertFalse(P.has_fingerprint(text))
+            self.assertEqual(T.sanitize_text(text), text)
+            self.assertFalse(T.has_fingerprint(text))
 
     def test_sanitize_messages_covers_system_role(self):
         messages = [
@@ -152,7 +153,7 @@ class DshGuiParagraphTests(unittest.TestCase):
     def test_brand_word_reduced(self):
         # #579 只改语序，实测仍 400；#574 确认品牌词是必要条件，缩成
         # `DeepSeek` 后通过，句子其余部分不动。
-        out = P.sanitize_text(self.GUI)
+        out = T.sanitize_text(self.GUI)
         self.assertIn("DeepSeek Web GUI", out)
         self.assertNotIn("DeepSeek Harness", out)
         self.assertNotIn("whose URL the runtime context names", out)
@@ -176,7 +177,7 @@ class DshGuiParagraphTests(unittest.TestCase):
                            ("the DeepSeek Harness project", "the DeepSeek project"),
                            ("You are interacting with the user through the DeepSeek Harness CLI.",
                             "You are interacting with the user through the DeepSeek CLI.")):
-            self.assertEqual(P.sanitize_text(text), want, text)
+            self.assertEqual(T.sanitize_text(text), want, text)
 
     def test_hyphenated_identifiers_untouched(self):
         # 路径 / 包名 / 仓库地址里的连字符形式必须原样保留。
@@ -185,16 +186,16 @@ class DshGuiParagraphTests(unittest.TestCase):
             "import deepseek_harness as dsh",
             "/opt/deepseek-harness/app",
         ):
-            self.assertEqual(P.sanitize_text(text), text, text)
+            self.assertEqual(T.sanitize_text(text), text, text)
 
     def test_case_insensitive_and_idempotent(self):
-        out = P.sanitize_text(self.GUI.lower())
+        out = T.sanitize_text(self.GUI.lower())
         self.assertEqual(
             out,
             self.GUI.lower().replace("whose url the runtime context names",
                                      "whose URL is named in the runtime context")
                           .replace("deepseek harness", "DeepSeek"))
-        self.assertEqual(P.sanitize_text(out), out)
+        self.assertEqual(T.sanitize_text(out), out)
 
     def test_wire_body_carries_the_rewrite(self):
         # 走完整链路再断言一次：规则接上了还不够，得确认 build_upstream_body
@@ -273,7 +274,7 @@ class IdentityVerbVariantsTests(unittest.TestCase):
     def test_built_by_variant_rewritten(self):
         # 专名 + 逗号 + built by 的形态（客户端默认身份句常见写法）。
         self.assertEqual(
-            P.sanitize_text("You are Example Agent, built by Example Corp. Be direct."),
+            T.sanitize_text("You are Example Agent, built by Example Corp. Be direct."),
             self.CLEAN + " Be direct.")
 
     def test_created_developed_made_trained_variants(self):
@@ -283,11 +284,11 @@ class IdentityVerbVariantsTests(unittest.TestCase):
             "You are a chat model made by Example Corp.",
             "You are an assistant trained by Example Corp.",
         ):
-            self.assertEqual(P.sanitize_text(sentence), self.CLEAN, sentence)
+            self.assertEqual(T.sanitize_text(sentence), self.CLEAN, sentence)
 
     def test_bare_powered_by_without_noun(self):
         self.assertEqual(
-            P.sanitize_text("You are powered by the model named glm-5.3-flash."),
+            T.sanitize_text("You are powered by the model named glm-5.3-flash."),
             self.CLEAN)
 
     def test_participle_modifying_object_is_untouched(self):
@@ -295,7 +296,7 @@ class IdentityVerbVariantsTests(unittest.TestCase):
             "You are free to use tools built by the user.",
             "You are a coding agent pairing with the user inside their codebase.",
         ):
-            self.assertEqual(P.sanitize_text(sentence), sentence, sentence)
+            self.assertEqual(T.sanitize_text(sentence), sentence, sentence)
 
     def test_variants_scoped_to_system_and_developer(self):
         fp = "You are Example Agent, built by Example Corp."

@@ -1,0 +1,116 @@
+:root{
+  /* 对比度增强 v2（2026-10-15）：信号元素进一步推强。
+     --accent 3.90→6.23、--dim 4.48→5.35(bg)、--accent2 3.93→5.75、
+     bg/panel 层次 1.09→1.19、边框 1.28→1.56。 */
+  --bg:#efebe0; --panel:#ffffff; --panel2:#e9e5d6; --panel3:#e0dbc9;
+  --line:#d5cfbc; --line-hover:#c5bfab;
+  --fg:#1f1e1b; --dim:#625f57; --dim-light:#87847a;
+  --accent:#a14427; --accent-hover:#8a3a20; --accent-soft:rgba(161,68,39,.09);
+  --accent-selected-bg:rgba(161,68,39,.14); --bad-selected-bg:rgba(181,71,59,.12);
+  --accent2:#497035; --accent2-soft:rgba(73,112,53,.12);
+  --warn:#a0691c; --warn-soft:rgba(183,121,31,.12);
+  --think:#7d5c8a; --think-soft:rgba(125,92,138,.10);
+  --bad:#b5473b; --bad-soft:rgba(181,71,59,.09);
+  --shadow-sm:0 1px 2px 0 rgba(31,30,27,.05);
+  --shadow:0 1px 2px 0 rgba(31,30,27,.05),0 4px 14px rgba(31,30,27,.04);
+  --shadow-md:0 2px 6px 0 rgba(31,30,27,.06),0 12px 32px rgba(31,30,27,.09);
+  --header-bg:rgba(239,235,224,.92);
+  --on-accent:#fff; --danger-bg:rgba(181,71,59,.14); --danger-border:rgba(181,71,59,.35);
+  --overlay-mask:rgba(15,23,42,.45); --terminal-bg:#16140f; --terminal-head:#1d1b15;
+  --terminal-border:#2b2820; --terminal-fg:#d6d3c9; --terminal-dim:#7c796f;
+  --terminal-error:#ef4444; --terminal-warn:#f59e0b; --terminal-ok:#10b981;
+  --blue:#4f82b0; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --summary-row-bg:rgba(37,99,235,.06); --toast-bad-bg:rgba(254,242,242,.98); --toast-warn-bg:rgba(255,251,235,.98);
+  /* 页面左右留白：header 与 main 共用同一个值，窄屏收窄、宽屏封顶 28px，
+     免得主区域两侧堆出一大片用不上的空白。 */
+  --page-pad:clamp(14px,1.4vw,28px);
+  --serif:ui-serif, Georgia, "Source Han Serif SC", "Noto Serif SC", "Songti SC", serif;
+  --radius-card:12px; --radius-control:8px; --radius-pill:12px;
+  color-scheme:light;
+}
+[data-theme="dark"]{
+  /* 对比度增强 v2（2026-10-15）：--accent 4.73→5.52、表面层次 1.13→1.19、
+     边框 1.38→1.61。暗色下强调色提亮保持信号锐度。 */
+  --bg:#1f1e1b; --panel:#2d2c25; --panel2:#38362f; --panel3:#433f37;
+  --line:#4f4b42; --line-hover:#5d584e;
+  --fg:#edebe3; --dim:#a5a29a; --dim-light:#7c796f;
+  --accent:#e88a68; --accent-hover:#f0967a; --accent-soft:rgba(232,138,104,.14);
+  --accent-selected-bg:rgba(232,138,104,.18); --bad-selected-bg:rgba(217,123,114,.16);
+  --accent2:#8fae78; --accent2-soft:rgba(143,174,120,.15);
+  --warn:#d9b25f; --warn-soft:rgba(217,178,95,.15);
+  --think:#bfa3cc; --think-soft:rgba(191,163,204,.15);
+  --bad:#d97b72; --bad-soft:rgba(217,123,114,.15);
+  --shadow-sm:0 1px 2px 0 rgba(0,0,0,.25);
+  --shadow:0 1px 2px 0 rgba(0,0,0,.25),0 4px 14px rgba(0,0,0,.25);
+  --shadow-md:0 2px 6px 0 rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+  --header-bg:rgba(31,30,27,.92);
+  --on-accent:#fff; --danger-bg:rgba(217,123,114,.15); --danger-border:rgba(217,123,114,.35);
+  --overlay-mask:rgba(0,0,0,.65); --terminal-bg:#16140f; --terminal-head:#1d1b15;
+  --terminal-border:#2b2820; --terminal-fg:#d6d3c9; --terminal-dim:#7c796f;
+  --terminal-error:#ef4444; --terminal-warn:#f59e0b; --terminal-ok:#10b981;
+  --blue:#8ab4d9;
+  --summary-row-bg:rgba(59,130,246,.12); --toast-bad-bg:rgba(69,10,10,.95); --toast-warn-bg:rgba(69,43,8,.95);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.card,section.panel,#pageAnalytics .panel,#pageAnalytics .kpi,.modal{border-radius:var(--radius-card)}
+button,.btn,input,select,textarea,.chip,.range-btn,.badge,.tag{border-radius:var(--radius-control)}
+.pill,.chip.on,.theme-opt-check,.mini{border-radius:var(--radius-pill)}
+header{padding:16px var(--page-pad);border-bottom:1px solid var(--line);display:flex;
+  align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  position:sticky;top:0;background:var(--header-bg);backdrop-filter:blur(10px);z-index:10;box-shadow:var(--shadow-sm)}
+header h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;color:var(--fg)}
+header h1 span{color:var(--dim);font-weight:400;font-size:13px;margin-left:8px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent2);
+  margin-right:7px;vertical-align:middle;box-shadow:0 0 0 2px rgba(94,140,79,.22)}
+.dot.err{background:var(--bad);box-shadow:0 0 0 2px rgba(181,71,59,.22)}
+.meta{color:var(--dim);font-size:12px;text-align:right;line-height:1.6}
+.meta b{color:var(--fg);font-weight:600}
+main{padding:20px var(--page-pad) 60px;max-width:2000px;margin:0 auto}
+/* Claude 风格统一（2026-10-14）：原生控件与滚动条着暖色 */
+input[type="checkbox"],input[type="radio"]{accent-color:var(--accent)}
+::selection{background:var(--accent-soft)}
+*{scrollbar-width:thin;scrollbar-color:var(--line-hover) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line-hover);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background-color:var(--dim-light);background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-bottom:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;box-shadow:var(--shadow);min-width:0}
+.card .k{color:var(--dim);font-size:12px;margin-bottom:6px;font-weight:500}
+.card .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .s{color:var(--dim);font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card.think .v{color:var(--think)}
+.card.accent .v{color:var(--accent)}
+.card.accent2 .v{color:var(--accent2)}
+.card.err .v{color:var(--bad)}
+/* 网关页顶部统计条：三张统计卡 + 底部的调度器状态行合成一块面板（上段数值、
+   下段系统状态），比三张各自拉满整行宽的独立卡片紧凑，也比独立的调度器横条
+   轻。分段之间用 1px 分隔线，不再各自画边框。 */
+.gw-summary{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
+#cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;margin:0}
+#cards .card{padding:13px 20px;min-width:0;border-radius:0;background:transparent;border:none;
+  box-shadow:none;display:flex;flex-direction:column;justify-content:space-between;min-height:0}
+#cards .card+.card{border-left:1px solid var(--line)}
+#schedulerBar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  gap:8px;padding:8px 20px;border-top:1px solid var(--line);background:var(--panel2);font-size:12px}
+#cards .card .k{font-size:12px;color:var(--dim);margin-bottom:8px;font-weight:600;letter-spacing:.2px}
+#cards .card .v{font-size:22px;font-weight:700;letter-spacing:-.3px;color:var(--fg);display:flex;align-items:baseline}
+#cards .card .v-split{display:flex;flex-direction:column;gap:5px;width:100%}
+#cards .card .v-row{display:flex;align-items:baseline;justify-content:space-between;font-size:13px;line-height:1.2}
+#cards .card .v-label{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
+#cards .card .v-num{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--fg)}
+#cards .card .v-unit{font-size:11px;font-weight:400;color:var(--dim);margin-left:3px}
+/* 统一焦点环：键盘聚焦才显示，鼠标点击不留框；颜色跟着主题强调色。 */
+:where(button,a,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:where(button,a,input,select,textarea,[tabindex]):focus:not(:focus-visible){outline:none}
+input:not([type=checkbox]):not([type=radio]),select,textarea{transition:border-color .15s ease,box-shadow .15s ease}
+input:not([type=checkbox]):not([type=radio]):focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);outline:none}
+/* 页面切换淡入：只动透明度和一点位移，不影响布局；减少动态效果时关掉。 */
+.main-page.active{animation:wbPageIn .18s ease-out}
+@keyframes wbPageIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.main-page.active{animation:none}*{transition-duration:0s!important}}

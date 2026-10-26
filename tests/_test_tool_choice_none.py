@@ -24,6 +24,7 @@ from _isolated_dirs import isolated_data_dirs  # noqa: E402  (its own data root)
 _TMP = isolated_data_dirs("wb-tool-choice-")
 
 import wb_proxy as P
+import wb_transforms as T
 
 PASS = FAIL = 0
 def check(label, cond, extra=""):
@@ -107,7 +108,7 @@ block = (
     "</" + FS + "DSML" + FS + " invoke>" + chr(10) +
     "</" + FS + "DSML" + FS + " calls>"
 )
-calls, clean = P.parse_dsml_tool_calls(block)
+calls, clean = T.parse_dsml_tool_calls(block)
 check("DSML call recovered from text", bool(calls), calls)
 if calls:
     check("recovered the function name", calls[0]["name"] == "run_shell", calls[0])
