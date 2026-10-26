@@ -18214,6 +18214,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         log(fmt % args)
+
+    def _extra_response_headers(self):
+        """扩展注入额外响应头的钩子；默认无。返回 dict 或 None。"""
+        return None
+
     def _json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -18232,6 +18237,8 @@ class Handler(BaseHTTPRequestHandler):
         # request line is rejected before it), so fall back to "".
         if cors_origin_allowed(getattr(self, "path", "") or ""):
             self.send_header("Access-Control-Allow-Origin", "*")
+        for _k, _v in (getattr(self, "_extra_response_headers", lambda: None)() or {}).items():
+            self.send_header(_k, _v)
         self.end_headers()
         self.wfile.write(body)
         # Flush here rather than relying on the caller: with HTTP/1.1
@@ -21800,6 +21807,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         if cors_origin_allowed(self.path):
             self.send_header("Access-Control-Allow-Origin", "*")
+        for _k, _v in (getattr(self, "_extra_response_headers", lambda: None)() or {}).items():
+            self.send_header(_k, _v)
         self.end_headers()
         resp_id = _new_id("resp_")
         seq = 0
@@ -21843,6 +21852,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         if cors_origin_allowed(self.path):
             self.send_header("Access-Control-Allow-Origin", "*")
+        for _k, _v in (getattr(self, "_extra_response_headers", lambda: None)() or {}).items():
+            self.send_header(_k, _v)
         self.end_headers()
         holder = {"usage": None, "custom_names": custom_names,
                   "request_meta": request_meta,
@@ -22121,6 +22132,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         if cors_origin_allowed(self.path):
             self.send_header("Access-Control-Allow-Origin", "*")
+        for _k, _v in (getattr(self, "_extra_response_headers", lambda: None)() or {}).items():
+            self.send_header(_k, _v)
         self.end_headers()
         holder = {"usage": None}
         first_ms = None
@@ -22492,6 +22505,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Connection", "close")
                 if cors_origin_allowed(self.path):
                     self.send_header("Access-Control-Allow-Origin", "*")
+                for _k, _v in (getattr(self, "_extra_response_headers", lambda: None)() or {}).items():
+                    self.send_header(_k, _v)
                 self.end_headers()
             # A retry reuses the headers already on the wire; the client has not
             # seen a single byte, so a fresh chunk id is safe.

@@ -77,6 +77,35 @@ def validate_payload(payload):
     walk(payload.get("input", []))
 
 
+def has_image(payload):
+    """payload（chat/Responses/Messages 任一形态）是否含图片 parts。
+
+    与 validate_payload 同一遍历范围（messages / input / function_call_output
+    的嵌套输出），只检测不校验：URL/base64 是否合法由 dispatch 入口的
+    validate_payload 负责，这里只回答「这次请求带了图没有」。
+    """
+    found = []
+
+    def walk(value):
+        if found:
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            kind = value.get("type", "")
+            if kind in ("input_image", "image_url", "image") or "image_url" in value:
+                found.append(True)
+                return
+            for key in ("content", "input", "output"):
+                if key in value:
+                    walk(value[key])
+
+    walk(payload.get("messages", []))
+    walk(payload.get("input", []))
+    return bool(found)
+
+
 def install_responses_detail(hub, runtime):
     original = hub._flatten_content
 

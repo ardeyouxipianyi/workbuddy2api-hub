@@ -17,6 +17,8 @@ DEFAULTS = {
     "models_ttl_seconds": 60,
     "catalog_models": [],
     "catalog_include_images": False,
+    "vision_fallback_enabled": False,
+    "vision_fallback_model": "deepseek-v4.1-flash",
 }
 
 
@@ -71,6 +73,14 @@ class BridgeConfig:
             value = data[key]
             if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 3600:
                 raise ValueError(key + " must be an integer from 1 to 3600")
+        if not isinstance(data["vision_fallback_enabled"], bool):
+            raise ValueError("vision_fallback_enabled must be true or false")
+        model = data["vision_fallback_model"]
+        if not isinstance(model, str) or not model.strip() or model != model.strip():
+            raise ValueError("vision_fallback_model must be a non-empty upstream model id")
+        data["vision_fallback_model"] = model
+        if model.startswith(("codeart/", "codearts/")):
+            raise ValueError("vision_fallback_model must be a WorkBuddy-native model, not a bridge alias")
         return data
 
     def snapshot(self):

@@ -11,7 +11,98 @@ from urllib.parse import parse_qs, urlsplit
 
 from .client import ADMIN_ACTIONS, CodeArtsClient, is_codearts, upstream_model
 from .config import BridgeConfig
-from .media import validate_payload, install_responses_detail
+from .media import validate_payload, install_responses_detail, has_image
+
+
+class _AliasStream:
+    """回退流的别名重写：只把 SSE chunk 的 model 字段改回客户端请求的 codeart 别名。
+
+    与 client.ModelStream 的行缓冲机制同构（参照 client.py:40-107），差异：
+    不识别 event: error、不做 [DONE] 强制检测、不产生 stream_error——错误语义由
+    wb 原生路径（_chat_stream_response 的 pending_finish/异常分支）自己管理。
+    同时修复非流式路径：aggregate_stream 会用 chunk 的 model 覆盖初始值，
+    不重写则非流式响应体 model 会变成目标模型。
+    """
+    def __init__(self, response, model):
+        self.response = response
+        self.model = model
+        self.pending = b""
+        self.headers = getattr(response, "headers", None)
+        self._wb_billed_model = model
+
+    @property
+    def length(self):
+        """动态透传底层 HTTPResponse.length，供 iter_sse_lines 检测上游提前关闭
+        （见 wb_proxy.py 的 IncompleteRead 路径，issue #522 的 reopen 重试）。
+
+        必须动态读取而非在 __init__ 快照：底层 read1() 会随读取递减 length，
+        快照值永不更新，完整读完也会被误判成截断。
+        """
+        return getattr(self.response, "length", 0)
+
+    def __iter__(self):
+        """Responses 流式路径用 `for raw in upstream:` 直接迭代（见 wb_proxy.py 的
+        stream_responses_events），只实现 read1 会抛 "not iterable"。与 client.py 的
+        ModelStream.__iter__ 同构：按块读出后切行产出。
+        """
+        while True:
+            block = self.read1()
+            if not block:
+                return
+            yield from block.splitlines(keepends=True)
+
+    def read1(self, size=65536):
+        while True:
+            chunk = self.response.read1(size)
+            self.pending += chunk
+            if not chunk:
+                if not self.pending:
+                    return b""
+                head, self.pending = self.pending, b""
+            elif b"\n" in self.pending:
+                head, _, self.pending = self.pending.rpartition(b"\n")
+            else:
+                continue
+            out = []
+            for line in head.split(b"\n"):
+                if line.startswith(b"data:") and line[5:].strip().startswith(b"{"):
+                    try:
+                        obj = json.loads(line[5:].strip())
+                    except ValueError:
+                        obj = None
+                    if isinstance(obj, dict) and "model" in obj:
+                        obj["model"] = self.model
+                        line = b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                out.append(line + b"\n")
+            return b"".join(out)
+
+    def close(self):
+        self.response.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def _safe_fallback_token(value):
+    """把可能来自客户端/配置的字符串压成一个可安全放进 HTTP 头值的单行 token。
+
+    客户端可控的 model 会写进 X-WB-Vision-Fallback 头值与日志。这里的字符集是
+    **printable ASCII（0x20..0x7E）白名单**，遇到首个越界字符即截断到其之前：
+      * CR/LF 等控制字符被截断，杜绝响应头被拆行注入（如 "codeart/x\\r\\nX-Evil: pwned"）；
+      * CJK/emoji 等非 ASCII 被截断，保证头值可被 http.server 以 latin-1 编码——
+        否则 send_header() 会抛 UnicodeEncodeError，整个响应都发不出去；
+      * 日志同样只记录这批安全字符，避免日志被拆行。
+    截断后为空则退化为占位值。
+    """
+    text = str(value or "")
+    for index, ch in enumerate(text):
+        if ord(ch) < 0x20 or ord(ch) > 0x7e:
+            text = text[:index]
+            break
+    return text or "unknown"
 
 
 class ServicePool:
@@ -42,6 +133,7 @@ class BridgeRuntime:
         previous_media = getattr(self.local, "codearts_media", False)
         self.local.codearts_media = media
         previous_stream = getattr(self.local, "codearts_stream", False)
+        previous_fallback = getattr(self.local, "vision_fallback", None)
         self.local.handler = handler
         try:
             yield
@@ -49,6 +141,7 @@ class BridgeRuntime:
             self.local.handler = previous
             self.local.codearts_stream = previous_stream
             self.local.codearts_media = previous_media
+            self.local.vision_fallback = previous_fallback
 
     def open(self, payload, session_key=None, **kwargs):
         hub = self.hub
@@ -56,6 +149,11 @@ class BridgeRuntime:
             self.config.ready()
         except ValueError as exc:
             raise hub.PinnedAccountError(503, str(exc)) from None
+        # 本请求已回退过（回退后的流断重连 reopen 场景），直接走 workbuddy 通道。
+        # 此时 pin_account 是上次回退得到的 wb 真实账号，不能进下面的 service_pool
+        # 白名单检查，也不再向 CodeArts 多付一次 406 往返。
+        if getattr(self.local, "vision_fallback", None):
+            return self._vision_fallback(payload, session_key=session_key, **kwargs)
         if hub.pinned_account() is not None or kwargs.get("pin_account") not in (None, self.service_pool):
             raise hub.PinnedAccountError(403, "CodeArts cannot use a pinned WorkBuddy account")
         if kwargs.get("allowed_accounts") is not None:
@@ -68,8 +166,55 @@ class BridgeRuntime:
             scope = (handler._key_id() or "panel") if handler else "internal"
             conversation = "hub-ca-" + hashlib.sha256((scope + ":" + str(conversation)).encode()).hexdigest()
         self.local.codearts_stream = True
-        response = self.client.chat(payload, conversation)
+        try:
+            response = self.client.chat(payload, conversation)
+        except urllib.error.HTTPError as exc:
+            # 上游把「模型不支持多模态」映射成 400；body 会被 http_error_detail
+            # 缓存到 exc.wb_body，不匹配时原样 raise，dispatch 的 read_http_error
+            # 仍能拿到完整 body。
+            if not self._vision_fallback_ok(payload, exc):
+                raise
+            return self._vision_fallback(payload, session_key=session_key, **kwargs)
         return response, self.service_pool, payload.get("reasoning_effort")
+
+    def _vision_fallback_ok(self, payload, exc):
+        """仅三个条件同时成立才回退：开关开 + 请求含图 + 上游 406 多模态拒绝。"""
+        if exc.code not in (400, 406):          # Go overlay 映射为 400；406 兜底防御
+            return False
+        cfg = self.config.snapshot()            # 冷路径，读最新配置（面板改完即生效）
+        if not cfg.get("vision_fallback_enabled"):
+            return False
+        if not has_image(payload):
+            return False
+        detail = self.hub.http_error_detail(exc)
+        return "001001020.406" in (detail or "")
+
+    def _vision_fallback(self, payload, session_key=None, **kwargs):
+        cfg = self.config.snapshot()
+        target = cfg.get("vision_fallback_model") or "deepseek-v4.1-flash"
+        original_model = payload.get("model")
+        # 客户端可控的 model 可能含 CR/LF；直接拼进响应头或日志会造成头注入/日志注入。
+        # 取首个控制字符之前的安全前缀（见 _safe_fallback_token），标记与日志都用它。
+        safe_from = _safe_fallback_token(original_model)
+        safe_to = _safe_fallback_token(target)
+        fb = dict(payload)                      # 浅拷贝：messages（含图片 parts）原样复用
+        fb["model"] = target
+        # conversation_id 保留客户端原值（wb 原生协议字段）；session_key 透传，
+        # wb 原生会话亲和照常工作。prebuilt_body 是 codeart 形态的 body，剔除后
+        # 让原生 build_upstream_body 对 target 重建。
+        kwargs = dict(kwargs)
+        kwargs.pop("prebuilt_body", None)
+        if kwargs.get("pin_account") is self.service_pool:
+            kwargs["pin_account"] = None        # service_pool 不是 wb 账号，不能进原生 pin 逻辑
+        # 标记先行：即使 wb 侧失败，错误响应（_error→_json）也带上
+        # X-WB-Vision-Fallback，客户端能看到「尝试过回退且失败」。
+        self.local.vision_fallback = {"from": safe_from, "to": safe_to}
+        self.hub.log("codearts vision fallback: %s rejected images (406), retrying on workbuddy '%s'"
+                     % (safe_from, safe_to), level="WARN")
+        resp, account, effort = self.fallback_open(fb, session_key=session_key, **kwargs)
+        wrapped = _AliasStream(resp, original_model)     # chunk model 重写回客户端别名
+        wrapped._wb_billed_model = target                # record_upstream_usage 据此记账
+        return wrapped, account, effort
 
     def summary(self):
         rows = []
@@ -93,7 +238,7 @@ def install(hub, config_path):
     """Install once before starting Hub; fail explicitly when its seams change."""
     if hasattr(hub, "_codearts_bridge"):
         raise RuntimeError("CodeArts bridge is already installed in this process")
-    for name in ("Handler", "open_upstream", "open_upstream_with_fallback", "build_upstream_body", "_persist_usage", "_tail_lines"):
+    for name in ("Handler", "open_upstream", "open_upstream_with_fallback", "build_upstream_body", "_persist_usage", "_tail_lines", "http_error_detail"):
         if not callable(getattr(hub, name, None)):
             raise RuntimeError("incompatible Hub: missing " + name)
     if "allowed_accounts" not in inspect.signature(hub.open_upstream).parameters:
@@ -107,6 +252,8 @@ def install(hub, config_path):
     original_body = hub.build_upstream_body
     original_persist = hub._persist_usage
     native_handler = hub.Handler
+    # patch 前的原生 open_upstream_with_fallback：调用它不会递归回桥。
+    runtime.fallback_open = original_fallback
 
     def open_upstream(payload, *args, **kwargs):
         if not is_codearts(payload.get("model")):
@@ -132,6 +279,11 @@ def install(hub, config_path):
             row["realm"] = "codearts"
             row["upstream_model"] = upstream_model(row["model"])
             row["account"] = "codearts:pool"
+        elif is_codearts(row.get("requested_model")):
+            # 回退行：record_usage 已写 requested_model=<codeart 别名>，model 是
+            # wb 目标模型。不加 provider="codearts"——计量归实际服务的 wb 通道，
+            # realm 由 record_usage 按 wb 账号写实。
+            row["vision_fallback"] = True
         return original_persist(row, fail_label)
 
     class CodeArtsHandler(native_handler):
@@ -144,6 +296,15 @@ def install(hub, config_path):
             if explicit and explicit not in ("codearts", "all"):
                 return "CodeArts cannot use a WorkBuddy realm-bound key or explicit WorkBuddy exit"
             return ""
+
+        def _extra_response_headers(self):
+            mark = getattr(runtime.local, "vision_fallback", None)
+            if not mark:
+                return None
+            # 纵深防御：标记在 _vision_fallback 已清洗一次，这里再压一遍，确保
+            # 注入到 HTTP 头的值绝不含 CR/LF。
+            return {"X-WB-Vision-Fallback": "%s;via=workbuddy:%s" % (
+                _safe_fallback_token(mark.get("from")), _safe_fallback_token(mark.get("to")))}
 
         def _dispatch_chat_post(self, path, payload):
             if is_codearts(payload.get("model")):

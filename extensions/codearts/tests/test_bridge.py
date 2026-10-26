@@ -27,6 +27,8 @@ class Backend(BaseHTTPRequestHandler):
     status = 200
     delay = 0
     stream_error = False
+    vision_reject = False
+    force_406 = False
 
     def log_message(self, *args):
         pass
@@ -37,6 +39,18 @@ class Backend(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    @staticmethod
+    def _has_image(body):
+        for message in body.get("messages") or []:
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and (
+                            part.get("type") in ("image_url", "input_image", "image")
+                            or "image_url" in part):
+                        return True
+        return False
 
     def do_GET(self):
         self.requests.append((self.path, dict(self.headers), None))
@@ -59,6 +73,9 @@ class Backend(BaseHTTPRequestHandler):
             raw = gzip.decompress(raw)
         body = json.loads(raw)
         self.requests.append((self.path, dict(self.headers), body))
+        if self.path == "/v1/chat/completions" and (
+                self.force_406 or (self.vision_reject and self._has_image(body))):
+            return self.respond(400, b'{"error":{"code":"InferHub.001001020.406","message":"The request model is not multimodal"}}')
         if self.status != 200:
             return self.respond(self.status, b'{"error":{"message":"backend unavailable"}}')
         time.sleep(self.delay)
@@ -161,6 +178,23 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 self.config.update(payload)
 
+    def test_vision_fallback_config_validation(self):
+        for payload in [{"vision_fallback_model": "codeart/X"},
+                        {"vision_fallback_model": "codearts/X"},
+                        {"vision_fallback_model": ""},
+                        {"vision_fallback_model": " X "},
+                        {"vision_fallback_model": 123},
+                        {"vision_fallback_enabled": "true"}]:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.config.update(payload)
+        view = self.config.view()
+        self.assertFalse(view["vision_fallback_enabled"])  # 行为变更默认关（CONTRIBUTING 第 42 行）
+        self.assertEqual(view["vision_fallback_model"], "deepseek-v4.1-flash")
+        self.config.update({"vision_fallback_enabled": False, "vision_fallback_model": "other-model"})
+        view = self.config.view()
+        self.assertFalse(view["vision_fallback_enabled"])
+        self.assertEqual(view["vision_fallback_model"], "other-model")
+
 
 class GatewayTests(unittest.TestCase):
     @classmethod
@@ -211,7 +245,10 @@ class GatewayTests(unittest.TestCase):
         Backend.status = 200
         Backend.delay = 0
         Backend.stream_error = False
-        self.config.update({"enabled": True, "base_url": self.base, "api_key": "backend-test-key"})
+        Backend.vision_reject = False
+        Backend.force_406 = False
+        self.config.update({"enabled": True, "base_url": self.base, "api_key": "backend-test-key",
+                            "vision_fallback_enabled": True, "vision_fallback_model": "deepseek-v4.1-flash"})
         self.runtime.client.invalidate()
         self.hub.wb_settings.set_api_keys(str(self.accounts), [])
 
@@ -406,6 +443,208 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(status, 429, raw)
         self.assertEqual(len(Backend.requests), 1)
 
+    def test_vision_rejection_falls_back_with_header_and_usage_row(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        cases = [
+            ('/v1/chat/completions', {'model': 'codeart/GLM-5.2', 'messages': [
+                {'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'}, image]}]}),
+            ('/v1/responses', {'model': 'codeart/GLM-5.2', 'input': [
+                {'role': 'user', 'content': [{'type': 'input_text', 'text': 'colour?'},
+                                             {'type': 'input_image', 'image_url': url, 'detail': 'high'}]}]}),
+            ('/v1/messages', {'model': 'codeart/GLM-5.2', 'max_tokens': 32, 'messages': [
+                {'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'},
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}}]}]}),
+        ]
+        Backend.vision_reject = True
+        with patch.object(self.hub, '_anthropic_messages_enabled', return_value=True):
+            for path, payload in cases:
+                with self.subTest(path=path):
+                    Backend.requests.clear()
+                    status, headers, raw = self.request('POST', path, payload)
+                    self.assertEqual(status, 200, raw)
+                    mark = headers.get('X-WB-Vision-Fallback', '')
+                    self.assertIn('codeart/GLM-5.2', mark)
+                    self.assertIn('deepseek-v4.1-flash', mark)
+                    paths = [p for p, h, b in Backend.requests]
+                    self.assertIn('/v1/chat/completions', paths)
+                    fallback = [b for p, h, b in Backend.requests if p == '/v2/chat/completions']
+                    self.assertTrue(fallback, 'workbuddy fallback channel was not called')
+                    self.assertEqual(fallback[-1]['model'], 'deepseek-v4.1-flash')
+                    row = json.loads(Path(self.hub.USAGE_LOG).read_text(encoding="utf-8").splitlines()[-1])
+                    self.assertEqual(row['model'], 'deepseek-v4.1-flash')
+                    self.assertEqual(row['requested_model'], 'codeart/GLM-5.2')
+                    self.assertTrue(row['vision_fallback'])
+                    self.assertNotEqual(row.get('provider'), 'codearts')
+
+    def test_vision_rejection_stream_keeps_alias_and_header(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/GLM-5.2', 'stream': True, 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'}, image]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertIn('deepseek-v4.1-flash', headers.get('X-WB-Vision-Fallback', ''))
+        frames = [json.loads(x[6:]) for x in raw.decode().splitlines() if x.startswith('data: {')]
+        self.assertTrue(frames)
+        self.assertTrue(all(f['model'] == 'codeart/GLM-5.2' for f in frames))
+        self.assertTrue(raw.rstrip().endswith(b'data: [DONE]'))
+        self.assertTrue(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_vision_rejection_without_image_passes_through(self):
+        Backend.force_406 = True
+        status, headers, raw = self.chat()
+        self.assertEqual(status, 400, raw)
+        self.assertIn(b'001001020.406', raw)
+        self.assertNotIn('X-WB-Vision-Fallback', headers)
+        self.assertFalse(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_other_400_with_image_passes_through(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/GLM-5.2', 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'x'}, image]}]}
+        Backend.status = 400
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 400, raw)
+        self.assertFalse(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_vision_fallback_disabled_by_config(self):
+        self.config.update({'vision_fallback_enabled': False})
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/GLM-5.2', 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'x'}, image]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 400, raw)
+        self.assertNotIn('X-WB-Vision-Fallback', headers)
+        self.assertFalse(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_responses_stream_falls_back_on_vision_rejection(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        payload = {'model': 'codeart/GLM-5.2', 'stream': True, 'input': [
+            {'role': 'user', 'content': [{'type': 'input_text', 'text': 'colour?'},
+                                         {'type': 'input_image', 'image_url': url, 'detail': 'high'}]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/responses', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertIn('deepseek-v4.1-flash', headers.get('X-WB-Vision-Fallback', ''))
+        self.assertIn(b'event: response.completed', raw)
+        self.assertIn(b'bridge-ok', raw)
+        self.assertNotIn(b'not iterable', raw)
+        self.assertTrue(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_messages_stream_falls_back_on_vision_rejection(self):
+        payload = {'model': 'codeart/GLM-5.2', 'max_tokens': 32, 'stream': True, 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'colour?'},
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}}]}]}
+        Backend.vision_reject = True
+        with patch.object(self.hub, '_anthropic_messages_enabled', return_value=True):
+            status, headers, raw = self.request('POST', '/v1/messages', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertIn('deepseek-v4.1-flash', headers.get('X-WB-Vision-Fallback', ''))
+        self.assertIn(b'event: message_start', raw)
+        self.assertIn(b'event: message_stop', raw)
+        self.assertIn(b'codeart/GLM-5.2', raw)
+        self.assertTrue(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_reopen_after_vision_fallback_short_circuits_pin_check(self):
+        self.runtime.local.vision_fallback = {"from": "codeart/GLM-5.2", "to": "deepseek-v4.1-flash"}
+        self.addCleanup(setattr, self.runtime.local, "vision_fallback", None)
+        payload = {"model": "codeart/GLM-5.2", "messages": [{"role": "user", "content": "hi"}]}
+        upstream, account, _ = self.runtime.open(dict(payload), pin_account=self.native)
+        with upstream:
+            upstream.read1(65536)
+        self.assertEqual(account.uid, "wb-test")
+        self.assertEqual([p for p, h, b in Backend.requests], ["/v2/chat/completions"])
+
+    def test_vision_fallback_header_rejects_crlf_injection(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/GLM-5.2\r\nX-Evil: pwned', 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'x'}, image]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertNotIn('X-Evil', headers)
+        mark = headers.get('X-WB-Vision-Fallback', '')
+        self.assertEqual(mark, 'codeart/GLM-5.2;via=workbuddy:deepseek-v4.1-flash')
+        self.assertNotIn('\r', mark)
+        self.assertNotIn('\n', mark)
+
+    def test_vision_fallback_header_is_ascii_for_cjk_model(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/模型', 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'x'}, image]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertIn('X-WB-Vision-Fallback', headers)
+        mark = headers['X-WB-Vision-Fallback']
+        self.assertTrue(mark.isascii(), mark)
+        self.assertNotIn('模型', mark)
+        self.assertNotIn('\r', mark)
+        self.assertNotIn('\n', mark)
+        self.assertTrue(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_vision_fallback_header_is_ascii_for_emoji_model(self):
+        url = 'data:image/png;base64,aGVsbG8='
+        image = {'type': 'image_url', 'image_url': {'url': url, 'detail': 'high'}}
+        payload = {'model': 'codeart/🚀', 'messages': [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'x'}, image]}]}
+        Backend.vision_reject = True
+        status, headers, raw = self.request('POST', '/v1/chat/completions', payload)
+        self.assertEqual(status, 200, raw)
+        self.assertIn('X-WB-Vision-Fallback', headers)
+        mark = headers['X-WB-Vision-Fallback']
+        self.assertTrue(mark.isascii(), mark)
+        self.assertNotIn('🚀', mark)
+        self.assertNotIn('\r', mark)
+        self.assertNotIn('\n', mark)
+        self.assertTrue(any(p == '/v2/chat/completions' for p, h, b in Backend.requests))
+
+    def test_safe_fallback_token_is_ascii_only(self):
+        from extensions.codearts.bridge import _safe_fallback_token
+
+        cases = {"codeart/模型": "codeart/", "codeart/\r\nX": "codeart/",
+                 "codeart/🚀": "codeart/", "\r\n": "unknown", "": "unknown"}
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                token = _safe_fallback_token(raw)
+                self.assertEqual(token, expected)
+                self.assertTrue(token.isascii())
+                token.encode("latin-1")  # 绝不触发 http.server 的 latin-1 编码错误
+
+    def test_alias_stream_length_tracks_underlying_response(self):
+        from extensions.codearts.bridge import _AliasStream
+
+        class FakeResponse:
+            def __init__(self, blocks):
+                self.blocks = list(blocks)
+                self.length = sum(len(b) for b in blocks)
+                self.headers = {}
+
+            def read1(self, size=-1):
+                if not self.blocks:
+                    return b""
+                block = self.blocks.pop(0)
+                self.length -= len(block)
+                return block
+
+            def close(self):
+                pass
+
+        response = FakeResponse([b'data: {"model":"x"}\n\n'])
+        stream = _AliasStream(response, "codeart/GLM-5.2")
+        self.assertEqual(stream.length, response.length)
+        stream.read1(65536)
+        # 必须动态跟随底层 length；快照实现会停在初值，导致完整流被误判为截断。
+        self.assertEqual(stream.length, 0)
+        self.assertEqual(stream.length, response.length)
+
     def test_gateway_auth_rejected_before_backend(self):
         status, _, _ = self.request("POST", "/v1/chat/completions", {"model": "codearts/GLM-5.2"}, key="wrong")
         self.assertEqual(status, 401)
@@ -519,6 +758,7 @@ class GatewayTests(unittest.TestCase):
         self.assertTrue(headers.get("Content-Type", "").startswith("text/css"))
         self.assertIn(b"#pageCodearts", css)
         self.assertNotIn(b"backend-test-key", css)
+
 
 
 if __name__ == "__main__":

@@ -5,5 +5,7 @@
   "api_key_env": "CODEARTS_API_KEY",
   "timeout_seconds": 120,
   "models_ttl_seconds": 60,
-  "catalog_include_images": false
+  "catalog_include_images": false,
+  "vision_fallback_enabled": false,
+  "vision_fallback_model": "deepseek-v4.1-flash"
 }
