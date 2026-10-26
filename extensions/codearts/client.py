@@ -157,18 +157,43 @@ class CodeArtsClient:
                         not (cfg["catalog_include_images"] and entry.get("supports_images") is True
                              and not entry.get("capability_conflict"))):
                     continue
-                mid = PREFIX + entry["id"]
+
+                # 后端为每个真实模型登记「注册 ID + 展示名」两条可调用条目，二者
+                # registered_id 相同。以 registered_id 为规范键去重，使每个真实模型
+                # 只保留一行；首个出现者胜出（后端顺序为先 ID 后 Name，故天然留下
+                # 规范 ID 那条）。缺 registered_id 的条目回填为 real，供下游复用。
+                # 仅接受非空字符串 registered_id；非字符串/空值一律回退到 id，避免
+                # PREFIX + real 因类型不符抛 TypeError（上游畸形数据不应击穿本方法）。
+                registered = entry.get("registered_id")
+                real = registered if isinstance(registered, str) and registered.strip() else entry["id"]
+                mid = PREFIX + real
                 if mid in seen:
                     continue
                 seen.add(mid)
-                models.append({**entry, "id": mid, "owned_by": "codearts", "provider": "codearts", "realm": "codearts"})
+                models.append({**entry, "id": mid, "registered_id": real,
+                               "owned_by": "codearts", "provider": "codearts", "realm": "codearts"})
             if cfg["catalog_models"]:
                 indexed = {entry["id"]: entry for entry in models}
-                selected = [indexed.get(PREFIX + mid, {
-                    "id": PREFIX + mid, "object": "model", "owned_by": "codearts",
-                    "provider": "codearts", "realm": "codearts", "backend_listed": False,
-                    "availability_note": "Configured selection; not listed by backend",
-                }) for mid in cfg["catalog_models"]]
+                selected = []
+                for want in cfg["catalog_models"]:
+                    hit = indexed.get(PREFIX + want)
+                    if hit is None:
+                        # 用户可能配置展示名（如 DeepSeek-V4.1-Flash）：规范 id 精确未命中
+                        # 时，在**已通过上方大小写敏感 catalog 过滤**的条目中做大小写不敏感
+                        # 回退匹配注册 id 或展示名。精确优先，避免把同名大小写别名误判为同一
+                        # 模型。注意：与任何上游原始 id 都大小写不同的配置在过滤阶段即被丢弃，
+                        # 走不到此处，会退化为占位（已知限制）。
+                        low = want.lower()
+                        hit = next((entry for entry in models
+                                    if entry["id"][len(PREFIX):].lower() == low
+                                    or (entry.get("name") or "").lower() == low), None)
+                    if hit is None:
+                        hit = {
+                            "id": PREFIX + want, "object": "model", "owned_by": "codearts",
+                            "provider": "codearts", "realm": "codearts", "backend_listed": False,
+                            "availability_note": "Configured selection; not listed by backend",
+                        }
+                    selected.append(hit)
                 registered = {m.get("registered_id", m["id"][len(PREFIX):]) for m in selected}
                 if cfg["catalog_include_images"]:
                     for entry in models:

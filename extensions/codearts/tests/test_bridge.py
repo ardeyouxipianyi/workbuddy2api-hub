@@ -152,6 +152,48 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.config.update({'catalog_include_images': 'true'})
 
+    def test_catalog_deduplicates_registered_id_aliases(self):
+        self.config.update({'enabled': True, 'api_key': 'test', 'catalog_models': []})
+        client = CodeArtsClient(self.config)
+        data = {'data': [
+            {'id': 'deepseek-v4.1-flash', 'name': 'DeepSeek-V4.1-Flash', 'registered_id': 'deepseek-v4.1-flash'},
+            {'id': 'DeepSeek-V4.1-Flash', 'name': 'DeepSeek-V4.1-Flash', 'registered_id': 'deepseek-v4.1-flash'},
+            {'id': 'glm-5.2', 'name': 'GLM-5.2', 'registered_id': 'GLM-5.2'},
+            {'id': 'GLM-5.2', 'name': 'GLM-5.2', 'registered_id': 'GLM-5.2'}]}
+        with patch.object(client, '_json', return_value=data):
+            models = client.models()
+        self.assertEqual([m['id'] for m in models],
+                         ['codeart/deepseek-v4.1-flash', 'codeart/GLM-5.2'])
+        self.assertEqual(models[0]['name'], 'DeepSeek-V4.1-Flash')
+        self.assertEqual(models[0]['registered_id'], 'deepseek-v4.1-flash')
+
+    def test_catalog_selection_resolves_display_name(self):
+        self.config.update({'enabled': True, 'api_key': 'test', 'catalog_models': ['DeepSeek-V4.1-Flash']})
+        client = CodeArtsClient(self.config)
+        data = {'data': [
+            {'id': 'deepseek-v4.1-flash', 'name': 'DeepSeek-V4.1-Flash', 'registered_id': 'deepseek-v4.1-flash'},
+            {'id': 'DeepSeek-V4.1-Flash', 'name': 'DeepSeek-V4.1-Flash', 'registered_id': 'deepseek-v4.1-flash'}]}
+        with patch.object(client, '_json', return_value=data):
+            selected = client.models()
+        self.assertEqual([m['id'] for m in selected], ['codeart/deepseek-v4.1-flash'])
+        # 命中后端条目而非占位：占位条 backend_listed 为 False 且带 availability_note
+        self.assertTrue(selected[0].get('backend_listed', True))
+        self.assertEqual(selected[0]['name'], 'DeepSeek-V4.1-Flash')
+
+    def test_catalog_tolerates_non_string_registered_id(self):
+        # 上游畸形数据：registered_id 为非字符串 truthy 时不得抛 TypeError，应回退到 id。
+        self.config.update({'enabled': True, 'api_key': 'test', 'catalog_models': []})
+        client = CodeArtsClient(self.config)
+        data = {'data': [
+            {'id': 'weird', 'registered_id': 123},
+            {'id': 'listy', 'registered_id': ['x']},
+            {'id': 'blanky', 'registered_id': ''}]}
+        with patch.object(client, '_json', return_value=data):
+            models = client.models()
+        self.assertEqual([m['id'] for m in models],
+                         ['codeart/weird', 'codeart/listy', 'codeart/blanky'])
+        self.assertEqual(models[0]['registered_id'], 'weird')
+
     def test_saved_secret_never_appears_in_view_and_blank_preserves_it(self):
         self.config.update({"api_key": "secret-123", "base_url": "http://localhost:7866/v1/"})
         self.config.update({"api_key": "", "enabled": True})
