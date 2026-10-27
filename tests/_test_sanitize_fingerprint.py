@@ -209,6 +209,88 @@ class DshGuiParagraphTests(unittest.TestCase):
         self.assertIn("whose URL is named in the runtime context", system)
 
 
+class DshFileReferenceParagraphTests(unittest.TestCase):
+    """DSH 系统提示里文件引用说明段的渠道指纹。
+
+    `@deepseek-ai/dsh-file-reference`（官方插件，packages/context/file-reference）
+    注入的 FILE_REFERENCE_PROMPT 里，这两句连续出现即命中 11-128，与 #570 的 GUI
+    段同一套「A 句 + B 句连续出现」判据：
+
+        A: Tokens prefixed with @ are paths the user explicitly referenced.
+        B: Relative paths resolve from the workspace root; absolute paths identify
+           files or directories on the host.
+
+    2026-10-28 二分实测（稳定复现 3/3）：A 单独 200、B 单独 200、A+B 连续 400；
+    改 A 措辞 / 改 B 措辞 / 两句之间插一句话 / 换序 / 合并成一句，全部 200；
+    只把 B 的 `absolute` 换成 `full` 无效（说明不是单词级匹配）。
+    这里只在 A 句补一个 `that` —— 一个词不多不少，语义完全不变。
+    """
+
+    A = ("Tokens prefixed with @ are paths the user explicitly referenced.")
+    A_REWORDED = ("Tokens prefixed with @ are paths that the user explicitly "
+                  "referenced.")
+    B = ("Relative paths resolve from the workspace root; absolute paths identify "
+         "files or directories on the host.")
+    FILEREF = A + " " + B
+
+    def test_file_reference_paragraph_in_system_rewritten(self):
+        out = P.sanitize_messages([{"role": "system", "content": self.FILEREF}])
+        self.assertEqual(out[0]["content"], self.A_REWORDED + " " + self.B)
+
+    def test_file_reference_paragraph_in_developer_rewritten(self):
+        out = P.sanitize_messages([{"role": "developer", "content": self.FILEREF}])
+        self.assertEqual(out[0]["content"], self.A_REWORDED + " " + self.B)
+
+    def test_file_reference_paragraph_in_assistant_rewritten(self):
+        # assistant 历史同样被 #574 确认会触发，规则一并覆盖。
+        out = P.sanitize_messages([{"role": "assistant", "content": self.FILEREF}])
+        self.assertEqual(out[0]["content"], self.A_REWORDED + " " + self.B)
+
+    def test_user_and_tool_untouched(self):
+        # user / tool 里的同句属用户数据，按 #537 口径不改写。
+        out = P.sanitize_messages([
+            {"role": "user", "content": self.FILEREF},
+            {"role": "tool", "content": self.FILEREF},
+        ])
+        self.assertEqual(out[0]["content"], self.FILEREF)
+        self.assertEqual(out[1]["content"], self.FILEREF)
+
+    def test_sentence_a_alone_also_rewritten(self):
+        # 只补一个 that、语义不变，所以单独出现时改写同样安全；
+        # 不必依赖 B 句同时在场（B 的变体不该让规则失效）。
+        out = P.sanitize_text(self.A)
+        self.assertEqual(out, self.A_REWORDED)
+
+    def test_idempotent(self):
+        once = P.sanitize_text(self.FILEREF)
+        twice = P.sanitize_text(once)
+        self.assertEqual(once, twice)
+        self.assertEqual(twice.count("paths that the user"), 1)
+
+    def test_case_insensitive(self):
+        out = P.sanitize_text(self.FILEREF.lower())
+        self.assertIn("paths that the user", out.lower())
+
+    def test_unrelated_text_untouched(self):
+        for text in (
+            "The workspace root is /opt/workbuddy-hub.",
+            "Relative paths resolve from the workspace root.",
+            "Tokens prefixed with @ are file references.",
+        ):
+            self.assertEqual(P.sanitize_text(text), text, text)
+
+    def test_wire_body_carries_the_rewrite(self):
+        # 走完整链路再断言一次：规则接上了还不够，得确认 build_upstream_body
+        # 真的用它构造出站 body（漏接时单测全绿、线上照旧 400）。
+        body = P.build_upstream_body({
+            "model": "deepseek-v4.1-flash",
+            "messages": [{"role": "system", "content": self.FILEREF},
+                         {"role": "user", "content": "hi"}]})
+        system = body["messages"][0]["content"]
+        self.assertIn("paths that the user explicitly referenced", system)
+        self.assertNotIn("paths the user explicitly referenced", system)
+
+
 class AssistantHistoryFingerprintTests(unittest.TestCase):
     """#574：assistant 历史里的身份句 / 品牌 + GUI 组合。
 

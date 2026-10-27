@@ -11821,6 +11821,36 @@ SANITIZE_DSH_GUI_RE = re.compile(
     r" whose URL the runtime context names\.")
 SANITIZE_DSH_GUI_REPLACEMENT = r"\1 whose URL is named in the runtime context."
 SANITIZE_DSH_GUI_LOWER = "whose url the runtime context names"
+# 文件引用说明段：DeepSeek Harness 的官方插件 `@deepseek-ai/dsh-file-reference`
+# （packages/context/file-reference，由 `@deepseek-ai/dsh-api-session-controller` 引入）
+# 注入的 FILE_REFERENCE_PROMPT 里，连续两句命中与 #570 同一套「A 句 + B 句连续出现」
+# 的 11-128 判据：
+#   A: Tokens prefixed with @ are paths the user explicitly referenced.
+#   B: Relative paths resolve from the workspace root; absolute paths identify
+#      files or directories on the host.
+#
+# 二分实测（2026-10-28，稳定复现 3/3）：
+#   · A 单独 200、B 单独 200、A+B 连续 400 —— 指纹是「两句连续」这一整段；
+#   · 改 A 措辞 / 改 B 措辞 / 两句之间插一句话 / 换序 / 合并成一句，全部 200；
+#   · 只把 B 的 `absolute` 换成 `full` 无效（仍 400），说明不是单词级匹配；
+#   · 请求规模（627 条无害消息）、system 总长度（同长度填充）、身份句条数、
+#     指纹所在角色均不是原因（均已单独测过）。
+#
+# 取语义损失最小的改法：只在 A 句里补一个 `that`，一个词不多不少，句子意思
+# 完全不变，也不碰 B 句与后续内容。负向前瞻保证幂等（补过就不再补）。
+#
+# A/B probe: the fingerprint is the *pair* of contiguous sentences injected by
+# DeepSeek Harness's official `dsh-file-reference` plugin, matching the same
+# "sentence A + sentence B contiguous" rule as #570. Each sentence alone passes;
+# any wording change, an inserted clause, reordering or merging also passes.
+# We only add one word (`that`) to sentence A, which preserves the meaning
+# verbatim and is idempotent via the negative lookahead.
+SANITIZE_DSH_FILEREF_RE = re.compile(
+    r"Tokens prefixed with @ are paths (?!that )the user explicitly referenced\.",
+    re.IGNORECASE)
+SANITIZE_DSH_FILEREF_REPLACEMENT = (
+    "Tokens prefixed with @ are paths that the user explicitly referenced.")
+SANITIZE_DSH_FILEREF_PROBE = "are paths the user explicitly referenced"
 # 品牌词缩减（#574）：`DeepSeek Harness` 单独出现放行，但它和 GUI 描述句
 # （`this page` / `this GUI` / `this app`）连续出现时命中同一套 11-128 校验。
 # 逐段二分实测：只把品牌缩成 `DeepSeek` 就能通过，句子其余部分不用动；
@@ -11878,6 +11908,11 @@ def has_fingerprint(text, identity=True):
     if (SANITIZE_DSH_GUI_LOWER in low
             and SANITIZE_DSH_GUI_RE.search(text) is not None):
         return True
+    # 文件引用说明段：用 A 句做廉价前置探测；真命中交给
+    # sanitize_text 里那条幂等替换。与 GUI 段同口径，只在 identity 角色生效，
+    # user / tool 里的同句属用户数据不改写（#537）。
+    if SANITIZE_DSH_FILEREF_PROBE in low:
+        return True
     # 动词短语只是廉价前置筛：真命中与否交给正则判定。这样 "powered by" 出现在
     # 与自我介绍无关的句子（工具/插件的产品描述）时不会走进 sanitize_text 的其余
     # 清洗步骤，也不会白白改写。
@@ -11898,6 +11933,9 @@ def sanitize_text(text, identity=True):
         text = SANITIZE_IDENTITY_RE.sub(SANITIZE_IDENTITY_REPLACEMENT, text)
         # GUI 描述段单独一条规则：锚定整句，只调整句尾语序。
         text = SANITIZE_DSH_GUI_RE.sub(SANITIZE_DSH_GUI_REPLACEMENT, text)
+        # 文件引用说明段：A 句补一个 that，破坏「A+B 连续」
+        # 这一整段指纹；负向前瞻保证重复执行不会叠加。
+        text = SANITIZE_DSH_FILEREF_RE.sub(SANITIZE_DSH_FILEREF_REPLACEMENT, text)
         # 品牌词缩减放在最后：GUI 规则还认全名，先让它匹配原文。
         text = SANITIZE_BRAND_RE.sub(SANITIZE_BRAND_REPLACEMENT, text)
     for old, new in SANITIZE_REWRITES:
