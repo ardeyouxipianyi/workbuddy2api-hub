@@ -1,5 +1,6 @@
 """Independent bridge settings. No writes to Hub's settings or credentials."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -7,6 +8,7 @@ import tempfile
 import threading
 from urllib.parse import urlsplit, urlunsplit
 
+from .credits import DEFAULT_NIGHT_WINDOW, clean_multiplier_table, parse_windows
 from .spoof_overlay import single_line, validate_header_family
 
 
@@ -21,6 +23,16 @@ DEFAULTS = {
     "catalog_include_images": False,
     "vision_fallback_enabled": False,
     "vision_fallback_model": "deepseek-v4.1-flash",
+    # Local credit billing for `codeart/*` turns (opt-in, default off). Rates
+    # come from the CodeArts model picker; the stored tables are overrides on
+    # top of the built-in ones (see credits.BUILTIN_MULTIPLIERS), and the night
+    # table replaces a model's day rate inside the night window.
+    "credits_enabled": False,
+    "credits_enforce": True,
+    "credits_base_per_1k": 1.0,
+    "credits_night_window": DEFAULT_NIGHT_WINDOW,
+    "credits_night_multipliers": {},
+    "credits_multipliers": {},
     # Build-time opt-in (default off): headers injected into the IDE-shaped chat
     # request, the observed IDE session id, a per-request timestamp, the official
     # per-request x-ot-* family and its x-ot-function mode value.
@@ -93,6 +105,26 @@ class BridgeConfig:
         data["vision_fallback_model"] = model
         if model.startswith(("codeart/", "codearts/")):
             raise ValueError("vision_fallback_model must be a WorkBuddy-native model, not a bridge alias")
+        for key in ("credits_enabled", "credits_enforce"):
+            if not isinstance(data[key], bool):
+                raise ValueError(key + " must be true or false")
+        base = data["credits_base_per_1k"]
+        if (isinstance(base, bool) or not isinstance(base, (int, float))
+                or not math.isfinite(float(base)) or not 0 < float(base) <= 1000000):
+            raise ValueError("credits_base_per_1k must be a positive number")
+        data["credits_base_per_1k"] = float(base)
+        window = data["credits_night_window"]
+        if not isinstance(window, str):
+            raise ValueError("credits_night_window must be a string such as 23:00-08:00")
+        try:
+            parse_windows(window)
+        except ValueError as exc:
+            raise ValueError("credits_night_window " + str(exc)) from None
+        data["credits_night_window"] = window.strip()
+        data["credits_multipliers"] = clean_multiplier_table(
+            data["credits_multipliers"], "credits_multipliers")
+        data["credits_night_multipliers"] = clean_multiplier_table(
+            data["credits_night_multipliers"], "credits_night_multipliers")
         if not isinstance(data["identity_ide_timestamp"], bool):
             raise ValueError("identity_ide_timestamp must be true or false")
         headers = data["identity_ide_headers"]

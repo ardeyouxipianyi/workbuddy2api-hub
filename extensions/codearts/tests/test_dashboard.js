@@ -26,14 +26,17 @@ const text=n=>n.textContent+' '+n.children.map(text).join(' ');
 let configGate=null, saveGate=null, failConfig=false, failOverview=false, backendURL='http://127.0.0.1:7866';
 let inferenceFailure='';
 let lang='zh', observer, failModels=false, enabled=true, copies=[], calls=[];
-const cfg=()=>({enabled,base_url:backendURL,has_api_key:true,api_key_env:'CODEARTS_API_KEY',timeout_seconds:120});
+let failCredits=false;
+const cfg=()=>({enabled,base_url:backendURL,has_api_key:true,api_key_env:'CODEARTS_API_KEY',timeout_seconds:120,
+  credits_enabled:true,credits_enforce:true,credits_base_per_1k:1,credits_night_window:'23:00-08:00',
+  credits_multipliers:{},credits_night_multipliers:{'deepseek-v4.1-flash':0.1}});
 const context={document:{documentElement:root,head:root,readyState:'complete',createElement:t=>new Element(t),getElementById:byId,querySelectorAll:sel=>all().filter(x=>x.className.split(' ').includes(sel.slice(1)))},
   FileReader:class{readAsDataURL(){this.result='data:image/png;base64,aGVsbG8=';this.onload();}},
   URL,location:{href:'http://localhost/?tab=codearts',origin:'http://localhost'},history:{replaceState(){}},localStorage:{setItem(){}},performance,console,
   navigator:{clipboard:{writeText:async x=>copies.push(x)}},MAIN_TABS:['gateway','settings'],
   MutationObserver:class { constructor(fn){observer=fn;} observe(){} },
   WB_I18N:{current:()=>lang},switchMainTab(){},
-  getJSON:async path=>{calls.push(path); if(path==='/codearts/config'){if(failConfig)throw Error('settings offline');return configGate ? new Promise(resolve=>{configGate.resolve=resolve;}) : cfg();} if(path==='/codearts/overview' && failOverview)throw Error('overview offline'); if(path==='/codearts/overview')return {stats:{total:1,healthy:1},accounts:[{uid:'h1',nickname:'<img onerror=boom>',disabled:false}]}; if(path==='/codearts/models'){if(failModels)throw Error('catalog offline');return {data:[{id:'codeart/GLM-5.3',supports_images:false},{id:'codeart/Absent',backend_listed:false},{id:'codeart/vision-real',supports_images:true}]};} if(path==='/codearts/usage')return {requests:8,total_tokens:123};throw Error(path);},
+  getJSON:async path=>{calls.push(path); if(path==='/codearts/config'){if(failConfig)throw Error('settings offline');return configGate ? new Promise(resolve=>{configGate.resolve=resolve;}) : cfg();} if(path==='/codearts/overview' && failOverview)throw Error('overview offline'); if(path==='/codearts/overview')return {stats:{total:1,healthy:1},accounts:[{uid:'h1',nickname:'<img onerror=boom>',disabled:false}]}; if(path==='/codearts/models'){if(failModels)throw Error('catalog offline');return {data:[{id:'codeart/GLM-5.3',supports_images:false},{id:'codeart/Absent',backend_listed:false},{id:'codeart/vision-real',supports_images:true}]};} if(path==='/codearts/credits'){if(failCredits)throw Error('credits offline');return {enabled:true,enforce:true,base_per_1k:1,night_window:'23:00-08:00',night_now:false,local_time:'12:00',default_multiplier:1,multipliers:[{model:'deepseek-v4.1-flash',day:0.18,night:0.1,source:'builtin'},{model:'glm-5.3',day:0.79,night:null,source:'builtin'}],keys:[{id:'k0',name:'团队 A',balance:12.5,spent:0.18,granted:12.68,requests:1,billed:true}],totals:{balance:12.5,spent:0.18,granted:12.68,requests:1},events:[{at:'2026-10-27 12:00:00',type:'charge',key:'k0',model:'codeart/deepseek-v4.1-flash',tokens:1000,multiplier:0.18,credits:0.18,balance:12.32,night:false}]};}if(path==='/codearts/usage')return {requests:8,total_tokens:123};throw Error(path);},
   postJSON:async(path,body)=>{calls.push([path,body]);if(path==='/codearts/config' && saveGate)return new Promise(resolve=>{saveGate.resolve=resolve;});if(path==='/v1/chat/completions' && inferenceFailure)throw Error(inferenceFailure);if(path==='/v1/chat/completions')return {choices:[{message:{content:'OK'}}],usage:{total_tokens:7}};return {ok:true};}
 };context.window=context;vm.createContext(context);
 vm.runInContext(fs.readFileSync(require.resolve('../dashboard.js'),'utf8'),context);
@@ -104,5 +107,27 @@ vm.runInContext(fs.readFileSync(require.resolve('../dashboard.js'),'utf8'),conte
   assert.equal(url.value,'http://successfully-saved.example','an older snapshot must not undo a confirmed save even if the next refresh fails');
   failConfig=false;
   enabled=false;await context.switchMainTab('codearts');assert(!text(byId('ca-accounts-table')).includes('<img onerror=boom>'),'disabled bridge clears previous account rows');
-  console.log('PASS: native structure, inert metadata, unsaved edits, selection/result retention, partial errors, live language and disabled state');
+  failModels=false;enabled=true;await context.switchMainTab('codearts');
+  assert(byId('ca-credits-keys'),'credits balance table is rendered');
+  assert(text(byId('ca-credits-multipliers')).includes('0.18'),'published day rate is visible');
+  assert(text(byId('ca-credits-multipliers')).includes('0.1'),'night rate is visible');
+  assert(text(byId('ca-credits-keys')).includes('团队 A'),'a balance row is attributed to its key');
+  assert(text(byId('ca-models-table')).includes('倍率'),'model rows carry the effective rate');
+  byId('ca-credits-key').value='k0';byId('ca-credits-amount').value='5';byId('ca-credits-note').value='补款';
+  await byId('ca-credits-grant-form').children[0].children[3].fire('click');
+  const grantCall=calls.filter(c=>Array.isArray(c)&&c[0]==='/codearts/credits/grant').at(-1);
+  assert(grantCall,'grant posts to the credits endpoint');
+  assert.equal(grantCall[1].key_id,'k0');assert.equal(grantCall[1].amount,5);
+  await byId('ca-credits-form').fire('submit');
+  const creditSaveCall=calls.filter(c=>Array.isArray(c)&&c[0]==='/codearts/config'&&c[1]&&'credits_enabled' in c[1]).at(-1);
+  assert(creditSaveCall,'credit settings save through the config endpoint');
+  assert.equal(creditSaveCall[1].credits_enabled,true);
+  assert.equal(creditSaveCall[1].credits_night_window,'23:00-08:00');
+  assert.equal(creditSaveCall[1].credits_night_multipliers['deepseek-v4.1-flash'],0.1);
+  lang='zh';observer();failCredits=true;await context.switchMainTab('codearts');
+  assert(text(byId('ca-credits-status')).includes('重启网关'),'a gateway without the credits endpoint is reported as a restart hint');
+  assert(!text(byId('ca-credits-keys')).includes('团队 A'),'stale balances are cleared when the endpoint disappears');
+  failCredits=false;await context.switchMainTab('codearts');
+  assert(text(byId('ca-credits-keys')).includes('团队 A'),'the ledger returns once the endpoint answers again');
+  console.log('PASS: native structure, inert metadata, unsaved edits, selection/result retention, partial errors, live language, disabled state and the local credit ledger');
 })().catch(e=>{console.error(e);process.exitCode=1;});

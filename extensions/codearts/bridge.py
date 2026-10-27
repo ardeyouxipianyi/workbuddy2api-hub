@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import json
+import math
 from pathlib import Path
 import threading
 import urllib.error
@@ -11,6 +12,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from .client import ADMIN_ACTIONS, CodeArtsClient, is_codearts, upstream_model
 from .config import BridgeConfig
+from .credits import (CreditLedger, credits_for, effective_multipliers,
+                      effective_night_multipliers, panel_view, parse_windows,
+                      resolve_multiplier)
 from .media import validate_payload, install_responses_detail, has_image
 
 
@@ -125,7 +129,119 @@ class BridgeRuntime:
         self.config.view()  # Invalid stored settings fail before the listener starts.
         self.client = CodeArtsClient(self.config)
         self.service_pool = ServicePool(self.client)
+        # Local credit ledger for codeart turns. It sits next to the bridge
+        # configuration, so `--codearts-config` moves it with the settings and
+        # a portable install keeps its balances.
+        self.ledger = CreditLedger(self.config.path.parent / "credits.json")
         self.local = threading.local()
+
+    # -- local credit billing ------------------------------------------
+    def credit_settings(self):
+        return self.config.snapshot()
+
+    def credit_quote(self, model, cfg=None, at=None):
+        """The rate table row that applies to `model` at `at` (default: now)."""
+        cfg = cfg or self.config.snapshot()
+        return resolve_multiplier(
+            model,
+            multipliers=effective_multipliers(cfg.get("credits_multipliers")),
+            night_multipliers=effective_night_multipliers(
+                cfg.get("credits_night_multipliers")),
+            windows=parse_windows(cfg.get("credits_night_window")),
+            at=at)
+
+    def charge_usage_row(self, row):
+        """Deduct one persisted `codeart/*` usage row from the key that paid.
+
+        The Hub records `credit: 0` for these turns, so the amount comes from
+        the multiplier table and the row's own token counts. Rows without a key
+        (panel test, launcher key, no-key deployment) and failed rows (no token
+        settlement) are not billed. Returns the ledger entry, or None when the
+        row was not billed.
+        """
+        key = str(row.get("key") or "").strip()
+        if not key or row.get("error"):
+            return None
+        cfg = self.config.snapshot()
+        if not cfg.get("credits_enabled"):
+            return None
+        tokens = int(row.get("total_tokens") or 0)
+        if tokens <= 0:
+            return None
+        quote = self.credit_quote(row.get("model") or row.get("upstream_model"),
+                                  cfg, at=row.get("at"))
+        amount = credits_for(row.get("prompt_tokens"), row.get("completion_tokens"),
+                             quote["multiplier"], cfg["credits_base_per_1k"])
+        if amount <= 0:
+            return None
+        return self.ledger.charge(key, amount, {
+            "model": row.get("model"),
+            "upstream_model": row.get("upstream_model"),
+            "tokens": tokens,
+            "multiplier": quote["multiplier"],
+            "night": quote["night_rate"],
+            "base_per_1k": cfg["credits_base_per_1k"],
+        })
+
+    def credits_block_reason(self):
+        """Why this request may not start, or "" when it may (402 otherwise).
+
+        Only a key that can actually be billed is subject to the balance floor;
+        a panel test or a deployment without API keys keeps working, because
+        there is no ledger row to charge against.
+        """
+        cfg = self.config.snapshot()
+        if not cfg.get("credits_enabled") or not cfg.get("credits_enforce"):
+            return ""
+        handler = getattr(self.local, "handler", None)
+        key = (handler._key_id() if handler is not None else None) or ""
+        if not key:
+            return ""
+        balance = self.ledger.balance(key)
+        if balance > 0:
+            return ""
+        return ("CodeArts 积分不足：%s 的余额为 %.4f，请在 CodeArts 面板「积分」区充值后再试"
+                % (key, balance))
+
+    def key_names(self):
+        """Hub key id -> display name, so a balance row survives a rename."""
+        try:
+            entries = self.hub.wb_settings.api_keys(self.hub.ACCOUNTS_DIR,
+                                                    include_deleted=True)
+        except Exception:
+            entries = []
+        names = {}
+        for entry in entries or []:
+            key_id = str(entry.get("id") or "")
+            if key_id:
+                names[key_id] = str(entry.get("name") or key_id)
+        # The launcher key (`--api-key`) is a billable key too, but it is not a
+        # row in the panel's key list; list it here so it can be funded before
+        # enforcement blocks its first turn.
+        if str(getattr(self.hub, "API_KEY", "") or ""):
+            names.setdefault("launcher", "launcher (--api-key)")
+        return names
+
+    def credit_view(self):
+        return panel_view(self.config.snapshot(), self.ledger,
+                          key_names=self.key_names())
+
+    def grant_credits(self, payload):
+        """Apply one operator adjustment from the panel (POST)."""
+        if not isinstance(payload, dict):
+            raise ValueError("credit adjustment must be a JSON object")
+        key_id = payload.get("key_id")
+        if not isinstance(key_id, str) or not key_id.strip():
+            raise ValueError("key_id must name one configured API key")
+        amount = payload.get("amount")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) \
+                or not math.isfinite(float(amount)) or abs(float(amount)) > 1e9:
+            raise ValueError("amount must be a finite number of credits")
+        note = payload.get("note") or ""
+        if not isinstance(note, str) or len(note) > 200:
+            raise ValueError("note must be a string of at most 200 characters")
+        self.ledger.grant(key_id.strip(), float(amount), note=note)
+        return self.credit_view()
 
     @contextmanager
     def request(self, handler, media=False):
@@ -154,6 +270,12 @@ class BridgeRuntime:
         # 白名单检查，也不再向 CodeArts 多付一次 406 往返。
         if getattr(self.local, "vision_fallback", None):
             return self._vision_fallback(payload, session_key=session_key, **kwargs)
+        # Local credit floor: only a billed key is stopped here, and only when
+        # enforcement is on. The check runs before the pinned-account rules so a
+        # key without credits never reaches the CodeArts backend at all.
+        reason = self.credits_block_reason()
+        if reason:
+            raise hub.PinnedAccountError(402, reason)
         if hub.pinned_account() is not None or kwargs.get("pin_account") not in (None, self.service_pool):
             raise hub.PinnedAccountError(403, "CodeArts cannot use a pinned WorkBuddy account")
         if kwargs.get("allowed_accounts") is not None:
@@ -279,6 +401,13 @@ def install(hub, config_path):
             row["realm"] = "codearts"
             row["upstream_model"] = upstream_model(row["model"])
             row["account"] = "codearts:pool"
+            # Local credit billing: charge from the row the Hub is about to
+            # append. A ledger failure must not turn a finished turn into an
+            # error, so it is logged instead of raised.
+            try:
+                runtime.charge_usage_row(row)
+            except Exception as exc:
+                hub.log("codearts credits: charge failed: %s" % exc, level="ERROR")
         elif is_codearts(row.get("requested_model")):
             # 回退行：record_usage 已写 requested_model=<codeart 别名>，model 是
             # wb 目标模型。不加 provider="codearts"——计量归实际服务的 wb 通道，
@@ -440,6 +569,8 @@ def install(hub, config_path):
                     return self._json(200, runtime.client.overview())
                 if path == "/codearts/models":
                     return self._json(200, {"data": runtime.client.models()})
+                if path == "/codearts/credits":
+                    return self._json(200, runtime.credit_view())
                 if path == "/codearts/usage":
                     return self._json(200, runtime.summary())
             except Exception as exc:
@@ -455,7 +586,8 @@ def install(hub, config_path):
             if not self._same_origin():
                 return self._error(403, "cross-origin CodeArts management is forbidden", "invalid_request_error")
             action = path[len("/codearts/admin/"):] if path.startswith("/codearts/admin/") else None
-            if path not in ("/codearts/config", "/codearts/models/refresh") and action not in ADMIN_ACTIONS:
+            if path not in ("/codearts/config", "/codearts/models/refresh",
+                            "/codearts/credits/grant") and action not in ADMIN_ACTIONS:
                 return self._error(404, "not found", "invalid_request_error")
             payload = self._payload_or_error()
             if payload is None:
@@ -467,6 +599,8 @@ def install(hub, config_path):
                 elif path == "/codearts/models/refresh":
                     runtime.client.invalidate()
                     result = {"data": runtime.client.models()}
+                elif path == "/codearts/credits/grant":
+                    result = runtime.grant_credits(payload)
                 else:
                     result = runtime.client.admin(action, payload)
                 return self._json(200, result)

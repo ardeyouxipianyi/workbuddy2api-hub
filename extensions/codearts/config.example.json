@@ -8,6 +8,14 @@
   "catalog_include_images": false,
   "vision_fallback_enabled": false,
   "vision_fallback_model": "deepseek-v4.1-flash",
+  "credits_enabled": false,
+  "credits_enforce": true,
+  "credits_base_per_1k": 1.0,
+  "credits_night_window": "23:00-08:00",
+  "credits_night_multipliers": {
+    "deepseek-v4.1-flash": 0.1
+  },
+  "credits_multipliers": {},
   "identity_ide_headers": {
     "x-client-type": "<value from the kernel header evidence file>"
   },

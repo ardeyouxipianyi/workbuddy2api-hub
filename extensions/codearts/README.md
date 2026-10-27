@@ -96,6 +96,75 @@ The backend key never appears in settings responses or dashboard source. Use the
 same server-side secret as CodeArts2API, not a Huawei access/refresh token. Keep
 custom configuration paths out of Git. Original Hub API keys remain client keys.
 
+## 积分扣除 / Local credit billing
+
+Hub 为 `codeart/*` 记录用量行，但 CodeArts 后端不返回这次调用的积分消耗
+（行里的 `credit` 恒为 0），网关侧因此看不出一次回合花了多少。本扩展内置一套
+**本地**积分账本，按 CodeArts 模型选择器公布的倍率计费，用于把 Key 分发给他人时
+结算与限流。**默认关**；关闭时不记账、不拦截，行为与改动前完全一致。
+
+- **公式**：`积分 = (输入 tokens + 输出 tokens) ÷ 1000 × 生效倍率 × 基准单价`。
+  基准单价默认 `1.0`（每千 token 1 积分）。缓存命中的输入 token 与输出 token
+  按同一单价计，本地不做差异定价。
+- **倍率**（白天）：GLM-5.2 `0.70`、GLM-5.2-ArkTS-SPARK `0.70`、
+  OpenPangu-2.0-Pro `0.70`、OpenPangu-2.0-Flash `0.32`、GLM-5.3 `0.79`、
+  DeepSeek-V4.1-Flash `0.18`、Kimi-K3 `2.38`。不在表里的模型按 `1.00` 计费
+  （新上架的模型不会静默免费）；`deepseek-v4.1-flash-1017` 这类变体按最长前缀
+  继承基础模型的倍率。
+- **夜间**：默认窗口 `23:00-08:00`（本地时间，可写多段：`23:00-08:00,12:00-13:00`）；
+  窗口内 DeepSeek-V4.1-Flash 由 `0.18` 降为 `0.10`，其余模型保持白天倍率。
+  窗口是左闭右开（`23:00` 生效、`08:00` 失效），跨零点按本地墙上时间判断。
+- **余额**：每个 Hub API Key 一份余额；`--api-key` 启动参数 Key 记为 `launcher`，
+  同样可计费。面板「积分 / Credits」区显示余额、累计消耗、请求数与最近 30 条
+  扣减/调账，并可直接调账充值（正数充值、负数扣减）。
+- **拦截**：`credits_enforce` 打开时，余额 ≤ 0 的 Key 在**转发前**收到 HTTP 402
+  （错误信息写明 Key 与余额），不会打到 CodeArts 后端；关闭后只记账不拦截。
+  未绑定 Key 的面板测试、未配置任何 Key 的部署不受余额下限约束。
+- **不计费**：失败行（没有 token 结算）、`total_tokens` 为 0 的行，以及
+  `vision_fallback` 回退到 WorkBuddy 通道的那一行（那一路由 WorkBuddy 账号自己的
+  积分结算，usage 行里也带 `vision_fallback=true`）。
+- **结算时点**：token 数只有回合结束才知道，所以扣减发生在 usage 行落盘时；
+  单次回合可以**把余额扣成负数**，余额下限在下一次回合开始前检查。
+
+```text
+积分 = tokens / 1000 * 倍率 * 基准单价
+例：1,000 tokens、DeepSeek-V4.1-Flash、白天        -> 1.000 * 0.18 * 1.0 = 0.18 积分
+    1,000 tokens、DeepSeek-V4.1-Flash、夜间 23:30  -> 1.000 * 0.10 * 1.0 = 0.10 积分
+```
+
+配置键（`accounts/codearts/bridge.json`，面板「积分 / Credits」区可直接改）：
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `credits_enabled` | `false` | 总开关；关闭时不记账、不拦截 |
+| `credits_enforce` | `true` | 余额 ≤ 0 时返回 402（仅在总开关打开时生效）|
+| `credits_base_per_1k` | `1.0` | 每千 token 的基准积分单价（> 0）|
+| `credits_night_window` | `23:00-08:00` | 夜间窗口，本地时间，逗号分隔多段 |
+| `credits_night_multipliers` | `{}` | 夜间倍率覆盖，与内置夜间表合并 |
+| `credits_multipliers` | `{}` | 白天倍率覆盖，与内置倍率表合并 |
+
+接口与文件：
+
+- `GET /codearts/credits`（面板会话）：生效配置、倍率表、各 Key 余额、最近事件。
+  只读本地文件，不发任何上游请求。
+- `POST /codearts/credits/grant` `{"key_id":"k0","amount":100,"note":"首充"}`：调账，
+  `amount` 为负即扣减；单次 |amount| 上限 1e9，备注 ≤ 200 字符。
+- 面板把 `credits_*` 通过既有的 `POST /codearts/config` 保存（部分更新，未提交的键不变）。
+- `accounts/codearts/credits.json`：每个 Key 的余额/累计消耗/请求数，原子重写。
+  解析失败时改名为 `credits.corrupt-<时间戳>.json` 保留原文件，而不是覆盖。
+- `accounts/codearts/credits-events.jsonl`：每次扣减/调账一行（含倍率、是否夜间、
+  token 数、扣后余额），超过 8 MiB 轮转出一份 `.1` 备份。
+
+Local credit billing is opt-in (`credits_enabled`, default off). Turns are priced on
+the multipliers the CodeArts model picker publishes (credits = tokens / 1000 x rate x
+base price), one balance per Hub API key, with a 23:00-08:00 night window in which
+DeepSeek-V4.1-Flash drops from 0.18 to 0.10. With `credits_enforce` on, a key at zero
+balance is refused with HTTP 402 before the backend is contacted; failed rows, rows
+without an API key and the WorkBuddy vision-fallback row are not billed. The ledger is
+local: `credits.json` (atomic rewrite) and `credits-events.jsonl` (append, rotated once);
+`GET /codearts/credits` and `POST /codearts/credits/grant` back the panel's credits
+section.
+
 ## 构建期身份伪装 / Build-time identity overlay
 
 **默认关。** 打开后，`build_backend` 用 `go build -overlay` 在构建期改写只读源码里的
@@ -230,6 +299,8 @@ CodeArts 页沿用原生状态卡、分组工具栏、账号/模型表格、折�
 账号和模型在首屏，连接配置与请求测试可展开；刷新状态保留未保存的配置和测试输入/结果。
 语言切换在页面内同步更新，不发送模型请求。模型的“已列出”仅表示后端目录存在，
 不代表已完成实时连通性测试；上下文/最大输出仅在接口提供数值时显示。
+模型行同时显示当前生效倍率（含夜间值）；「积分 / Credits」区展示倍率表、
+各 Key 余额、调账表单与最近 30 条扣减/调账记录。
 
 The provider page reuses native cards, toolbars, tables and theme tokens. Settings
 and request testing are collapsible. Refresh and language changes retain edits
@@ -264,6 +335,8 @@ node extensions/codearts/tests/test_dashboard.js
 新增测试位于扩展目录，独立运行；原测试清单和套件数量未修改。
 测试使用环回 HTTP 服务验证协议和权限，不证明真实华为模型可用。
 实际验收需在面板登录真实账号后调用，并单独记录结果。
+积分扣除的倍率/夜间窗口/余额下限/调账由 `tests/test_credits.py`（38 项）与
+`tests/test_dashboard.js` 覆盖；隔离实例（8799）+ 真实 CodeArts 后端的冒烟记录见 `VERIFICATION.md`。
 
 本地验证记录见 `VERIFICATION.md`。这份文件区分受控后端、真实 WorkBuddy 和
 真实 Huawei 结果，未测项目不会写通过。

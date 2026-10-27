@@ -271,3 +271,24 @@ account or model availability. The documentation therefore says "the local outbo
 carries these headers" and never "the upstream now sees an official IDE". The header names and
 values come from the official client's own `[header-debug]` log (1371 records); an independent
 mitmproxy capture of the chat endpoint is still outstanding.
+
+## 2026-10-27 本地积分扣除 / Local credit billing
+
+基线 / Base: 当前分支工作区（`7bf7772` 之上，未提交）。倍率取自 CodeArts 模型选择器
+（GLM-5.2 0.70、GLM-5.2-ArkTS-SPARK 0.70、OpenPangu-2.0-Pro 0.70、
+OpenPangu-2.0-Flash 0.32、GLM-5.3 0.79、DeepSeek-V4.1-Flash 0.18、Kimi-K3 2.38）；
+夜间窗口 23:00-08:00（本地时间），窗口内 DeepSeek-V4.1-Flash 0.10。
+
+| Check | Result | Boundary |
+|---|---|---|
+| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 199 tests（含新增 `test_credits.py` 38 项） | 纯本地：不发网络、不碰真实上游；覆盖倍率/夜间边界/余额/损坏文件/配置校验/桥接扣费 |
+| `node --check extensions/codearts/dashboard.js`、`node extensions/codearts/tests/test_dashboard.js` | PASS | 组件行为：余额表、倍率表、模型行倍率、调账 POST 与积分设置保存；未开真实浏览器 |
+| 隔离实例 8799 + 真实 CodeArts 后端（临时 `--codearts-config`，`credits_enabled=true`） | PASS | 余额 0 时 `POST /v1/chat/completions`（`codeart/deepseek-v4.1-flash`）返回 402，消息含 Key 与余额，请求未打到后端 |
+| 面板登录 + `GET /codearts/credits` | PASS | 返回 enabled/enforce/night_window、7 条倍率（DeepSeek night = 0.1）、`launcher` 余额 0 |
+| `POST /codearts/credits/grant` 充值 100 后再请求 | PASS | HTTP 200，真实回复 `OK`；79 tokens × 0.18 → 扣 `0.0142`，余额 `99.9858` |
+| 强制夜间窗口（`credits_night_window=00:00-23:59`）后请求同模型 | PASS | 事件 `multiplier=0.1`、48 tokens → 扣 `0.0048`、`night=true`（未等到真实 23:00，用窗口覆盖验证分支） |
+| 工作区体积 | 74.40 MB → 59.79 MB | 只删 gitignored 可再生缓存与测试产物（`__pycache__`、`.pytest_cache`、`.test-artifacts`），未动 `usage/` 与后端二进制 |
+
+这些结果只说明：本地账本的计费口径、夜间分支、余额下限与面板接口按设计工作，
+且真实 CodeArts 通道在充值后能正常返回。它**不**说明本地估算与华为账号真实扣减一致
+（本地按公布倍率估算，上游账单未在本轮读取），也不覆盖真实 23:00-08:00 时段的连续观测。

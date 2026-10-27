@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 新增「本地积分扣除」opt-in（默认关）：按 CodeArts 模型选择器公布的倍率给 `codeart/*` 回合本地计费（`积分 = tokens ÷ 1000 × 生效倍率 × 基准单价`），每个 Hub API Key 一份余额；夜间窗口 `23:00-08:00` 内 DeepSeek-V4.1-Flash 由 `0.18` 降为 `0.10`，其余模型维持白天倍率；`credits_enforce` 打开时余额 ≤ 0 的 Key 在转发前收到 402。
+- 新增面板「积分 / Credits」区（倍率表、模型行倍率、余额、调账、最近 30 条扣减/调账）、`GET /codearts/credits`、`POST /codearts/credits/grant`、6 个 `credits_*` 配置键，以及 `accounts/codearts/credits.json`（原子重写，损坏时改名保留）与 `credits-events.jsonl`（追加，8 MiB 轮转）；新增 `tests/test_credits.py`（38 项）并扩展 `tests/test_dashboard.js`。
+- Add an opt-in local credit ledger for `codeart/*` turns (off by default): priced on the multipliers the CodeArts model picker publishes (`credits = tokens / 1000 x rate x base price`) with one balance per Hub API key; inside the `23:00-08:00` night window DeepSeek-V4.1-Flash drops from `0.18` to `0.10`; with `credits_enforce` on, a key at zero balance is refused with 402 before the backend is contacted.
+- Add the panel's credits section (rate table, per-model rate, balances, adjustments, last 30 events), `GET /codearts/credits`, `POST /codearts/credits/grant`, six `credits_*` settings, the local `credits.json` (atomic rewrite, renamed instead of overwritten when corrupt) and `credits-events.jsonl` (append-only, rotated once at 8 MiB), covered by 38 new unit tests plus dashboard assertions.
+
 - 新增「CodeArts IDE 出站头伪装」构建期 opt-in（默认关）：官方静态身份头 7 项、逐请求 `x-ot-*`/`user-msg-id`/`created-time`/`model-*`/`client-ip` 头族、32 位 hex trace id 与可选 `timestamp`，全部在 `signRequest` 之前注入，`Content-Type`/`Accept`/`User-Agent` 改为签名后补回。
 - 新增 7 个 `identity_ide_*` 配置键与 `CODEARTS_IDE_HEADERS`/`CODEARTS_IDE_SESSION_ID` 构建期环境变量，`start-codearts-bridge.py --codearts-source` 已接线；面板暂未提供控件，外部预编译后端需重新构建。
 - Opt-in build-time CodeArts IDE outbound header spoofing (off by default): seven static identity headers, the per-request `x-ot-*` / `user-msg-id` / `created-time` / `model-*` / `client-ip` family, 32-hex trace ids and an optional `timestamp`, all written before `signRequest` while `Content-Type` / `Accept` / `User-Agent` are re-added after signing.

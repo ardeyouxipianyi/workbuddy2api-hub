@@ -14,10 +14,11 @@
   const missing = () => t('未提供', 'Not provided', '未提供');
   const page = node('div', 'main-page'); page.id = 'pageCodearts'; page.setAttribute('data-no-i18n', ''); gateway.after(page);
   const button = node('button', 'main-nav-btn', 'CodeArts'); button.id = 'btnNavCodearts'; button.type = 'button'; nav.before(button);
-  const state = {config: null, overview: null, catalog: null, usage: null};
+  const state = {config: null, overview: null, catalog: null, usage: null, credits: null};
   const backendIdentity = () => JSON.stringify([state.config?.enabled,state.config?.base_url,state.config?.api_key_env,state.config?.has_api_key]);
   let pendingAdmin = 0, generation = 0, refreshing = false, configReady = false, overviewFresh = false;
   let session = '', dirty = false, revision = 0, loading = null, initialized = false;
+  let creditEndpointMissing = false;
   let connection = ['尚未连接', 'Not connected', '尚未連線'];
   let connectionKind = 'warn';
   const backendActions = [];
@@ -111,6 +112,156 @@
   const modelError = node('p', 'hint ca-error'); modelError.id = 'ca-models-error'; modelSection.body.append(modelError);
   const modelColumns = [['模型','Model','模型'],['客户端模型 ID','Client model ID','用戶端模型 ID'],['目录状态','Catalog status','目錄狀態'],['操作','Actions','操作']];
   const modelBody = table(modelSection.body, 'ca-models-table', modelColumns);
+  // ---- 积分 / credits -------------------------------------------------
+  const creditsSection = section('ca-credits-section', ['积分 / Credits','Credits','積分']);
+  creditsSection.body.append(labeled(node('p','hint'),
+    '本地按 CodeArts 模型选择器公布的倍率计费：积分 = tokens ÷ 1000 × 生效倍率 × 基准单价，夜间窗口内 DeepSeek-V4.1-Flash 用 0.10。未绑定 API Key 的面板测试不计费；「余额不足拒绝」打开时，余额用尽的 Key 会收到 402。',
+    'Turns are billed locally on the multipliers the CodeArts model picker publishes: credits = tokens / 1000 x rate x base price, and DeepSeek-V4.1-Flash drops to 0.10 inside the night window. Panel tests without an API key are not billed; with enforcement on, a key at zero balance receives 402.',
+    '本地按 CodeArts 模型選擇器公布的倍率計費：積分 = tokens ÷ 1000 × 生效倍率 × 基準單價，夜間視窗內 DeepSeek-V4.1-Flash 用 0.10。未綁定 API Key 的面板測試不計費；「餘額不足拒絕」開啟時，餘額用盡的 Key 會收到 402。'));
+  const creditsStatus = node('p','hint'); creditsStatus.id = 'ca-credits-status'; creditsStatus.setAttribute('role','status');
+  creditsSection.body.append(creditsStatus);
+  function checkbox(parent, id, words) {
+    const label = node('label','ca-checkbox'); const input = node('input');
+    input.type = 'checkbox'; input.id = id;
+    label.append(input, labeled(node('span'), ...words)); parent.append(label); return input;
+  }
+  const creditForm = node('form'); creditForm.id = 'ca-credits-form';
+  const creditGrid = node('div','ca-form-grid'); creditForm.append(creditGrid);
+  const creditFields = {};
+  creditFields.enabled = checkbox(creditGrid,'ca-credits_enabled',['启用积分扣除','Bill codeart turns locally','啟用積分扣除']);
+  creditFields.enforce = checkbox(creditGrid,'ca-credits_enforce',['余额不足时拒绝请求（402）','Refuse a turn at zero balance (402)','餘額不足時拒絕請求（402）']);
+  creditFields.base = control(creditGrid,'ca-credits_base',['基准单价（积分 / 千 tokens）','Base price (credits per 1k tokens)','基準單價（積分 / 千 tokens）'],'input','number');
+  creditFields.base.min = '0'; creditFields.base.step = '0.0001'; creditFields.base.required = true;
+  creditFields.window = control(creditGrid,'ca-credits_night_window',['夜间窗口（本地时间，可多段）','Night window (local time, comma separated)','夜間視窗（本地時間，可多段）']);
+  creditFields.window.placeholder = '23:00-08:00';
+  creditFields.night = control(creditGrid,'ca-credits_night_multipliers',['夜间倍率覆盖（JSON）','Night rate overrides (JSON)','夜間倍率覆蓋（JSON）'],'textarea');
+  creditFields.overrides = control(creditGrid,'ca-credits_multipliers',['倍率覆盖（JSON）','Rate overrides (JSON)','倍率覆蓋（JSON）'],'textarea');
+  creditFields.night.rows = 3; creditFields.overrides.rows = 3;
+  const creditActions = node('div','toolbar'); creditForm.append(creditActions);
+  const creditSave = labeled(node('button'), '保存积分设置','Save credit settings','儲存積分設定'); creditSave.type = 'submit';
+  creditActions.append(creditSave);
+  const creditEditStatus = node('span','hint'); creditActions.append(creditEditStatus);
+  creditsSection.body.append(creditForm);
+  for (const input of Object.values(creditFields)) { input.addEventListener('input', markDirty); input.addEventListener('change', markDirty); }
+  creditForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (creditSave.disabled) return;
+    let patch;
+    try {
+      patch = {
+        credits_enabled: creditFields.enabled.checked,
+        credits_enforce: creditFields.enforce.checked,
+        credits_base_per_1k: Number(creditFields.base.value),
+        credits_night_window: creditFields.window.value.trim(),
+        credits_multipliers: parseObjectText(creditFields.overrides.value, t('倍率覆盖','Rate overrides','倍率覆蓋')),
+        credits_night_multipliers: parseObjectText(creditFields.night.value, t('夜间倍率覆盖','Night rate overrides','夜間倍率覆蓋')),
+      };
+    } catch (error) { notify(error.message, true); return; }
+    creditSave.disabled = true;
+    try {
+      await window.postJSON('/codearts/config', patch);
+      revision++; dirty = false; labeled(creditEditStatus, '已保存','Saved','已儲存');
+      generation++; await reloadAfterChange();
+    } catch (error) { notify(error.message, true); }
+    finally { creditSave.disabled = false; }
+  });
+  const rateColumns = [['模型','Model','模型'],['白天倍率','Day rate','白天倍率'],['夜间倍率','Night rate','夜間倍率'],['来源','Source','來源']];
+  const rateBody = table(creditsSection.body, 'ca-credits-multipliers', rateColumns);
+  const balanceColumns = [['API Key','API Key','API Key'],['余额','Balance','餘額'],['累计消耗','Spent','累計消耗'],['请求数','Requests','請求數']];
+  const balanceBody = table(creditsSection.body, 'ca-credits-keys', balanceColumns);
+  const grantForm = node('form'); grantForm.id = 'ca-credits-grant-form';
+  const grantGrid = node('div','ca-form-grid'); grantForm.append(grantGrid);
+  const grantKey = control(grantGrid,'ca-credits-key',['调账 Key','Key to adjust','調帳 Key'],'select');
+  const grantAmount = control(grantGrid,'ca-credits-amount',['变动积分（负数为扣减）','Credit delta (negative debits)','變動積分（負數為扣減）'],'input','number');
+  const grantNote = control(grantGrid,'ca-credits-note',['备注（可选）','Note (optional)','備註（選填）']);
+  action(grantGrid, ['应用调账','Apply adjustment','套用調帳'], async () => {
+    if (!grantKey.value) throw Error(t('请选择 API Key','Select an API key','請選擇 API Key'));
+    const amount = Number(grantAmount.value);
+    if (!Number.isFinite(amount) || amount === 0) throw Error(t('请输入非零积分变动','Enter a non-zero credit delta','請輸入非零積分變動'));
+    const view = await window.postJSON('/codearts/credits/grant', {key_id: grantKey.value, amount, note: grantNote.value.trim()});
+    if (view && Array.isArray(view.keys)) state.credits = view;
+    grantAmount.value = ''; grantNote.value = '';
+    notify(t('积分已调整','Credits adjusted','積分已調整'));
+    renderCredits();
+  }, 'sec');
+  creditsSection.body.append(grantForm);
+  // Enter inside the adjustment fields must not submit the form natively.
+  grantForm.addEventListener('submit', event => event.preventDefault());
+  const eventColumns = [['时间','Time','時間'],['API Key','API Key','API Key'],['模型','Model','模型'],['Tokens','Tokens','Tokens'],['倍率','Rate','倍率'],['积分','Credits','積分'],['方式','Mode','方式']];
+  const eventBody = table(creditsSection.body, 'ca-credits-events', eventColumns);
+  const fmtRate = value => Number.isFinite(Number(value)) ? String(Math.round(Number(value) * 10000) / 10000) : '—';
+  function multiplierFor(modelId) {
+    const data = state.credits; if (!data || !Array.isArray(data.multipliers)) return null;
+    const name = String(modelId || '').replace(/^codearts?\//,'').trim().toLowerCase();
+    let hit = null;
+    for (const row of data.multipliers) {
+      if (name === row.model) return row;
+      if (name.startsWith(row.model) && (!hit || row.model.length > hit.model.length)) hit = row;
+    }
+    return hit;
+  }
+  function parseObjectText(text, label) {
+    const raw = String(text || '').trim();
+    if (!raw) return {};
+    let value;
+    try { value = JSON.parse(raw); } catch (error) { throw Error(t(label + ' 不是合法 JSON', label + ' is not valid JSON', label + ' 不是合法 JSON')); }
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw Error(t(label + ' 必须是 JSON 对象', label + ' must be a JSON object', label + ' 必須是 JSON 物件'));
+    return value;
+  }
+  function renderCredits() {
+    clearRows(rateBody); clearRows(balanceBody); clearRows(eventBody);
+    const data = state.credits;
+    if (!data) {
+      creditsStatus.textContent = state.config?.enabled === false
+        ? t('启用 CodeArts 后读取积分账本','Enable CodeArts to read the credit ledger','啟用 CodeArts 後讀取積分帳本')
+        : creditEndpointMissing
+          ? t('当前运行中的网关后端还没有积分接口，重启网关后此处可用','The running gateway has no credits endpoint yet; restart it to enable this section','目前執行中的閘道後端還沒有積分介面，重啟閘道後此處可用')
+          : t('尚未读取积分账本','Credit ledger not loaded yet','尚未讀取積分帳本');
+      return;
+    }
+    creditsStatus.textContent = t(
+      `本地时间 ${data.local_time} · ${data.night_now ? '夜间窗口生效' : '不在夜间窗口'} · 积分扣除${data.enabled ? '已启用' : '未启用'} · 余额不足拒绝${data.enforce ? '已开启' : '已关闭'} · 默认倍率 ${fmtRate(data.default_multiplier)}x`,
+      `Local ${data.local_time} · ${data.night_now ? 'night window is open' : 'outside the night window'} · billing ${data.enabled ? 'on' : 'off'} · zero-balance refusal ${data.enforce ? 'on' : 'off'} · default rate ${fmtRate(data.default_multiplier)}x`,
+      `本地時間 ${data.local_time} · ${data.night_now ? '夜間視窗生效' : '不在夜間視窗'} · 積分扣除${data.enabled ? '已啟用' : '未啟用'} · 餘額不足拒絕${data.enforce ? '已開啟' : '已關閉'} · 預設倍率 ${fmtRate(data.default_multiplier)}x`);
+    for (const row of data.multipliers || []) {
+      const tr = node('tr');
+      cell(tr, rateColumns[0], node('code','ca-model-id', row.model));
+      cell(tr, rateColumns[1], fmtRate(row.day) + 'x');
+      cell(tr, rateColumns[2], row.night == null ? '—' : fmtRate(row.night) + 'x');
+      cell(tr, rateColumns[3], node('span','badge ' + (row.source === 'override' ? 's' : 'warn'),
+        row.source === 'override' ? t('覆盖','Override','覆蓋') : t('内置','Built-in','內建')));
+      rateBody.append(tr);
+    }
+    const keys = data.keys || [];
+    if (!keys.length) empty(balanceBody, balanceColumns, ['暂无已配置的 API Key','No API keys configured','尚無已設定的 API Key']);
+    for (const item of keys) {
+      const tr = node('tr'), identity = node('div');
+      identity.append(node('div','',item.name));
+      if (item.name !== item.id) identity.append(node('small','ca-muted',item.id));
+      cell(tr, balanceColumns[0], identity);
+      cell(tr, balanceColumns[1], node('span','badge ' + (item.balance > 0 ? 'ok' : 'warn'), fmtRate(item.balance)));
+      cell(tr, balanceColumns[2], fmtRate(item.spent));
+      cell(tr, balanceColumns[3], String(item.requests));
+      balanceBody.append(tr);
+    }
+    const keep = grantKey.value; grantKey.replaceChildren();
+    for (const item of keys) { const option = node('option','',item.name + ' · ' + item.id); option.value = item.id; grantKey.append(option); }
+    if (keep && keys.some(item => item.id === keep)) grantKey.value = keep; else if (keys.length) grantKey.value = keys[0].id;
+    const events = data.events || [];
+    if (!events.length) empty(eventBody, eventColumns, ['暂无扣减或调账记录','No charges or adjustments yet','尚無扣減或調帳紀錄']);
+    for (const event of events) {
+      const tr = node('tr'), amount = Number(event.credits || 0), granted = event.type === 'grant';
+      cell(tr, eventColumns[0], String(event.at || '').slice(5,16));
+      cell(tr, eventColumns[1], node('code','ca-model-id', String(event.key || '')));
+      cell(tr, eventColumns[2], event.model ? String(event.model).replace(/^codearts?\//,'') : '—');
+      cell(tr, eventColumns[3], event.tokens == null ? '—' : String(event.tokens));
+      cell(tr, eventColumns[4], event.multiplier == null ? '—' : fmtRate(event.multiplier) + 'x');
+      cell(tr, eventColumns[5], node('span','badge ' + (granted ? 'ok' : 's'), (granted ? '+' : '-') + fmtRate(Math.abs(amount))));
+      cell(tr, eventColumns[6], node('span','badge ' + (event.night ? 's' : 'warn'),
+        granted ? t('调账','Adjustment','調帳') : (event.night ? t('夜间','Night','夜間') : t('白天','Day','白天'))));
+      eventBody.append(tr);
+    }
+  }
   const testing = section('ca-testing', ['请求测试','Request test','請求測試'], true, false);
   const testGrid = node('div','ca-form-grid'); testing.body.append(testGrid);
   function control(parent, id, words, tag = 'input', type = 'text') {
@@ -235,6 +386,8 @@
       if(Number.isFinite(model.contextWindow) && model.contextWindow>0)params.push(t('上下文 ','Context ','上下文 ')+model.contextWindow);
       if(Number.isFinite(model.maxTokens) && model.maxTokens>0)params.push(t('最大输出 ','Max output ','最大輸出 ')+model.maxTokens);
       params.push(model.supports_images===true?t('支持图片','Images supported','支援圖片'):model.supports_images===false?t('目录未声明图片支持','Catalog does not declare image support','目錄未宣告圖片支援'):t('图片能力未知','Image capability unknown','圖片能力未知'));
+      const rate = multiplierFor(model.id);
+      if (rate) params.push(t('倍率 ','Rate ','倍率 ')+fmtRate(rate.day)+'x'+(rate.night==null?'':t('（夜间 ',' (night ','（夜間 ')+fmtRate(rate.night)+'x)'));
       if(params.length)identity.append(node('small','ca-muted',params.join(' · ')));
       cell(row,modelColumns[0],identity);
       cell(row,modelColumns[1],node('code','ca-model-id',model.id));
@@ -258,7 +411,7 @@
     const number = value => Number.isFinite(value) ? String(value) : '—';
     statValues.total.textContent=number(state.overview?.stats?.total);statValues.healthy.textContent=number(state.overview?.stats?.healthy);
     statValues.requests.textContent=number(state.usage?.requests);statValues.tokens.textContent=number(state.usage?.total_tokens);
-    renderAccounts();renderModels();updateActions();
+    renderAccounts();renderModels();renderCredits();updateActions();
   }
   async function load() {
     if (loading) return loading;
@@ -269,29 +422,41 @@
         const cfg = await window.getJSON('/codearts/config');
         if (readGeneration !== generation) return;
         const changed = state.config && (cfg.base_url !== state.config.base_url || cfg.api_key_env !== state.config.api_key_env || cfg.has_api_key !== state.config.has_api_key);
-        if (changed) { state.overview = state.catalog = state.usage = null; overviewFresh = false; }
+        if (changed) { state.overview = state.catalog = state.usage = state.credits = null; overviewFresh = false; }
         state.config = cfg; configReady = true;
         if (changed) render();
         if (!dirty && revision === before) {
           fields.enabled.checked=cfg.enabled;
           fields.catalog_include_images.checked=!!cfg.catalog_include_images;
           for (const name of ['base_url','api_key_env','timeout_seconds']) fields[name].value=cfg[name];
+          creditFields.enabled.checked=!!cfg.credits_enabled;
+          creditFields.enforce.checked=cfg.credits_enforce!==false;
+          creditFields.base.value=cfg.credits_base_per_1k ?? 1;
+          creditFields.window.value=cfg.credits_night_window || '';
+          creditFields.night.value=JSON.stringify(cfg.credits_night_multipliers || {});
+          creditFields.overrides.value=JSON.stringify(cfg.credits_multipliers || {});
         }
         labeled(secret, ...(cfg.has_api_key?['服务密钥已设置','Service key is set','服務金鑰已設定']:['尚未设置服务密钥','Service key is missing','尚未設定服務金鑰']));
         if (!initialized) { settings.setOpen(!cfg.enabled || !cfg.has_api_key); initialized=true; }
         if (!cfg.enabled) {
-          state.overview=state.catalog=state.usage=null;overviewFresh=false;accountError.textContent=modelError.textContent='';connection=['已关闭','Disabled','已關閉'];connectionKind='warn';render();return;
+          state.overview=state.catalog=state.usage=state.credits=null;overviewFresh=false;accountError.textContent=modelError.textContent='';connection=['已关闭','Disabled','已關閉'];connectionKind='warn';render();return;
         }
         connection=['正在读取状态…','Loading status…','正在讀取狀態…'];connectionKind='s';badge.textContent=t(...connection);
-        const parts = [['overview','/codearts/overview',accountError],['catalog','/codearts/models',modelError],['usage','/codearts/usage',null]];
+        const parts = [['overview','/codearts/overview',accountError],['catalog','/codearts/models',modelError],['usage','/codearts/usage',null],['credits','/codearts/credits',null]];
         const values = await Promise.allSettled(parts.map(([,path])=>window.getJSON(path)));
         if (readGeneration !== generation) return;
         overviewFresh = values[0].status === 'fulfilled';
         const failures=[];
         values.forEach((result,i)=>{
           const [key,,errorBox]=parts[i];
-          if (result.status==='fulfilled') { state[key]=result.value;if(errorBox)errorBox.textContent=''; }
-          else { const message=result.reason?.message || String(result.reason);if(errorBox)errorBox.textContent=message;failures.push(message); }
+          if (result.status==='fulfilled') { state[key]=result.value;if(errorBox)errorBox.textContent='';if(key==='credits')creditEndpointMissing=false; }
+          else {
+            const message=result.reason?.message || String(result.reason);if(errorBox)errorBox.textContent=message;
+            // A gateway started before this extension grew a credits endpoint
+            // answers 404 here. That is a version skew, not a connection
+            // failure: keep the rest of the page green and say what to do.
+            if(key==='credits'){creditEndpointMissing=true;state.credits=null;}else failures.push(message);
+          }
         });
         connection=values[0].status==='fulfilled'?['服务已连接','Service connected','服務已連線']:['服务连接失败','Service connection failed','服務連線失敗'];connectionKind=failures.length?'warn':'ok';
         if(failures.length)notify(failures.join(' · '),true);
