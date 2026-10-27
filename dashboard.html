@@ -836,7 +836,14 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     justify-content:flex-start;gap:4px;min-width:0;min-height:36px}
   table.account-cards td:nth-child(5){grid-column:span 3}
   table.account-cards td:nth-child(6){grid-column:span 3}
-  table.account-cards td:nth-child(6)::before{content:'权重：'}
+  table.account-cards td:nth-child(6)::before{content:'权重：';white-space:nowrap;flex-shrink:0}
+  table.account-cards td:nth-child(5)::before{white-space:nowrap;flex-shrink:0}
+  /* 出口 / 权重两格里的自绘下拉：各占该格剩余宽度（长节点名自动省略），
+     标签宽度固定不被压。以前靠全局 cs-block 的 width:100%，而 100% 是
+     相对整个单元格算的，加上前面的「出口」标签就会溢出到下一格、盖住
+     「权重：」的第一个字（顶部截图里只剩「重:」）。 */
+  table.account-cards td:nth-child(5) .cs-wrap,
+  table.account-cards td:nth-child(6) .cs-wrap{display:block;width:auto;flex:1 1 0;min-width:0}
   table.account-cards td:nth-child(5) .slot-select{width:auto;max-width:none;min-height:34px;height:34px;flex:1 1 auto;min-width:0}
   table.account-cards td:nth-child(6) .mini-select{min-height:34px;height:34px;padding:0 6px;align-self:center}
   /* 积分（第 7 列）与请求（第 8 列）：各占一半、铺满整行，左右边缘分别与上一行
@@ -1305,7 +1312,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   transform:translateY(-2px) rotate(45deg);transition:transform .18s ease,opacity .14s ease}
 .cs-trigger:hover .cs-arrow{opacity:.8}
 .cs-wrap.cs-open .cs-arrow{transform:translateY(1px) rotate(-135deg)}
-.cs-panel{position:absolute;z-index:80;top:calc(100% + 4px);left:0;min-width:100%;
+/* 面板固定到视口定位：账号卡/日志等区块在 win-capped 下带 overflow-y:auto，
+   absolute 面板向上展开会被祖先裁掉首行（手机端实测）。JS 每次打开/滚动
+   都会把触发器坐标写进内联 left/top/bottom/width，这里只留兜底值。 */
+.cs-panel{position:fixed;z-index:80;top:0;left:0;min-width:0;
   max-width:min(320px,calc(100vw - 24px));max-height:min(320px,52vh);overflow:auto;
   background:var(--panel);border:1px solid var(--line);border-radius:10px;
   box-shadow:var(--shadow-md);padding:4px;
@@ -1313,7 +1323,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   transition:opacity .13s ease,transform .13s ease;
   scrollbar-width:thin}
 .cs-wrap.cs-open .cs-panel{opacity:1;transform:none;pointer-events:auto}
-.cs-wrap.cs-drop-up .cs-panel{top:auto;bottom:calc(100% + 4px);transform:translateY(4px) scale(.985)}
+.cs-wrap.cs-drop-up .cs-panel{transform:translateY(4px) scale(.985)}
 .cs-wrap.cs-drop-up.cs-open .cs-panel{transform:none}
 .cs-opt{display:flex;align-items:center;gap:7px;padding:6px 9px;border-radius:7px;
   font-size:12px;color:var(--fg);cursor:pointer;white-space:nowrap;
@@ -21209,9 +21219,35 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     }
   }
 
+  /* 面板用 position:fixed（见 CSS 的 .cs-panel）脱离祖先的 overflow 裁剪：
+     账号卡所在 section 在 win-capped 下有 overflow-y:auto，原来 absolute
+     的下拉一向上展开就被裁掉首项（手机端截图：第一行只剩半截）。fixed 的
+     坐标基于视口，所以每次打开/滚动/缩放都要把触发器位置写进内联样式。 */
+  function placePanel(wrap){
+    var panel = wrap.querySelector('.cs-panel');
+    if (!panel) return;
+    var r = wrap.getBoundingClientRect();
+    var up = wrap.classList.contains('cs-drop-up');
+    /* 宽度：至少与触发器等宽，长选项（账号名/节点名）允许面板自己长到内容宽，
+       上限由 CSS 的 max-width（320px / 视口宽-24px）兜住。 */
+    panel.style.width = 'auto';
+    panel.style.minWidth = Math.round(r.width) + 'px';
+    var pw = panel.getBoundingClientRect().width || r.width;
+    var left = Math.min(Math.round(r.left), window.innerWidth - Math.round(pw) - 12);
+    panel.style.left = Math.max(12, left) + 'px';
+    if (up){
+      panel.style.top = 'auto';
+      panel.style.bottom = Math.round(window.innerHeight - r.top + 4) + 'px';
+    } else {
+      panel.style.bottom = 'auto';
+      panel.style.top = Math.round(r.bottom + 4) + 'px';
+    }
+  }
+
   function openWrap_(wrap){
     closeAll(wrap);
     positionPanel(wrap);
+    placePanel(wrap);
     wrap.classList.add('cs-open');
     openWrap = wrap;
     var trg = wrap.querySelector('.cs-trigger');
@@ -21368,11 +21404,11 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     if (e.key === 'Escape' && openWrap) closeWrap(openWrap);
   });
 
-  window.addEventListener('resize', function(){ if (openWrap) positionPanel(openWrap); });
+  window.addEventListener('resize', function(){ if (openWrap) { positionPanel(openWrap); placePanel(openWrap); } });
   /* 滚动时只重算方向，不关闭：scrollIntoView / 容器滚动都会派发 scroll，
-     直接关闭会让"点开就消失"。面板相对触发器定位，跟随即可。 */
+     直接关闭会让"点开就消失"。面板用 fixed 定位，滚动后必须重写坐标才跟得上。 */
   window.addEventListener('scroll', function(){
-    if (openWrap) positionPanel(openWrap);
+    if (openWrap) { positionPanel(openWrap); placePanel(openWrap); }
   }, true);
 
   function boot(){
