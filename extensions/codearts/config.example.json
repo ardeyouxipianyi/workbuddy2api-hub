@@ -7,5 +7,14 @@
   "models_ttl_seconds": 60,
   "catalog_include_images": false,
   "vision_fallback_enabled": false,
-  "vision_fallback_model": "deepseek-v4.1-flash"
+  "vision_fallback_model": "deepseek-v4.1-flash",
+  "identity_ide_headers": {
+    "x-client-type": "<value from the kernel header evidence file>"
+  },
+  "identity_ide_user_session_id": "ses_<26-char-session-id>",
+  "identity_ide_timestamp": false,
+  "identity_ide_ot_family": false,
+  "identity_ide_function": "agent-claw",
+  "identity_ide_user_agent": "",
+  "identity_ide_client_ip": ""
 }

@@ -73,13 +73,183 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def build_backend(source, output, go="go"):
+def _merge_overlays(overlays, target):
+    """Combine -overlay files, keeping every replacement from both sides.
+
+    Each input must carry a ``Replace`` object; one source file may only map to
+    the same output in both overlays, so a silent overwrite cannot hide a
+    broken overlay.
+    """
+    replacements = {}
+    for overlay in overlays:
+        path = Path(overlay)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("Replace"), dict):
+            raise ValueError("Overlay %s has no Replace object" % path)
+        for original, replacement in data["Replace"].items():
+            if not isinstance(original, str) or not isinstance(replacement, str):
+                raise ValueError("Overlay %s must map strings to strings" % path)
+            if original in replacements and replacements[original] != replacement:
+                raise ValueError("Conflicting overlay replacements for %s" % original)
+            replacements[original] = replacement
+    target.write_bytes((json.dumps({"Replace": replacements}, indent=2, ensure_ascii=False)
+                        + "\n").encode("utf-8"))
+    return target
+
+
+def _header_payload(value, variable):
+    """Explicit header mapping first, then the environment JSON object.
+
+    None means "not configured": an empty explicit mapping falls through to the
+    environment exactly like a blank User-Agent does, so a cleared UI field
+    cannot silently suppress the documented env entry point.
+    """
+    if value is not None:
+        if not isinstance(value, dict):
+            raise TypeError("spoof_headers must be a JSON object of header names to values")
+        if value:
+            return value
+    raw = os.environ.get(variable, "")
+    if not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise ValueError("%s must be a JSON object of header names to values"
+                         % variable) from None
+    if not isinstance(parsed, dict):
+        raise ValueError("%s must be a JSON object of header names to values" % variable)
+    return parsed
+
+
+def _session_id(value):
+    """Explicit session id first, then CODEARTS_IDE_SESSION_ID; blank means unset."""
+    if value is not None and not isinstance(value, str):
+        raise TypeError("spoof_session_id must be a string")
+    return ((value or "").strip()
+            or os.environ.get("CODEARTS_IDE_SESSION_ID", "").strip())
+
+
+def spoof_build_options(snapshot):
+    """Translate a bridge configuration snapshot into ``build_backend`` keywords.
+
+    Returns ``{"spoof_user_agent", "spoof_headers", "spoof_session_id",
+    "spoof_timestamp", "spoof_ot_family", "spoof_client_ip"}``. Missing or blank
+    settings translate to "not configured" (None/False), so the CODEARTS_IDE_*
+    environment entries keep working and a configuration without identity
+    settings builds exactly like before.
+
+    ``User-Agent`` has its own argument: ``chat_headers_overlay`` writes it first
+    and rejects a duplicate name, so a ``User-Agent`` entry inside
+    ``identity_ide_headers`` is moved to ``spoof_user_agent`` (matched
+    case-insensitively, since HTTP names are) and removed from the mapping.
+    ``identity_ide_user_agent`` wins over that entry when both are set.
+
+    ``identity_ide_function`` is the ``x-ot-function`` mode value. It only has a
+    meaning for the OT family, so it becomes a static header override only when
+    ``identity_ide_ot_family`` is on (the built-in default comes from
+    ``spoof_overlay.DEFAULT_OT_FUNCTION``). Wrong types raise instead of being
+    silently dropped, and the input snapshot is never mutated.
+    """
+    if not isinstance(snapshot, dict):
+        raise TypeError("snapshot must be a configuration dict")
+    headers = snapshot.get("identity_ide_headers")
+    if headers is None:
+        headers = {}
+    if not isinstance(headers, dict):
+        raise TypeError("identity_ide_headers must be a JSON object of header names to values")
+    headers = dict(headers)
+    user_agent = None
+    for name in [key for key in headers if isinstance(key, str) and key.lower() == "user-agent"]:
+        value = headers.pop(name)
+        if not isinstance(value, str):
+            raise TypeError("User-Agent in identity_ide_headers must be a string")
+        value = value.strip()
+        if value and user_agent and value != user_agent:
+            raise ValueError("duplicate header name 'User-Agent'")
+        user_agent = value or user_agent
+    from .spoof_overlay import validate_header_family
+    headers = dict(validate_header_family(headers))
+    session = snapshot.get("identity_ide_user_session_id")
+    if session is None:
+        session = ""
+    if not isinstance(session, str):
+        raise TypeError("identity_ide_user_session_id must be a string")
+    timestamp = snapshot.get("identity_ide_timestamp", False)
+    if not isinstance(timestamp, bool):
+        raise TypeError("identity_ide_timestamp must be true or false")
+    ot_family = snapshot.get("identity_ide_ot_family", False)
+    if not isinstance(ot_family, bool):
+        raise TypeError("identity_ide_ot_family must be true or false")
+    function = snapshot.get("identity_ide_function")
+    if function is None:
+        function = ""
+    if not isinstance(function, str):
+        raise TypeError("identity_ide_function must be a string")
+    if ot_family and function.strip():
+        headers = dict(validate_header_family({**headers, "x-ot-function": function.strip()}))
+    user_agent_setting = snapshot.get("identity_ide_user_agent")
+    if user_agent_setting is None:
+        user_agent_setting = ""
+    if not isinstance(user_agent_setting, str):
+        raise TypeError("identity_ide_user_agent must be a string")
+    if user_agent_setting.strip():
+        user_agent = user_agent_setting.strip()
+    client_ip = snapshot.get("identity_ide_client_ip")
+    if client_ip is None:
+        client_ip = ""
+    if not isinstance(client_ip, str):
+        raise TypeError("identity_ide_client_ip must be a string")
+    return {
+        "spoof_user_agent": user_agent,
+        "spoof_headers": headers or None,
+        "spoof_session_id": session.strip() or None,
+        "spoof_timestamp": timestamp,
+        "spoof_ot_family": ot_family,
+        "spoof_client_ip": client_ip.strip() or None,
+    }
+
+
+def build_backend(source, output, go="go", spoof_user_agent=None,
+                  spoof_headers=None, spoof_session_id=None, spoof_timestamp=False,
+                  spoof_ot_family=False, spoof_client_ip=None):
+    # Opt-in stays off by default; CODEARTS_IDE_USER_AGENT / CODEARTS_IDE_HEADERS
+    # / CODEARTS_IDE_SESSION_ID let the CLI and UI enable the IDE header overlay
+    # without editing Go sources.
+    if spoof_user_agent is not None and not isinstance(spoof_user_agent, str):
+        raise TypeError("user_agent must be a string")
+    if not isinstance(spoof_timestamp, bool):
+        raise TypeError("spoof_timestamp must be true or false")
+    if not isinstance(spoof_ot_family, bool):
+        raise TypeError("spoof_ot_family must be true or false")
+    if spoof_client_ip is not None and not isinstance(spoof_client_ip, str):
+        raise TypeError("spoof_client_ip must be a string")
+    # A blank explicit value means "not supplied" (the UI clears the field), so
+    # the documented environment fallback still applies.
+    spoof_user_agent = ((spoof_user_agent or "").strip()
+                        or os.environ.get("CODEARTS_IDE_USER_AGENT", "").strip())
+    spoof_headers = _header_payload(spoof_headers, "CODEARTS_IDE_HEADERS")
+    spoof_session_id = _session_id(spoof_session_id)
     source, output = Path(source).resolve(), Path(output).resolve()
     if "module codearts2api" not in (source / "go.mod").read_text(encoding="utf-8"):
         raise ValueError("Expected the CodeArts2API source directory")
     output.parent.mkdir(parents=True, exist_ok=True)
     from .backend_overlay import model_id_overlay
-    overlay = model_id_overlay(source, output.parent / "build-overlay")
+    from .spoof_overlay import chat_headers_overlay, header_family
+    directory = output.parent / "build-overlay"
+    overlay = model_id_overlay(source, directory)
+    # Opt-in only: nothing configured keeps the current build byte-for-byte. The
+    # official static identity table only joins OT-family builds; a UA-only or
+    # timestamp-only build keeps exactly the bytes it had before the family.
+    spoof = chat_headers_overlay(source, directory / "spoof", spoof_user_agent,
+                                 extra_headers=header_family(spoof_headers, spoof_session_id,
+                                                             static_family=spoof_ot_family),
+                                 with_timestamp=spoof_timestamp,
+                                 with_ot_family=spoof_ot_family,
+                                 session_id=spoof_session_id or "",
+                                 client_ip=spoof_client_ip or "")
+    if spoof is not None:
+        overlay = _merge_overlays((overlay, spoof), directory / "overlay-merged.json")
     subprocess.run([str(go), "build", "-overlay", str(overlay), "-o", str(output), "./cmd/server"],
                    cwd=str(source), check=True)
     return output

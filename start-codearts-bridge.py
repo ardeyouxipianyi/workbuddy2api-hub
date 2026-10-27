@@ -30,13 +30,17 @@ def main():
     manager = None
     try:
         if options.codearts_source or options.codearts_backend:
-            from extensions.codearts.backend import ManagedBackend, build_backend
+            from extensions.codearts.backend import (ManagedBackend, build_backend,
+                spoof_build_options)
             directory = Path(path).resolve().parent / "backend"
             executable = options.codearts_backend
             if options.codearts_source:
+                # Identity settings from the panel / bridge JSON reach the opt-in
+                # build overlay here; blank settings keep the build unchanged.
                 executable = build_backend(options.codearts_source,
                     directory / ("codearts2api.exe" if sys.platform == "win32" else "codearts2api"),
-                    options.go_executable)
+                    options.go_executable,
+                    **spoof_build_options(runtime.config.snapshot()))
             manager = ManagedBackend([str(Path(executable).resolve())], directory,
                                      port=options.codearts_backend_port)
             manager.start(runtime.config)

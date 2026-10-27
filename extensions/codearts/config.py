@@ -7,6 +7,8 @@ import tempfile
 import threading
 from urllib.parse import urlsplit, urlunsplit
 
+from .spoof_overlay import single_line, validate_header_family
+
 
 DEFAULTS = {
     "enabled": False,
@@ -19,6 +21,16 @@ DEFAULTS = {
     "catalog_include_images": False,
     "vision_fallback_enabled": False,
     "vision_fallback_model": "deepseek-v4.1-flash",
+    # Build-time opt-in (default off): headers injected into the IDE-shaped chat
+    # request, the observed IDE session id, a per-request timestamp, the official
+    # per-request x-ot-* family and its x-ot-function mode value.
+    "identity_ide_headers": {},
+    "identity_ide_user_session_id": "",
+    "identity_ide_timestamp": False,
+    "identity_ide_ot_family": False,
+    "identity_ide_function": "agent-claw",
+    "identity_ide_user_agent": "",
+    "identity_ide_client_ip": "",
 }
 
 
@@ -81,6 +93,48 @@ class BridgeConfig:
         data["vision_fallback_model"] = model
         if model.startswith(("codeart/", "codearts/")):
             raise ValueError("vision_fallback_model must be a WorkBuddy-native model, not a bridge alias")
+        if not isinstance(data["identity_ide_timestamp"], bool):
+            raise ValueError("identity_ide_timestamp must be true or false")
+        headers = data["identity_ide_headers"]
+        if not isinstance(headers, dict):
+            raise ValueError("identity_ide_headers must be a JSON object of header names to values")
+        for name, value in headers.items():
+            if not isinstance(name, str) or not isinstance(value, str):
+                raise ValueError("identity_ide_headers must map header names to string values")
+        # Reserved names, non-token names, duplicates (case-insensitive) and
+        # multi-line values would corrupt the signed request, so reject them
+        # when the file is saved instead of at build time.
+        data["identity_ide_headers"] = dict(validate_header_family(headers, value_limit=4096))
+        session = data["identity_ide_user_session_id"]
+        if not isinstance(session, str):
+            raise ValueError("identity_ide_user_session_id must be a string")
+        session = single_line(session, "identity_ide_user_session_id")
+        if len(session) > 4096:
+            raise ValueError("identity_ide_user_session_id must be at most 4096 characters")
+        data["identity_ide_user_session_id"] = session
+        if not isinstance(data["identity_ide_ot_family"], bool):
+            raise ValueError("identity_ide_ot_family must be true or false")
+        function = data["identity_ide_function"]
+        if not isinstance(function, str):
+            raise ValueError("identity_ide_function must be a string")
+        function = single_line(function, "identity_ide_function")
+        if len(function) > 256:
+            raise ValueError("identity_ide_function must be at most 256 characters")
+        data["identity_ide_function"] = function
+        user_agent = data["identity_ide_user_agent"]
+        if not isinstance(user_agent, str):
+            raise ValueError("identity_ide_user_agent must be a string")
+        user_agent = single_line(user_agent, "identity_ide_user_agent")
+        if len(user_agent) > 4096:
+            raise ValueError("identity_ide_user_agent must be at most 4096 characters")
+        data["identity_ide_user_agent"] = user_agent
+        client_ip = data["identity_ide_client_ip"]
+        if not isinstance(client_ip, str):
+            raise ValueError("identity_ide_client_ip must be a string")
+        client_ip = single_line(client_ip, "identity_ide_client_ip")
+        if len(client_ip) > 64:
+            raise ValueError("identity_ide_client_ip must be at most 64 characters")
+        data["identity_ide_client_ip"] = client_ip
         return data
 
     def snapshot(self):

@@ -34,6 +34,11 @@ python start-codearts-bridge.py --codearts-source ..\codearts2api-main
 展示名仅作为同账号内的唯一别名。原始源码不被写入；不识别的源码结构会明确失败。
 后台探测与真实请求使用同一解析结果，福利头也按真实 ID 判断。
 已构建的旧后端二进制需从源码重新构建一次，才会包含此修复。
+
+如需让出站报文带上官方 IDE 的请求头族，见下文
+「[构建期身份伪装 / Build-time identity overlay](#构建期身份伪装--build-time-identity-overlay)」。
+该特性**默认关**，开启后仍然只改出站 header，不改端点、不改请求体；源形状不符会显式失败，
+输出不会写进源码树。
 有已构建的程序时无需 Go：
 
 ```powershell
@@ -90,6 +95,101 @@ ID is preserved exactly. Old `codearts/` request names remain accepted.
 The backend key never appears in settings responses or dashboard source. Use the
 same server-side secret as CodeArts2API, not a Huawei access/refresh token. Keep
 custom configuration paths out of Git. Original Hub API keys remain client keys.
+
+## 构建期身份伪装 / Build-time identity overlay
+
+**默认关。** 打开后，`build_backend` 用 `go build -overlay` 在构建期改写只读源码里的
+`internal/upstream/client.go`（源码树本身一个字节都不写）：源码里原有 7 个聊天头原样保留，
+再按配置追加官方身份头与逐请求头族（OT 族开启时 `Accept`/`Content-Type` 会先从签名集合里
+删除、签名后按官方取值写回）。关闭时构建产物与改动前**逐字节等价**——仍只传
+`build-overlay/overlay.json`，不生成 `spoof/`，也不生成 `overlay-merged.json`。
+开启后也只改出站 header，不动端点、不动请求体、不改模型名。
+
+配置键（`accounts/codearts/bridge.json`；面板目前没有这些控件，改配置文件即可，
+面板保存不会清掉它们）：
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `identity_ide_ot_family` | `false` | 总开关：注入官方逐请求 `x-ot-*` 头族，并把 `Content-Type`/`Accept`/`User-Agent` 改成签名后写入 |
+| `identity_ide_headers` | `{}` | 追加的静态头（名字须是 RFC 7230 token、值须单行；保留头与重复名会被拒绝） |
+| `identity_ide_user_session_id` | `""` | `ses_` + 26 字符的 IDE 会话 ID；留空时按会话派生稳定值（prompt cache 亲和） |
+| `identity_ide_timestamp` | `false` | 每次请求写 `timestamp`（Unix 毫秒）；与 `identity_ide_headers` 里的 `timestamp` 互斥 |
+| `identity_ide_function` | `"agent-claw"` | `x-ot-function` 取值，仅 OT 族开启时生效 |
+| `identity_ide_user_agent` | `""` | `User-Agent`；留空且 OT 族开启时用观测到的官方值 `ai-sdk/provider-utils/4.0.21 runtime/bun/1.3.14` |
+| `identity_ide_client_ip` | `""` | `client-ip`；留空时上报本机第一个非回环 IPv4（优先私网地址） |
+
+等价的构建期环境变量：`CODEARTS_IDE_USER_AGENT`、`CODEARTS_IDE_HEADERS`
+（JSON object 字符串）、`CODEARTS_IDE_SESSION_ID`。环境变量只能补 UA / 静态头 / 会话 ID；
+官方逐请求头族目前只能通过配置文件打开。
+
+```json
+{
+  "enabled": true,
+  "base_url": "http://127.0.0.1:7866",
+  "identity_ide_ot_family": true,
+  "identity_ide_user_session_id": "ses_<26 字符，填自己的会话 ID>",
+  "identity_ide_timestamp": false,
+  "identity_ide_function": "agent-claw"
+}
+```
+
+签名顺序：静态身份头与逐请求 `x-ot-trace-id`/`x-ot-span-id`/`x-snap-traceid`/
+`user-msg-id`/`created-time`/`x-ot-session-id`/`user-session-id`/`model-id`/`model-name`/
+`client-ip` 都在 `signRequest(...)` **之前**写入，因此计入 `SignedHeaders`；`Content-Type`、
+`Accept`、`User-Agent` 改为签名后写入，与官方客户端一样不进签名（签名前先 `Del` 掉）。
+`timestamp` 开启时同样是签名前写入。
+
+**只对构建期生效。** 用 `--codearts-backend` 指定已编译程序、或在面板里配置外部预编译
+后端时不会经过 overlay；必须用 `--codearts-source` 从源码重新构建一次才会带上这些头。
+旧的 `backend/codearts2api` 二进制要重建。
+
+已知偏差（与观测到的官方聊天请求相比）：基础 7 头里的 `x-auth-token`、`app-id`、
+`is_confidential` 仍会发送（官方聊天请求没有这三项）；`Accept-Encoding` 仍是 Go 的
+`gzip`（官方运行时是 `gzip, deflate, br, zstd`）；`model-id`/`model-name` 取请求体里的
+模型名（官方取内核模型 id，两者可能不同），且 `model-name` 不做官方那样的
+`encodeURIComponent`；`x-snap-traceid` 的前缀复用当次 `x-ot-trace-id`（真机样本里前缀是
+会话级 snap trace id，1371 条中只有 431 条与 trace id 相同）；`x-ot-parent-session-id`
+固定为空串（真机样本里空串与"等于本会话 id"两种都有）；AK/SK 签名头仍由后端签名器生成，
+本特性不伪造凭证。
+
+证据等级：**聊天端点 21 个头的头名与取值来自本机官方内核自身的请求日志
+（`[header-debug]`，1371 条真机记录）**，构造规则来自内核包静态解包，签名规则来自
+静态算法全文，控制面 9 头另有独立实测；**独立的 mitmproxy 抓包仍未做**（日志已给出
+真机实发值，抓包只是独立复核手段），也没有把「上游是否据此改变行为」验证成结论。
+因此这里只能说「出站报文在本地会带上这些头」，不能说「已被上游识别为官方 IDE」。
+
+风险：让非官方客户端在报文层面模仿官方客户端，可能违反上游服务条款，也可能触发
+上游的识别与反制。是否开启、在多大范围开启由部署者自行判断并承担后果；
+本项目不保证可用性，也不承诺官方客户端的任何行为。默认关就是为了让这个选择显式。
+
+Off by default. When enabled, `build_backend` rewrites `internal/upstream/client.go` through
+`go build -overlay` at build time (the checkout itself is never written): the original seven
+chat headers are kept verbatim and the official identity headers plus the per-request
+`x-ot-*` family are appended from the configuration. Disabled, the build stays byte-identical
+(`build-overlay/overlay.json` only; no `spoof/`, no `overlay-merged.json`).
+
+Enabled, every injected header is written **before** `signRequest`, so it is part of
+`SignedHeaders` like the official request, while `Content-Type`, `Accept` and `User-Agent`
+are deleted before signing and re-added afterwards. `identity_ide_ot_family` is the master
+switch; `identity_ide_headers` takes static overrides, `identity_ide_user_session_id` the
+`ses_`-shaped session id, `identity_ide_function` the `x-ot-function` mode,
+`identity_ide_user_agent` / `identity_ide_client_ip` the transport identity, and
+`identity_ide_timestamp` a per-request millisecond `timestamp`. The same values can be
+supplied at build time through `CODEARTS_IDE_USER_AGENT`, `CODEARTS_IDE_HEADERS` (JSON
+object) and `CODEARTS_IDE_SESSION_ID`, but the per-request family itself is configuration
+only.
+
+The overlay is build-time only: an external prebuilt backend configured with
+`--codearts-backend` (or in the panel) never passes through it, so the binary has to be
+rebuilt from source once. Known deviations from the observed official request: the base
+seven headers still send `x-auth-token`, `app-id` and `is_confidential`; `Accept-Encoding`
+remains Go's `gzip`; `model-id`/`model-name` come from the request body; the AK/SK signature
+headers stay the backend's own. Evidence is a static unpacking of the official kernel plus
+this machine's kernel logs and control-plane requests — **no captured chat request yet**, so
+the wording is "the local outbound request carries these headers", never "the upstream now
+sees an official IDE". Enabling this may violate the upstream terms of service and may
+trigger detection or countermeasures; that choice, and its consequences, stay with the
+deployer. Shipped off by default for exactly that reason.
 
 ## 客户端 / Clients
 

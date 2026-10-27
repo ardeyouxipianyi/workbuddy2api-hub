@@ -243,3 +243,31 @@ but this account's CodeArts endpoint rejected their image requests with the prec
 The build overlay prevents this request mismatch from cooling the account. Independent review:
 0 Critical / 0 Important. Node components, 44 Python extension tests and full Go suite pass.
 Real browser acceptance remains pending; no browser policy workaround was used.
+
+
+### 2026-10-27 CodeArts IDE 出站头伪装（官方头族）/ Build-time IDE header family
+
+本轮把原来的「仅 `User-Agent` + trace id 补零」扩展为「官方身份头族 + 逐请求 `x-ot-*`」，
+默认关、开启时仍只改出站 header。下面每一项都是独立复跑的结果（不采信实现者自述）。
+
+| Check | Result | Boundary |
+|---|---|---|
+| `python -m compileall -q extensions/codearts start-codearts-bridge.py` | PASS | 语法检查，不代表 Go 能编译 |
+| `python -m unittest discover -s extensions/codearts/tests -v` | PASS: 161 tests OK（`test_spoof_overlay.py` 100、`test_bridge.py` 55、`test_backend.py` 6） | 生成源码的文本契约，本身不等于编译通过 |
+| `python tests/run_all.py --jobs 4` | 225 passed / 1 failed（`tests/_test_agents.py`） | 该失败与本轮改动无关：在 `git archive HEAD` 的干净树上同样复现，触发条件是 gitignored 的 `accounts/settings.json` 里保存过的 `agent_models` 勾选；本轮未改任何 `wb_*.py` |
+| `node --check extensions/codearts/dashboard.js`、`test_login.js`、`test_dashboard.js` | PASS | 语法与组件行为，未开浏览器 |
+| 默认关等价（假 `go` 捕获 argv） | PASS | 仍只传 `build-overlay/overlay.json`；不生成 `spoof/`，不生成 `overlay-merged.json` |
+| `go build -overlay` 默认关 / 开启态（portable Go 1.27.3，`GOPROXY=off`） | PASS: 两次都 exit 0 | 产物写 `%TEMP%`；构建前后只读源码 75/75 文件哈希一致 |
+| `go vet -overlay overlay-merged.json ./internal/upstream/` | PASS | 注入的 helper 通过 vet |
+| `gofmt -l` 生成的 `client.go` | PASS: 无输出 | 仅格式 |
+| 注入的运行时用例（`ideID` / `ideBase62` / `ideSpoofDynamic`） | PASS: 5 项 | 只验证形态、唯一性与会话派生，不发真实请求 |
+| 生成源码里的签名顺序 | PASS | 静态身份头与动态族都在 `signRequest` 之前；`Content-Type`/`Accept`/`User-Agent` 在其后 |
+| 真实华为推理 / 独立 mitmproxy 抓包 | NOT RUN | 头名与取值来自官方内核自身日志（`[header-debug]`，1371 条真机记录）；未验证开启后上游行为，也没有独立抓包复核 |
+
+These results establish three things only: the default build is unchanged, the enabled overlay
+compiles and vets clean, and the injected headers have the shape and signing position the
+evidence describes. They do not establish that the upstream behaves differently, nor any
+account or model availability. The documentation therefore says "the local outbound request
+carries these headers" and never "the upstream now sees an official IDE". The header names and
+values come from the official client's own `[header-debug]` log (1371 records); an independent
+mitmproxy capture of the chat endpoint is still outstanding.

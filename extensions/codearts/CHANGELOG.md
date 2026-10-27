@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 新增「CodeArts IDE 出站头伪装」构建期 opt-in（默认关）：官方静态身份头 7 项、逐请求 `x-ot-*`/`user-msg-id`/`created-time`/`model-*`/`client-ip` 头族、32 位 hex trace id 与可选 `timestamp`，全部在 `signRequest` 之前注入，`Content-Type`/`Accept`/`User-Agent` 改为签名后补回。
+- 新增 7 个 `identity_ide_*` 配置键与 `CODEARTS_IDE_HEADERS`/`CODEARTS_IDE_SESSION_ID` 构建期环境变量，`start-codearts-bridge.py --codearts-source` 已接线；面板暂未提供控件，外部预编译后端需重新构建。
+- Opt-in build-time CodeArts IDE outbound header spoofing (off by default): seven static identity headers, the per-request `x-ot-*` / `user-msg-id` / `created-time` / `model-*` / `client-ip` family, 32-hex trace ids and an optional `timestamp`, all written before `signRequest` while `Content-Type` / `Accept` / `User-Agent` are re-added after signing.
+- Seven new `identity_ide_*` settings plus `CODEARTS_IDE_HEADERS` / `CODEARTS_IDE_SESSION_ID` build-time environment variables, wired into `start-codearts-bridge.py --codearts-source`; the panel has no controls yet and an external prebuilt backend must be rebuilt.
+
 - 修复图片预检错误仅显示在页顶、测试区仍显示未发送的问题；目录 false 改为通道声明提示，允许实测，模型不被替换。
 - 将上游精确 `InferHub.001001020.406` 归为请求不匹配，避免图片拒绝误冷却整个账号。
 - Display preflight/upstream errors in test results. Treat catalog false as advisory and preserve the requested model.
