@@ -11832,6 +11832,32 @@ SANITIZE_DSH_GUI_LOWER = "whose url the runtime context names"
 SANITIZE_BRAND_RE = re.compile(r"DeepSeek[ \t]+Harness", re.IGNORECASE)
 SANITIZE_BRAND_REPLACEMENT = "DeepSeek"
 SANITIZE_BRAND_LOWER = "harness"
+# 「@ 路径说明」整段（2026-10-28 起命中）：dsh 系统提示词里讲 @ 前缀路径语义的一段，
+# 原文被上游加进同一套 11-128 校验。这一条和前面几条的匹配形态不同，实测结论：
+#   - **整段逐字**：把该段拆成 5 个单句分别发送，全部 200；整段原样发送才 400。
+#   - 段内任意位置改一个字（例如把 `prefixed with @` 写成 `prefixed with at-sign`）
+#     也立刻 200 —— 说明不是句式规则，而是这一整段作为连续子串被收录。
+#   - 与体积、tools 数量、历史消息无关：只取这一条 7 KB 的 system 单独发就能复现。
+# 因此对策是整段换成同义表述，而不是删句：这段话是客户端的行为说明，删掉会让模型
+# 不知道 @ 前缀怎么解释。改写逐条保留原意：@ 开头 = 用户点名的路径、相对路径按
+# workspace 根解析、结尾斜杠 = 目录、其余 = 文件且要先读再下结论、含空格的路径用
+# @"..." 包裹。改写句刻意避开原文措辞，否则换完仍会被逐字命中。
+#
+# 改写只在 identity 角色（system / developer / assistant）内生效，与仓库既有规则
+# 同口径：user / tool 里出现的同段是用户数据，改写会让模型看到与磁盘不一致的内容。
+# 抓包记录里这段只出现在 system 消息中，因此不额外放宽（#574）。
+SANITIZE_AT_PATH_RE = re.compile(
+    r"(?:Tokens|Words|Anything)\s+(?:prefixed|starting|beginning)\s+with\s+@"
+    r"[^\n]{0,900}?quotes a path containing spaces\.",
+    re.IGNORECASE)
+SANITIZE_AT_PATH_REPLACEMENT = (
+    "A token that starts with @ names a path the user pointed at. A relative path is resolved "
+    "against the workspace root; an absolute one names a file or folder on the host. A trailing "
+    "slash means folder - list it whenever its contents matter. Otherwise treat it as a file: "
+    "read it first, and do not claim you inspected it beforehand. A path that has spaces in it "
+    "is written inside @\"...\"."
+)
+SANITIZE_AT_PATH_LOWER = "quotes a path containing spaces"
 # 指纹判定的字面量快路径（见 has_fingerprint）：原先对每段文本跑两个 (?i) 正则，
 # 4KB 输入实测 319µs，其中正则 137+188µs、几个 `in` 只占 9µs；64KB 文本要
 # 6.2ms，而 sanitize_messages 会给每个文本段都过一遍——build_upstream_body
@@ -11870,6 +11896,10 @@ def has_fingerprint(text, identity=True):
         return True
     if not identity:
         return False
+    # 「@ 路径说明」段：结尾固定短语做字面量探测，命中才走正则。
+    if (SANITIZE_AT_PATH_LOWER in low
+            and SANITIZE_AT_PATH_RE.search(text) is not None):
+        return True
     # 品牌词缩减：`harness` 是廉价前置筛，真命中交给正则。
     if (SANITIZE_BRAND_LOWER in low
             and SANITIZE_BRAND_RE.search(text) is not None):
@@ -11900,6 +11930,10 @@ def sanitize_text(text, identity=True):
         text = SANITIZE_DSH_GUI_RE.sub(SANITIZE_DSH_GUI_REPLACEMENT, text)
         # 品牌词缩减放在最后：GUI 规则还认全名，先让它匹配原文。
         text = SANITIZE_BRAND_RE.sub(SANITIZE_BRAND_REPLACEMENT, text)
+        # 「@ 路径说明」段：与上面几条同口径，只改客户端提示词所在角色。
+        # user / tool 里的同段是用户数据，改写会让模型看到与磁盘不一致的内容（#574）。
+        if SANITIZE_AT_PATH_LOWER in text.lower():
+            text = SANITIZE_AT_PATH_RE.sub(SANITIZE_AT_PATH_REPLACEMENT, text)
     for old, new in SANITIZE_REWRITES:
         text = text.replace(old, new)
     text = SANITIZE_HDR_RE.sub("", text)

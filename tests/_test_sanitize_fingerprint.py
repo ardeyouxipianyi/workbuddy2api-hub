@@ -309,6 +309,88 @@ class IdentityVerbVariantsTests(unittest.TestCase):
         self.assertEqual(out[2]["content"], fp)
 
 
+class AtPathParagraphTests(unittest.TestCase):
+    """dsh 系统提示里「@ 路径说明」整段的渠道指纹（2026-10-28 起命中）。
+
+    与前面几条不同，这条是**整段逐字**匹配：该段拆成 5 个单句分别发送全部 200，
+    整段原样发送才 400；段内任意位置改一个字也立刻 200。所以对策是整段换成同义
+    表述（保留全部行为说明），而不是删句或只改个别词。
+    """
+
+    PARA = (
+        "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve "
+        "from the workspace root; absolute paths identify files or directories on the host. A "
+        "trailing slash marks a directory: list it when its contents matter. Anything else is a "
+        "file: use the read tool when its contents are needed, and do not claim to have inspected "
+        "it before reading. @\"...\" quotes a path containing spaces."
+    )
+    HEAD = "You are an AI agent. Read the workspace notes before you act."
+
+    def test_paragraph_reworded_in_system(self):
+        out = P.sanitize_messages([{"role": "system", "content": self.HEAD + " " + self.PARA}])
+        text = out[0]["content"]
+        self.assertNotIn("quotes a path containing spaces", text)
+        self.assertNotIn("prefixed with @", text)
+        # 行为说明必须留下来，否则模型不知道 @ 前缀怎么解释。
+        self.assertIn("A token that starts with @", text)
+        self.assertIn("trailing slash means folder", text)
+        self.assertIn("read it first", text)
+        self.assertTrue(text.startswith(self.HEAD))
+
+    def test_case_insensitive_and_idempotent(self):
+        once = P.sanitize_text(self.PARA.lower())
+        self.assertNotIn("quotes a path containing spaces", once)
+        self.assertEqual(P.sanitize_text(once), once)
+
+    def test_single_sentences_untouched(self):
+        # 上游只收录了整段；单句是 200，改它没有收益，也不该动客户端文案。
+        for piece in (
+            "Tokens prefixed with @ are paths the user explicitly referenced.",
+            "Relative paths resolve from the workspace root; absolute paths identify files or "
+            "directories on the host.",
+            "@\"...\" quotes a path containing spaces.",
+        ):
+            self.assertEqual(P.sanitize_text(piece), piece)
+
+    def test_fast_path_literal_without_paragraph_untouched(self):
+        # 结尾短语单独出现时 has_fingerprint 会认账，但没有可替换的整段，必须原样返回。
+        text = "Note: @\"...\" quotes a path containing spaces."
+        self.assertEqual(P.sanitize_text(text), text)
+
+    def test_scoped_to_system_developer_and_assistant(self):
+        # 与仓库既有规则同口径：提示词所在角色改写，user / tool 是用户数据不动（#574）。
+        messages = [
+            {"role": "system", "content": self.HEAD + " " + self.PARA},
+            {"role": "developer", "content": self.PARA},
+            {"role": "assistant", "content": self.PARA},
+            {"role": "user", "content": self.PARA},
+            {"role": "tool", "content": self.PARA},
+        ]
+        out = P.sanitize_messages(messages)
+        for item in out[:3]:
+            self.assertNotIn("quotes a path containing spaces", item["content"], item["role"])
+        for item in out[3:]:
+            self.assertEqual(item["content"], self.PARA, item["role"])
+        self.assertTrue(out[0]["content"].startswith(self.HEAD))
+
+    def test_unrelated_at_mentions_untouched(self):
+        for text in (
+            "Tokens prefixed with @ are expanded by the shell.",
+            "Use @ to reference a file in this workspace.",
+        ):
+            self.assertEqual(P.sanitize_text(text), text, text)
+
+    def test_wire_body_carries_the_rewrite(self):
+        # 规则接上还不够：要确认 build_upstream_body 真的用它构造出站 body。
+        body = P.build_upstream_body({
+            "model": "deepseek-v4.1-flash",
+            "messages": [{"role": "system", "content": self.HEAD + " " + self.PARA},
+                         {"role": "user", "content": "hi"}]})
+        system = body["messages"][0]["content"]
+        self.assertNotIn("quotes a path containing spaces", system)
+        self.assertIn("A token that starts with @", system)
+
+
 if __name__ == "__main__":
     unittest.main()
 
