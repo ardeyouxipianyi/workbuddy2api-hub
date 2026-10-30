@@ -380,6 +380,14 @@ button.mini{padding:3px 9px;font-size:11px}
    单元格。原生 select 的直角白框在暖色表里显得突兀，这里补齐主题样式。 */
 .mini-select{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
   padding:3px 6px;color:var(--fg);font:inherit;font-size:11px;font-variant-numeric:tabular-nums}
+/* 权重列的自绘下拉：通用 .cs-trigger 的内边距（9px）+ 间距（8px）+ 箭头（11px）
+   就吃掉 37px，落在 64px 的格子里（减去 td 左右 12px 只剩 40px）后数字被挤成
+   1px 宽——界面上只剩一个箭头、看不到权重值。这里把该列放宽、内边距收到 8px，
+   并按 mini 家族收紧触发器的 padding/gap，1-3 位数都留得下。 */
+table.account-cards th:nth-child(6),
+table.account-cards td:nth-child(6){padding-left:8px;padding-right:8px}
+table.account-cards td[data-label="权重"] .cs-trigger{padding:3px 6px;gap:4px}
+table.account-cards td[data-label="权重"] .cs-arrow{margin-left:0}
 .slot-input{width:100%;background:var(--panel2);border:1px solid var(--line);
   border-radius:8px;padding:6px 10px;color:var(--fg);font:inherit;font-size:13px}
 table.account-cards td[data-label="账号"]{padding-top:6px;padding-bottom:6px}
@@ -11419,7 +11427,7 @@ function renderAccounts(){
     + '<th style="text-align:center;width:84px">状态</th>'
     + '<th style="text-align:center;width:118px">今日活动</th>'
     + '<th style="text-align:center;width:150px">出口</th>'
-    + '<th style="text-align:center;width:64px">权重</th>'
+    + '<th style="text-align:center;width:78px">权重</th>'
     + '<th style="text-align:left;width:120px">积分</th>'
     + '<th style="text-align:right;width:70px">请求</th>'
     + '<th style="text-align:right;width:88px">总 token</th>'
