@@ -6,7 +6,7 @@ use serde_json::Map;
 fn overview_bucket(rows: &[&Value]) -> Value {
     let mut accounts: BTreeMap<String, i64> = BTreeMap::new();
     let mut out = json!({
-        "requests": rows.len() as i64,
+        "requests": 0,
         "accounts": {},
         "cost_cny": 0.0,
         "prompt_tokens": 0,
@@ -17,21 +17,28 @@ fn overview_bucket(rows: &[&Value]) -> Value {
         "credit": 0.0,
     });
     for row in rows {
-        let account = row
-            .get("account")
-            .and_then(Value::as_str)
-            .unwrap_or("(unattributed)");
-        *accounts.entry(account.to_string()).or_default() += 1;
-        for key in [
-            "prompt_tokens",
-            "completion_tokens",
-            "reasoning_tokens",
-            "cached_tokens",
-            "total_tokens",
-        ] {
-            out[key] = json!(integer(&out, key) + integer(row, key));
+        // 与 Python 的折叠规则一致：requests/tokens/账号计数只算 completed；
+        // 失败的行只要上游扣过费（不是客户端中断）就仍然计入 credit。
+        if outcome(row) == "completed" {
+            let account = row
+                .get("account")
+                .and_then(Value::as_str)
+                .unwrap_or("(unattributed)");
+            *accounts.entry(account.to_string()).or_default() += 1;
+            out["requests"] = json!(integer(&out, "requests") + 1);
+            for key in [
+                "prompt_tokens",
+                "completion_tokens",
+                "reasoning_tokens",
+                "cached_tokens",
+                "total_tokens",
+            ] {
+                out[key] = json!(integer(&out, key) + integer(row, key));
+            }
+            out["credit"] = json!(number(&out, "credit") + number(row, "credit"));
+        } else if outcome(row) != "client_aborted" {
+            out["credit"] = json!(number(&out, "credit") + number(row, "credit"));
         }
-        out["credit"] = json!(number(&out, "credit") + number(row, "credit"));
     }
     out["accounts"] = json!(accounts);
     out
@@ -147,16 +154,6 @@ fn add_overview_totals(totals: &mut Value, selected: &[&Value]) {
             totals["errors"] = json!(integer(totals, "errors") + 1);
             if outcome(row) != "client_aborted" {
                 totals["credit"] = json!(number(totals, "credit") + number(row, "credit"));
-            }
-        }
-        for (source, sum_key, count_key) in [
-            ("ttft_ms", "ttft_ms_sum", "ttft_samples"),
-            ("gen_ms", "gen_ms_sum", "gen_samples"),
-            ("elapsed_ms", "wall_ms_sum", "wall_samples"),
-        ] {
-            if let Some(value) = row.get(source).and_then(Value::as_i64) {
-                totals[sum_key] = json!(integer(totals, sum_key) + value);
-                totals[count_key] = json!(integer(totals, count_key) + 1);
             }
         }
     }
