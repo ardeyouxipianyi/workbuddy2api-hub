@@ -29,7 +29,7 @@ struct Stat {
 }
 
 impl Stat {
-    fn feed(&mut self, row: &Value, is_err: bool, cost: f64) {
+    fn feed(&mut self, row: &Row, is_err: bool, cost: f64) {
         if is_err {
             self.errors += 1;
         } else {
@@ -48,7 +48,7 @@ impl Stat {
             ("tokens_per_sec", &mut self.speed_sum, &mut self.speed_n),
             ("elapsed_ms", &mut self.elapsed_sum, &mut self.elapsed_n),
         ] {
-            if let Some(value) = row.get(key).and_then(Value::as_f64) {
+            if let Some(value) = optional(row, key) {
                 if value != 0.0 {
                     *sum += value;
                     *count += 1;
@@ -130,22 +130,16 @@ struct Half {
     model_order: Vec<String>,
 }
 
-fn model_of(row: &Value) -> String {
-    row.get("model")
-        .and_then(Value::as_str)
-        .unwrap_or("(unknown)")
+fn model_of(row: &Row) -> String {
+    row.model.as_deref().unwrap_or("(unknown)")
         .to_string()
 }
 
-fn key_id(row: &Value, known: &[String]) -> String {
-    if row.get("key").is_none() {
+fn key_id(row: &Row, known: &[String]) -> String {
+    if row.key.is_none() {
         return "__before_keys__".into();
     }
-    let id = row
-        .get("key")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("__no_key__");
+    let id = row.key.as_deref().filter(|value| !value.is_empty()).unwrap_or("__no_key__");
     // settings 里查不到的 key 归到 __unknown_key__ 桶（Python 是这么归的），
     // 否则同一个「日志里有、配置里没有」的 id 会在面板上冒充一个真实 key。
     if id != "__no_key__" && !known.iter().any(|entry| entry == id) {
@@ -157,7 +151,7 @@ fn key_id(row: &Value, known: &[String]) -> String {
 impl Half {
     fn feed(
         &mut self,
-        row: &Value,
+        row: &Row,
         cost: f64,
         realms: &BTreeMap<String, String>,
         known_keys: &[String],
@@ -179,11 +173,7 @@ impl Half {
             .or_default()
             .feed(row, is_err, cost);
 
-        let account = row
-            .get("account")
-            .and_then(Value::as_str)
-            .unwrap_or("(unattributed)")
-            .to_string();
+        let account = row.account.clone().unwrap_or_else(|| "(unattributed)".to_string());
         let realm = row_realm(row, realms, current);
         if !self.accts.contains_key(&account) {
             self.acct_order.push(account.clone());
@@ -192,7 +182,7 @@ impl Half {
         if entry.realm.is_empty() {
             // python 记的是**行里的 realm 字段**（可能为空），池子里的账号随后按
             // 账号自己的 realm 覆盖；这里不能填推算出来的 realm。
-            entry.realm = row.get("realm").and_then(Value::as_str).unwrap_or("").to_string();
+            entry.realm = row.realm.clone().unwrap_or_default();
         }
         entry.stat.feed(row, is_err, cost);
         if !is_err {
@@ -203,7 +193,7 @@ impl Half {
                 .feed(row, is_err, cost);
         }
         // realms 的键同样是行里的原值（空串也是键），cross_realm 靠它数「跨了几个出口」。
-        let raw_realm = row.get("realm").and_then(Value::as_str).unwrap_or("").to_string();
+        let raw_realm = row.realm.clone().unwrap_or_default();
         *entry.realms.entry(raw_realm.clone()).or_default() += 1;
         entry.last_at = entry.last_at.max(number(row, "at"));
 
@@ -508,7 +498,7 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realms = account_realms(app);
     let realm = query(req, "realm");
     let current = app.state.current_realm();
-    let all_rows: Vec<&Value> = rows_for_realm(&all, realm.unwrap_or("all"), &realms, &current);
+    let all_rows: Vec<&Row> = rows_for_realm(&all, realm.unwrap_or("all"), &realms, &current);
     // 面板发的是 range=today|week|month（区间按钮），只有自定义区间才带 since/until。
     let (range_since, range_until) = range_bounds(req);
     let since = query(req, "since")

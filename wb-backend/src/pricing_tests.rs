@@ -163,13 +163,19 @@ fn batch_pricing_matches_the_single_row_entry_point() {
     fs::create_dir_all(&dir).unwrap();
     let store = PricingStore::new(dir.clone(), None);
     let rows = vec![
-        json!({"model":"glm-5.3","at":100.0,"prompt_tokens":1000000,"cached_tokens":0,"completion_tokens":0}),
-        json!({"model":"no-such-model","at":100.0,"prompt_tokens":10,"completion_tokens":1}),
+        crate::panel_usage::Row::parse(
+            r#"{"model":"glm-5.3","at":100.0,"prompt_tokens":1000000,"cached_tokens":0,"completion_tokens":0}"#,
+        )
+        .unwrap(),
+        crate::panel_usage::Row::parse(
+            r#"{"model":"no-such-model","at":100.0,"prompt_tokens":10,"completion_tokens":1}"#,
+        )
+        .unwrap(),
     ];
-    let refs: Vec<&Value> = rows.iter().collect();
+    let refs: Vec<&crate::panel_usage::Row> = rows.iter().collect();
     let batch = store.cost_rows(&refs, true);
     assert_eq!(batch.len(), 2);
-    let single = store.cost_for_row(&rows[0], true, false);
+    let single = store.cost_for_row(&rows[0].to_value(), true, false);
     assert!(batch[0].known);
     assert!((batch[0].cny - single["cny"].as_f64().unwrap()).abs() < 1e-12);
     assert!(!batch[1].known, "没有价目表的模型必须报未计价");

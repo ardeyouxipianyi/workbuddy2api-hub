@@ -395,17 +395,31 @@ impl PricingStore {
     /// 一次扫描里每行都要计价时用这个：策略/时间线/价表/覆盖/加价各只读一次。
     /// 逐行调 cost_for_row 会把这些表克隆 16k 次，面板一刷新就把内存顶上去
     /// （Python 也是整扫复用同一份 _pricing_inputs）。
-    pub fn cost_rows(&self, rows: &[&Value], enabled: bool) -> Vec<RowCost> {
+    /// 整包计价：各表只读一次（逐行调 cost_for_row 会把它们克隆上万次）。
+    /// 计价链是 Value 形状的，这里给每行拼一个只有计价字段的小对象——比让整份
+    /// 日志常驻 4 KB/行的 Value 便宜得多。
+    pub fn cost_rows(&self, rows: &[&crate::panel_usage::Row], enabled: bool) -> Vec<RowCost> {
         if !enabled {
             return vec![RowCost { cny: 0.0, known: false, disabled: true }; rows.len()];
         }
         let inputs = self.inputs();
         rows.iter()
             .map(|row| {
-                if row.is_null() {
+                if row.at <= 0.0 && row.model.is_none() {
                     return RowCost { cny: 0.0, known: false, disabled: false };
                 }
-                let cost = self.cost_from(row, &inputs, false);
+                let mut view = Map::new();
+                if let Some(model) = row.model.as_deref() {
+                    view.insert("model".into(), json!(model));
+                }
+                view.insert("at".into(), json!(row.at));
+                view.insert("prompt_tokens".into(), json!(row.prompt_tokens));
+                view.insert("cached_tokens".into(), json!(row.cached_tokens));
+                view.insert("completion_tokens".into(), json!(row.completion_tokens));
+                if let Some(policy) = &row.cost_policy {
+                    view.insert("cost_policy".into(), policy.clone());
+                }
+                let cost = self.cost_from(&Value::Object(view), &inputs, false);
                 RowCost {
                     cny: cost.get("cny").and_then(Value::as_f64).unwrap_or(0.0),
                     known: cost.get("known").and_then(Value::as_bool).unwrap_or(false),

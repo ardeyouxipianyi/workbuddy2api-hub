@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn bucket_at(row: &Value, origin: f64, step: i64) -> i64 {
+fn bucket_at(row: &Row, origin: f64, step: i64) -> i64 {
     let at = number(row, "at").max(origin);
     origin as i64 + (((at - origin) / step as f64).floor() as i64) * step
 }
@@ -72,9 +72,9 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         if number(row, "credit") > 0.0 {
             credits.push(json!({
                 "at": at,
-                "iso": row.get("iso").cloned().unwrap_or_else(|| json!("")),
-                "model": row.get("model").cloned().unwrap_or_else(|| json!("")),
-                "account": row.get("account").cloned().unwrap_or_else(|| json!("")),
+                "iso": row.iso.clone().unwrap_or_default(),
+                "model": row.model.clone().unwrap_or_default(),
+                "account": row.account.clone().unwrap_or_default(),
                 "credit": number(row, "credit"),
                 "total_tokens": integer(row, "total_tokens"),
             }));

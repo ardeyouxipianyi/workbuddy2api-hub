@@ -5,7 +5,7 @@ use crate::pricing_store::RowCost;
 use serde_json::Map;
 
 fn overview_bucket(
-    rows: &[&Value],
+    rows: &[&Row],
     costs: &[RowCost],
     indices: &[usize],
     current: &str,
@@ -29,8 +29,8 @@ fn overview_bucket(
             continue;
         }
         let account = row
-            .get("account")
-            .and_then(Value::as_str)
+            .account
+            .as_deref()
             .unwrap_or("(unattributed)");
         *accounts.entry(account.to_string()).or_default() += 1;
         out["requests"] = json!(integer(&out, "requests") + 1);
@@ -55,7 +55,7 @@ fn overview_bucket(
 
 /// Python 的 _fold_cost：可计价的累加金额，不可计价的按模型记一笔「没价」，
 /// 主开关关掉的行不算「没价」（整块功能没开，不是缺价）。
-fn fold_cost(bucket: &mut Value, row: &Value, cost: RowCost) {
+fn fold_cost(bucket: &mut Value, row: &Row, cost: RowCost) {
     if cost.known {
         bucket["cost_cny"] = json!(number(bucket, "cost_cny") + cost.cny);
     } else if !cost.disabled {
@@ -63,7 +63,7 @@ fn fold_cost(bucket: &mut Value, row: &Value, cost: RowCost) {
         if !bucket.get("cost_missing").is_some_and(Value::is_object) {
             bucket["cost_missing"] = json!({});
         }
-        let model = row.get("model").and_then(Value::as_str).unwrap_or("unknown");
+        let model = row.model.as_deref().unwrap_or("unknown");
         let current = bucket
             .get("cost_missing")
             .and_then(|value| value.get(model))
@@ -74,7 +74,7 @@ fn fold_cost(bucket: &mut Value, row: &Value, cost: RowCost) {
 }
 
 fn group_overview_maps(
-    rows: &[&Value],
+    rows: &[&Row],
     realms: &BTreeMap<String, String>,
     current: &str,
 ) -> (
@@ -92,15 +92,11 @@ fn group_overview_maps(
         if outcome(row) != "completed" {
             continue;
         }
-        let model = row
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("?")
-            .to_string();
+        let model = row.model.clone().unwrap_or_else(|| "?".to_string());
         let realm = row_realm(row, realms, current);
         let account = row
-            .get("account")
-            .and_then(Value::as_str)
+            .account
+            .as_deref()
             .unwrap_or("(unattributed)")
             .to_string();
         by_account
@@ -131,7 +127,7 @@ fn group_overview_maps(
 }
 
 fn overview_maps(
-    rows: &[&Value],
+    rows: &[&Row],
     costs: &[RowCost],
     realms: &BTreeMap<String, String>,
     current: &str,
@@ -174,7 +170,7 @@ fn overview_maps(
     )
 }
 
-fn add_overview_totals(totals: &mut Value, selected: &[&Value], costs: &[RowCost]) {
+fn add_overview_totals(totals: &mut Value, selected: &[&Row], costs: &[RowCost]) {
     for (index, row) in selected.iter().enumerate() {
         // Python 的口径：requests/tokens 只算 completed；失败行进 errors，但
         // 只要上游已经扣过费（不是客户端中断）就要计入 credit —— 否则面板
@@ -243,7 +239,7 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realm = requested_realm(req, app);
     let (since, until) = range_bounds(req);
     let current = app.state.current_realm();
-    let selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms, &current)
+    let selected: Vec<&Row> = rows_for_realm(&rows, &realm, &realms, &current)
         .into_iter()
         .filter(|row| {
             if since.is_none() && until.is_none() {
@@ -287,11 +283,11 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
 
 pub fn by_account(app: &Arc<App>) -> Resp {
     let rows = read_rows(app);
-    let mut grouped: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-    for row in rows.iter().filter(|row| row.get("error").is_none()) {
+    let mut grouped: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.error.is_none()) {
         let account = row
-            .get("account")
-            .and_then(Value::as_str)
+            .account
+            .as_deref()
             .filter(|value| !value.is_empty())
             .unwrap_or("(unattributed)");
         grouped.entry(account.to_string()).or_default().push(row);
@@ -303,7 +299,7 @@ pub fn by_account(app: &Arc<App>) -> Resp {
             // 所以这里不能用 BTreeMap 收集——那会把并列项按 id 排掉。
             let mut models: Vec<(String, i64)> = Vec::new();
             for row in &items {
-                let model = row.get("model").and_then(Value::as_str).unwrap_or("?").to_string();
+                let model = row.model.clone().unwrap_or_else(|| "?".to_string());
                 match models.iter_mut().find(|(name, _)| *name == model) {
                     Some((_, count)) => *count += 1,
                     None => models.push((model, 1)),
@@ -347,8 +343,8 @@ fn key_label(settings: &Map<String, Value>, key_id: &str) -> String {
 
 /// 每行补面板要的成本明细（cost_cny/band/rates/…）。这是 Python 的
 /// cost_for_row 展示路径：details=true 才有 rates、band_note 这些悬停卡片字段。
-fn recent_row(row: &Value, app: &App, settings: &Map<String, Value>) -> Value {
-    let mut out = app.pricing.enrich_usage_row(row, settings);
+fn recent_row(row: &Row, app: &App, settings: &Map<String, Value>) -> Value {
+    let mut out = app.pricing.enrich_usage_row(&row.to_value(), settings);
     let key_id = out.get("key").and_then(Value::as_str).unwrap_or("").to_string();
     if let Some(object) = out.as_object_mut() {
         object.insert("key_name".into(), json!(key_label(settings, &key_id)));
@@ -369,7 +365,7 @@ pub fn recent(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
     let current = app.state.current_realm();
-    let mut selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms, &current);
+    let mut selected: Vec<&Row> = rows_for_realm(&rows, &realm, &realms, &current);
     // 日志不是严格按时间追加的（多进程/补写），反转文件顺序取不到最新那一页；
     // Python 是按 at 倒序取页的。并列保持文件顺序（稳定排序）。
     selected.sort_by(|left, right| {

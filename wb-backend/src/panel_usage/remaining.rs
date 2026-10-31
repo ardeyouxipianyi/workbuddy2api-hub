@@ -6,7 +6,7 @@ type PairKey = (String, String, String);
 type PairValue = (i64, String);
 
 fn collect_pairs(
-    rows: &[Value],
+    rows: &[Row],
     accounts: &[crate::state::AccountFile],
     realms: &BTreeMap<String, String>,
     floor: f64,
@@ -18,16 +18,12 @@ fn collect_pairs(
             continue;
         }
         let uid = row
-            .get("account")
-            .and_then(Value::as_str)
+            .account
+            .as_deref()
             .unwrap_or("(unattributed)")
             .to_string();
         let realm = row_realm(row, &realms, current);
-        let model = row
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("?")
-            .to_string();
+        let model = row.model.clone().unwrap_or_else(|| "?".to_string());
         let account = accounts.iter().find(|account| account.uid() == uid);
         let nickname = account
             .map(|value| value.str("nickname").to_string())

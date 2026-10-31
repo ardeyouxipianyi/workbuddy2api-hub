@@ -16,7 +16,7 @@ struct Perf {
     cache: Vec<f64>,
 }
 
-fn feed_perf(bucket: &mut Perf, row: &Value) {
+fn feed_perf(bucket: &mut Perf, row: &Row) {
     bucket.total += 1;
     match outcome(row) {
         "completed" => bucket.ok += 1,
@@ -31,17 +31,17 @@ fn feed_perf(bucket: &mut Perf, row: &Value) {
             ("gen_ms", &mut bucket.generation),
             ("cache_hit_pct", &mut bucket.cache),
         ] {
-            if let Some(value) = row.get(key).and_then(Value::as_f64) {
+            if let Some(value) = optional(row, key) {
                 target.push(value);
             }
         }
-        if let Some(value) = row.get("tokens_per_sec").and_then(Value::as_f64) {
+        if let Some(value) = optional(row, "tokens_per_sec") {
             if value != 0.0 {
                 bucket.rates.push(value);
             }
         }
     }
-    if let Some(value) = row.get("elapsed_ms").and_then(Value::as_f64) {
+    if let Some(value) = optional(row, "elapsed_ms") {
         if value != 0.0 {
             bucket.wall.push(value);
         }
@@ -100,7 +100,7 @@ struct PerfResults {
 }
 
 fn aggregate_perf(
-    selected: Vec<&Value>,
+    selected: Vec<&Row>,
     realms: &BTreeMap<String, String>,
     current: &str,
 ) -> PerfResults {
@@ -112,11 +112,7 @@ fn aggregate_perf(
     };
     for row in selected {
         feed_perf(&mut result.total, row);
-        let model = row
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
+        let model = row.model.clone().unwrap_or_else(|| "unknown".to_string());
         feed_perf(result.by_model.entry(model.clone()).or_default(), row);
         let realm = row_realm(row, realms, current);
         feed_perf(
@@ -128,11 +124,7 @@ fn aggregate_perf(
                 .or_default(),
             row,
         );
-        let account = row
-            .get("account")
-            .and_then(Value::as_str)
-            .unwrap_or("(unattributed)")
-            .to_string();
+        let account = row.account.clone().unwrap_or_else(|| "(unattributed)".to_string());
         feed_perf(
             result
                 .by_account
@@ -204,12 +196,12 @@ pub fn perf(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realm = requested_realm(req, app);
     // 区间必须过滤：不然「今日」把整份样本都算进去了（Python 是按窗口收样的）。
     let (since, until) = range_bounds(req);
-    let in_window = |row: &&Value| {
+    let in_window = |row: &&Row| {
         let at = number(row, "at");
         since.map_or(true, |lower| at >= lower) && until.map_or(true, |upper| at <= upper)
     };
     let current = app.state.current_realm();
-    let selected: Vec<&Value> = rows_for_realm(sampled, &realm, &realms, &current)
+    let selected: Vec<&Row> = rows_for_realm(sampled, &realm, &realms, &current)
         .into_iter()
         .filter(in_window)
         .collect();
@@ -218,8 +210,7 @@ pub fn perf(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     // （见 KNOWN_DIFFS 的 sample_from）；升级时机＝有人真的用这个字段做判断。
     let sample_from = sampled
         .first()
-        .and_then(|row| row.get("at"))
-        .cloned()
+        .map(|row| json!(row.at))
         .unwrap_or(Value::Null);
     let result = aggregate_perf(selected, &realms, &current);
     let total = result.total;

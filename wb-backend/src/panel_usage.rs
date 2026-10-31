@@ -12,16 +12,87 @@ use crate::App;
 
 const DAY_SECONDS: f64 = 86_400.0;
 
-fn read_rows(app: &App) -> Arc<Vec<Value>> {
+fn read_rows(app: &App) -> Arc<Vec<Row>> {
     load_rows(&app.recorder_path())
+}
+
+/// 一行日志在内存里的紧凑形态。
+///
+/// 面板要整份日志（全时段/跨月），而 serde_json::Value 每行要 ~4 KB：2.6 万行就是
+/// 115 MB，还随日志线性长（CT412 上一次内存爆掉就是这么来的）。这里只留各视图真正
+/// 读的字段，一级对象每行 ~200 B；`raw` 存原行，给「最近请求」这种要原样输出的
+/// 视图用（它只有一页几十行，重新解析很便宜）。
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+pub struct Row {
+    pub at: f64,
+    pub model: Option<String>,
+    pub account: Option<String>,
+    pub realm: Option<String>,
+    pub key: Option<String>,
+    pub outcome: Option<String>,
+    pub iso: Option<String>,
+    pub credit: f64,
+    pub prompt_tokens: f64,
+    pub completion_tokens: f64,
+    pub reasoning_tokens: f64,
+    pub cached_tokens: f64,
+    pub total_tokens: f64,
+    pub ttft_ms: Option<f64>,
+    pub gen_ms: Option<f64>,
+    pub elapsed_ms: Option<f64>,
+    pub tokens_per_sec: Option<f64>,
+    pub cache_hit_pct: Option<f64>,
+    pub error: Option<Value>,
+    pub cost_policy: Option<Value>,
+    /// 原行（不含换行）。只在「最近请求」重解析时用。
+    /// shortcut: 这仍是每行 ~600 B 的常驻，日志到 10 万行时约 60 MB；真到那一步
+    /// 再改成「只留行号、由最近请求按需重读」。
+    #[serde(skip)]
+    pub raw: Box<str>,
+}
+
+impl Row {
+    pub fn str(&self, key: &str) -> Option<&str> {
+        match key {
+            "model" => self.model.as_deref(),
+            "account" => self.account.as_deref(),
+            "realm" => self.realm.as_deref(),
+            "key" => self.key.as_deref(),
+            "outcome" => self.outcome.as_deref(),
+            "iso" => self.iso.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn has(&self, key: &str) -> bool {
+        match key {
+            "key" => self.key.is_some(),
+            "realm" => self.realm.is_some(),
+            "error" => self.error.is_some(),
+            _ => self.str(key).is_some(),
+        }
+    }
+
+    /// 解析一行日志（也供测试构造行用）。
+    pub fn parse(line: &str) -> Option<Row> {
+        let mut row: Row = serde_json::from_str(line).ok()?;
+        row.raw = line.into();
+        Some(row)
+    }
+
+    /// 原行的 Value 形态（只给「最近请求」这类要整行输出的视图）。
+    pub fn to_value(&self) -> Value {
+        serde_json::from_str(&self.raw).unwrap_or_else(|_| Value::Null)
+    }
 }
 
 /// 解析结果按 (路径, mtime, 长度) 缓存一次，所有面板视图共用同一份。
 /// 以前每个请求都重读整份 usage.jsonl（16 MB → 约 55 MB 的 Value），面板每 5 秒
 /// 并发打 /usage、/usage/perf、/usage/analytics，几次叠起来就是 500 MB ——
 /// CT412 的内存就是这么爆的。
-fn load_rows(path: &std::path::Path) -> Arc<Vec<Value>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::path::PathBuf, u64, u64, Arc<Vec<Value>>)>> =
+fn load_rows(path: &std::path::Path) -> Arc<Vec<Row>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::path::PathBuf, u64, u64, Arc<Vec<Row>>)>> =
         std::sync::OnceLock::new();
     let stamp = std::fs::metadata(path)
         .map(|meta| {
@@ -41,11 +112,12 @@ fn load_rows(path: &std::path::Path) -> Arc<Vec<Value>> {
     if guard.0 == path && guard.1 == stamp.0 && guard.2 == stamp.1 {
         return guard.3.clone();
     }
-    let rows: Vec<Value> = std::fs::read_to_string(path)
+    // 只解析需要的字段，原行留一份给「最近请求」重解析（见 Row 的注释）。
+    let rows: Vec<Row> = std::fs::read_to_string(path)
         .map(|text| {
             text.lines()
                 .filter(|line| !line.trim().is_empty())
-                .filter_map(|line| serde_json::from_str(line).ok())
+                .filter_map(Row::parse)
                 .collect()
         })
         .unwrap_or_default();
@@ -161,32 +233,28 @@ fn range_bounds(req: &Request<Incoming>) -> (Option<f64>, Option<f64>) {
     range_bounds_query(req.uri().query().unwrap_or(""))
 }
 
-fn row_at(row: &Value) -> Option<f64> {
-    row.get("at").and_then(|value| {
-        value
-            .as_f64()
-            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-    })
+fn row_at(row: &Row) -> Option<f64> {
+    (row.at > 0.0).then_some(row.at)
 }
 
 /// 行的 realm：字段 → 账号 → 模型归属，推不出来时归到当前 realm。
 /// 与 Python 的 row_realm 同序（它最后还会按模型的前缀表猜一次，见 detect_model_realm）。
-fn row_realm(row: &Value, account_realms: &BTreeMap<String, String>, current: &str) -> String {
+fn row_realm(row: &Row, account_realms: &BTreeMap<String, String>, current: &str) -> String {
     if let Some(value) = row
-        .get("realm")
-        .and_then(Value::as_str)
+        .realm
+        .as_deref()
         .filter(|value| !value.is_empty())
     {
         return value.to_string();
     }
     if let Some(realm) = row
-        .get("account")
-        .and_then(Value::as_str)
+        .account
+        .as_deref()
         .and_then(|uid| account_realms.get(uid))
     {
         return realm.clone();
     }
-    match row.get("model").and_then(Value::as_str) {
+    match row.model.as_deref() {
         Some(model) if !model.is_empty() => detect_model_realm(model, current),
         _ => current.to_string(),
     }
@@ -223,22 +291,65 @@ fn account_realms(app: &App) -> BTreeMap<String, String> {
 }
 
 fn rows_for_realm<'a>(
-    rows: &'a [Value],
+    rows: &'a [Row],
     realm: &str,
     realms: &BTreeMap<String, String>,
     current: &str,
-) -> Vec<&'a Value> {
+) -> Vec<&'a Row> {
     rows.iter()
         .filter(|row| realm == "all" || row_realm(row, realms, current) == realm)
         .collect()
 }
 
-fn number(row: &Value, key: &str) -> f64 {
-    row.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+/// 数值读取对两种行都成立：日志行（Row）和视图自己拼的输出对象（Value）。
+/// 输出对象只用来排序/汇总，没必要为它再造一个类型。
+trait NumField {
+    fn num(&self, key: &str) -> Option<f64>;
 }
 
-fn integer(row: &Value, key: &str) -> i64 {
-    row.get(key).and_then(Value::as_i64).unwrap_or(0)
+impl NumField for Row {
+    fn num(&self, key: &str) -> Option<f64> {
+        optional(self, key)
+    }
+}
+
+impl<T: NumField + ?Sized> NumField for &T {
+    fn num(&self, key: &str) -> Option<f64> {
+        (**self).num(key)
+    }
+}
+
+impl NumField for Value {
+    fn num(&self, key: &str) -> Option<f64> {
+        self.get(key).and_then(Value::as_f64)
+    }
+}
+
+fn number<T: NumField>(row: &T, key: &str) -> f64 {
+    row.num(key).unwrap_or(0.0)
+}
+
+/// 可能缺失的数值：视图要区分「没有这个字段」和「值是 0」。
+fn optional(row: &Row, key: &str) -> Option<f64> {
+    match key {
+        "at" => Some(row.at),
+        "credit" => Some(row.credit),
+        "prompt_tokens" => Some(row.prompt_tokens),
+        "completion_tokens" => Some(row.completion_tokens),
+        "reasoning_tokens" => Some(row.reasoning_tokens),
+        "cached_tokens" => Some(row.cached_tokens),
+        "total_tokens" => Some(row.total_tokens),
+        "ttft_ms" => row.ttft_ms,
+        "gen_ms" => row.gen_ms,
+        "elapsed_ms" => row.elapsed_ms,
+        "tokens_per_sec" => row.tokens_per_sec,
+        "cache_hit_pct" => row.cache_hit_pct,
+        _ => None,
+    }
+}
+
+fn integer<T: NumField>(row: &T, key: &str) -> i64 {
+    row.num(key).map(|value| value as i64).unwrap_or(0)
 }
 
 fn epoch_now() -> f64 {
@@ -248,8 +359,8 @@ fn epoch_now() -> f64 {
         .unwrap_or(0.0)
 }
 
-fn outcome(row: &Value) -> &str {
-    row.get("outcome").and_then(Value::as_str).unwrap_or("")
+fn outcome(row: &Row) -> &str {
+    row.outcome.as_deref().unwrap_or("")
 }
 
 fn representative(app: &App, realm: &str) -> Option<crate::state::AccountFile> {
@@ -276,8 +387,7 @@ pub use timeseries::timeseries;
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_model_realm, load_rows, python_weekday, range_bounds_query, row_realm};
-    use serde_json::json;
+    use super::{detect_model_realm, load_rows, python_weekday, range_bounds_query, row_realm, Row};
     use std::sync::Arc;
 
     #[test]
@@ -305,13 +415,13 @@ mod tests {
         // 最后一步是关键：推不出归属就返回空串会让这些行在按 realm 过滤时整条消失。
         let mut realms = std::collections::BTreeMap::new();
         realms.insert("acct-1".to_string(), "intl".to_string());
-        let with_account = json!({"account": "acct-1", "model": "hy3"});
+        let with_account = Row::parse(r#"{"account": "acct-1", "model": "hy3"}"#).unwrap();
         assert_eq!(row_realm(&with_account, &realms, "cn"), "intl");
-        let cn_model = json!({"model": "minimax-m3"});
+        let cn_model = Row::parse(r#"{"model": "minimax-m3"}"#).unwrap();
         assert_eq!(row_realm(&cn_model, &realms, "intl"), "cn");
-        let intl_model = json!({"model": "gpt-5.5"});
+        let intl_model = Row::parse(r#"{"model": "gpt-5.5"}"#).unwrap();
         assert_eq!(row_realm(&intl_model, &realms, "cn"), "intl");
-        let unknown = json!({"model": "some-new-model"});
+        let unknown = Row::parse(r#"{"model": "some-new-model"}"#).unwrap();
         assert_eq!(row_realm(&unknown, &realms, "cn"), "cn");
         assert_eq!(detect_model_realm("", "intl"), "intl");
     }

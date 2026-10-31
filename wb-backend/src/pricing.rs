@@ -103,7 +103,7 @@ impl Pricing {
     /// 避免逐行克隆价表。
     pub fn cost_rows(
         &self,
-        rows: &[&Value],
+        rows: &[&crate::panel_usage::Row],
         settings: &Map<String, Value>,
     ) -> Vec<crate::pricing_store::RowCost> {
         self.store.cost_rows(rows, self.settings(settings).enabled)
