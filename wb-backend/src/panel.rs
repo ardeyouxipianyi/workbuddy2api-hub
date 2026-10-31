@@ -220,6 +220,20 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 .unwrap_or("");
             json_resp(StatusCode::OK, &crate::tasks::view(app, uid).await)
         }
+        (&Method::GET, "/agents") => json_resp(StatusCode::OK, &crate::agents::overview(app)),
+        (&Method::GET, "/agents/available") => {
+            json_resp(StatusCode::OK, &json!({"models": crate::models::flat_ids()}))
+        }
+        (&Method::POST, "/agents/model-selection") => {
+            let body = crate::http::body_json(req).await.unwrap_or(json!({}));
+            json_resp(StatusCode::OK, &crate::agents::save_selection(app, &body))
+        }
+        (&Method::POST, "/agents/apply") | (&Method::POST, "/agents/restore") => json_resp(
+            StatusCode::NOT_IMPLEMENTED,
+            &json!({"ok": false, "error": {
+                "message": "一键配置（写客户端配置并做备份/回滚）还没移植到 Rust 后端；勾选清单可以保存，但不会改本机客户端配置",
+                "code": 501}}),
+        ),
         (&Method::GET, "/scheduler") => json_resp(StatusCode::OK, &app.scheduler.status()),
         (&Method::GET, "/updates") => json_resp(
             StatusCode::OK,

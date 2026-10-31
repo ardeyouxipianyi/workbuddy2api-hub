@@ -27,6 +27,19 @@ pub fn lookup(realm: &str, model: &str) -> Option<Value> {
     items.into_iter().find(|m| m.get("id").and_then(Value::as_str) == Some(model))
 }
 
+/// 全部模型 id（intl + cn 去重），智能体配置的模型选择器用。
+pub fn flat_ids() -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for realm in ["intl", "cn"] {
+        for item in entries(realm) {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                seen.insert(id.to_string());
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
+
 fn entries(realm: &str) -> Vec<Value> {
     let raw = if realm == "cn" { CN } else { INTL };
     let mut items: Vec<Value> = serde_json::from_str(raw).unwrap_or_default();
