@@ -19,10 +19,16 @@ use crate::App;
 
 const DASHBOARD: &str = include_str!("../../dashboard.html");
 
+/// 面板登录限流：每客户端 IP 60 秒内 5 次失败（`wb_proxy.py` 的 `_login_attempts`）。
+const LOGIN_WINDOW: i64 = 60;
+const LOGIN_MAX: usize = 5;
+
 #[derive(Default)]
 pub struct Panel {
     tokens: Mutex<HashSet<String>>,
     password: Mutex<Option<String>>,
+    /// ip -> 最近失败时刻（秒）。只在内存里，重启清空。
+    attempts: Mutex<std::collections::HashMap<String, Vec<i64>>>,
 }
 
 impl Panel {
@@ -43,6 +49,70 @@ impl Panel {
     fn password_required(&self) -> bool {
         !self.password().is_empty()
     }
+
+    /// 返回到期等待秒数；`None` 表示还能试。
+    fn login_blocked(&self, ip: &str, now: i64) -> Option<i64> {
+        let mut map = self.attempts.lock().ok()?;
+        let kept: Vec<i64> = map
+            .get(ip)
+            .map(|list| list.iter().copied().filter(|t| now - *t < LOGIN_WINDOW).collect())
+            .unwrap_or_default();
+        if kept.is_empty() {
+            map.remove(ip);
+        } else {
+            map.insert(ip.to_string(), kept.clone());
+        }
+        if kept.len() >= LOGIN_MAX {
+            return Some((LOGIN_WINDOW - (now - kept[0])).max(1));
+        }
+        None
+    }
+
+    fn note_login_failure(&self, ip: &str, now: i64) {
+        if let Ok(mut map) = self.attempts.lock() {
+            // 键是客户端地址，挡不住「拿一大片源地址来试」；这只是内存护栏。
+            if map.len() > 1024 {
+                map.clear();
+            }
+            map.entry(ip.to_string()).or_default().push(now);
+        }
+    }
+
+    fn clear_login_failures(&self, ip: &str) {
+        if let Ok(mut map) = self.attempts.lock() {
+            map.remove(ip);
+        }
+    }
+}
+
+/// 登录限流用的客户端地址：反代部署下对端是 127.0.0.1，只有对端是回环时才读代理头，
+/// 否则公网客户端伪造 `X-Real-IP` 就能换个桶继续猜（`wb_proxy.py` 的 login_rate_limit_key）。
+///
+/// shortcut: `WB_TRUSTED_PROXIES`（CIDR 白名单）没接，只信任回环对端；面板挂在
+/// 非回环的反代后面时要补这张表。
+fn client_ip<B>(req: &Request<B>) -> String {
+    let peer = req
+        .extensions()
+        .get::<crate::http::PeerIp>()
+        .map(|p| p.0.clone())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let loopback = peer == "127.0.0.1" || peer == "::1" || peer == "::ffff:127.0.0.1";
+    if !loopback {
+        return peer;
+    }
+    if let Some(v) = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if !v.trim().is_empty() {
+            return v.trim().to_string();
+        }
+    }
+    if let Some(v) = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = v.split(',').next() {
+            if !first.trim().is_empty() {
+                return first.trim().to_string();
+            }
+        }
+    }
+    peer
 }
 
 fn token_of(req: &Request<Incoming>) -> Option<String> {
@@ -84,9 +154,20 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
 
     // 登录/状态：不需要 token。
     if (&method, path.as_str()) == (&Method::POST, "/panel/login") {
+        let ip = client_ip(&req);
+        let now = crate::state::now_epoch();
+        if let Some(wait) = app.panel.login_blocked(&ip, now) {
+            return Some(json_resp(
+                StatusCode::TOO_MANY_REQUESTS,
+                &json!({"error": {
+                    "message": format!("too many login attempts, please wait {wait}s"),
+                    "type": "rate_limit_error", "code": 429}}),
+            ));
+        }
         let body = crate::http::body_json(req).await.ok()?;
         let given = body.get("password").and_then(Value::as_str).unwrap_or("");
         if !app.panel.password_required() || given == app.panel.password() {
+            app.panel.clear_login_failures(&ip);
             let token = crate::sse::hex_token(32);
             if let Ok(mut set) = app.panel.tokens.lock() {
                 set.insert(token.clone());
@@ -96,6 +177,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 &json!({"ok": true, "token": token, "using_default_password": false}),
             ));
         }
+        app.panel.note_login_failure(&ip, now);
+        // 与 Python 版同样的 0.5s 退避：挡住脚本化的猜口令。
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         return Some(json_resp(
             StatusCode::UNAUTHORIZED,
             &json!({"error": {"message": "invalid panel password", "type": "invalid_request_error", "code": 401}}),
@@ -1548,4 +1632,45 @@ async fn daily_chat(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
         StatusCode::OK,
         &crate::tasks::daily_chat(app, uid, uids.as_deref(), "manual").await,
     )
+}
+
+#[cfg(test)]
+mod login_limit_tests {
+    use super::*;
+
+    #[test]
+    fn fifth_failure_blocks_then_releases() {
+        let panel = Panel::default();
+        let t = 1_000;
+        for i in 0..LOGIN_MAX {
+            assert_eq!(panel.login_blocked("10.0.0.9", t + i as i64), None);
+            panel.note_login_failure("10.0.0.9", t + i as i64);
+        }
+        // 第 5 次失败之后再试就是 429，剩余等待秒数是「最早那次 + 60」。
+        assert_eq!(panel.login_blocked("10.0.0.9", t + 5), Some(55));
+        // 窗口滑过就放行，别的来源从头就不受影响。
+        assert_eq!(panel.login_blocked("10.0.0.9", t + 61), None);
+        assert_eq!(panel.login_blocked("10.0.0.10", t + 5), None);
+    }
+
+    #[test]
+    fn success_clears_the_bucket() {
+        let panel = Panel::default();
+        for i in 0..LOGIN_MAX {
+            panel.note_login_failure("10.0.0.9", 2_000 + i as i64);
+        }
+        assert!(panel.login_blocked("10.0.0.9", 2_005).is_some());
+        panel.clear_login_failures("10.0.0.9");
+        assert_eq!(panel.login_blocked("10.0.0.9", 2_005), None);
+    }
+
+    #[test]
+    fn forwarded_headers_only_trusted_from_loopback() {
+        let mut req = Request::builder().header("x-real-ip", "203.0.113.7").body(()).unwrap();
+        req.extensions_mut().insert(crate::http::PeerIp("10.0.0.9".into()));
+        assert_eq!(client_ip(&req), "10.0.0.9");
+        let mut req = Request::builder().header("x-real-ip", "203.0.113.7").body(()).unwrap();
+        req.extensions_mut().insert(crate::http::PeerIp("127.0.0.1".into()));
+        assert_eq!(client_ip(&req), "203.0.113.7");
+    }
 }

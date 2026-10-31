@@ -75,6 +75,10 @@ pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> 
     }
 }
 
+/// 对端地址（`main.rs` 在 accept 时塞进请求扩展）。面板登录限流按它分桶。
+#[derive(Clone, Debug)]
+pub struct PeerIp(pub String);
+
 pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
     let path = req.uri().path().to_string();
     let method = req.method().clone();

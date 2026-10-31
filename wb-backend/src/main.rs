@@ -149,15 +149,18 @@ async fn main() -> std::io::Result<()> {
     );
 
     loop {
-        let (stream, _peer) = match listener.accept().await {
+        let (stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(_) => continue,
         };
         let app = app.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
-            let service = service_fn(move |req: Request<Incoming>| {
+            let peer_ip = peer.ip().to_string();
+            let service = service_fn(move |mut req: Request<Incoming>| {
                 let app = app.clone();
+                // 面板登录限流要按客户端分桶，对端地址只有 accept 时拿得到。
+                req.extensions_mut().insert(http::PeerIp(peer_ip.clone()));
                 async move { Ok::<_, std::convert::Infallible>(http::route(app, req).await) }
             });
             let _ = hyper::server::conn::http1::Builder::new()
