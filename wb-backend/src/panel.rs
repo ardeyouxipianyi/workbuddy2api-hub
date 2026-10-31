@@ -90,6 +90,14 @@ impl Panel {
 ///
 /// shortcut: `WB_TRUSTED_PROXIES`（CIDR 白名单）没接，只信任回环对端；面板挂在
 /// 非回环的反代后面时要补这张表。
+/// 请求是不是本机发起的（没有对端信息时按本机算，与 Python 的默认一致）。
+fn from_loopback<B>(req: &Request<B>) -> bool {
+    req.extensions()
+        .get::<crate::http::PeerAddr>()
+        .map(|peer| peer.0.is_loopback())
+        .unwrap_or(true)
+}
+
 fn client_ip<B>(req: &Request<B>) -> String {
     let peer = req
         .extensions()
@@ -337,12 +345,26 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             let body = crate::http::body_json(req).await.unwrap_or(json!({}));
             json_resp(StatusCode::OK, &crate::agents::save_selection(app, &body))
         }
-        (&Method::POST, "/agents/apply") | (&Method::POST, "/agents/restore") => json_resp(
-            StatusCode::NOT_IMPLEMENTED,
-            &json!({"ok": false, "error": {
-                "message": "一键配置（写客户端配置并做备份/回滚）还没移植到 Rust 后端；勾选清单可以保存，但不会改本机客户端配置",
-                "code": 501}}),
-        ),
+        // 一键配置会写本机客户端的配置文件（~/.codex、~/.claude…）：面板会话 +
+        // 只允许本机来源，与 Python 的 client_allowed 一致。
+        (&Method::POST, "/agents/apply") | (&Method::POST, "/agents/restore") => {
+            if !app.panel.token_ok(token_of(&req).as_deref()) {
+                json_resp(
+                    StatusCode::UNAUTHORIZED,
+                    &json!({"error": {"message": "panel password required",
+                                      "type": "invalid_request_error", "code": 401}}),
+                )
+            } else if !from_loopback(&req) {
+                json_resp(
+                    StatusCode::FORBIDDEN,
+                    &json!({"ok": false, "error": {
+                        "message": "agent config is only available from the machine running the gateway",
+                        "code": 403}}),
+                )
+            } else {
+                crate::agentcfg::handle(app, req).await
+            }
+        }
         (&Method::GET, "/scheduler") => json_resp(StatusCode::OK, &app.scheduler.status(app)),
         (&Method::GET, "/updates") => json_resp(
             StatusCode::OK,

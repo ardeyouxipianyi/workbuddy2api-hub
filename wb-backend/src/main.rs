@@ -16,6 +16,7 @@ mod http;
 mod launcher;
 mod models;
 mod activity;
+pub mod agentcfg;
 mod agents;
 mod panel;
 mod panel_defaults;
