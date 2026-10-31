@@ -609,3 +609,52 @@ pub async fn checkin_all(app: &Arc<App>, uid: &str) -> Value {
         .collect();
     json!({"results": results, "accounts": accounts})
 }
+
+/// `ck_<id>.<secret>` 里取 `<id>`（只留 [A-Za-z0-9_-]，会拼进文件名）。
+pub fn api_key_id(token: &str) -> String {
+    let mut text = token;
+    for prefix in ["ck_", "pt_"] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = rest;
+            break;
+        }
+    }
+    let head = text.split('.').next().unwrap_or("");
+    head.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect()
+}
+
+pub fn is_api_key_token(token: &str) -> bool {
+    token.starts_with("ck_") || token.starts_with("pt_")
+}
+
+/// 用企业额度端点验一把静态 Key（`Account.probe_api_key`）——Key 没有任何本地
+/// 校验手段，坏 Key 进了池会让选号侧反复选中它，表象是「网关时好时坏」。
+pub async fn probe_api_key(app: &Arc<App>, token: &str) -> Value {
+    let resp = app
+        .upstream
+        .post(format!("{}{}", billing_base("cn"), ENT_USAGE_V2))
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-api-key", token)
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("user-agent", format!("WorkBuddy/{}", crate::identity::desktop_version("cn")))
+        .json(&json!({}))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+    let Ok(resp) = resp else {
+        return json!({"ok": false, "error": "探测请求失败"});
+    };
+    let Ok(body) = resp.json::<Value>().await else {
+        return json!({"ok": false, "error": "上游回的不是 JSON"});
+    };
+    if body.get("code").and_then(Value::as_i64) != Some(0) {
+        return json!({"ok": false, "error": format!(
+            "code {}: {}", body.get("code").and_then(Value::as_i64).unwrap_or(-1),
+            body.get("msg").and_then(Value::as_str).unwrap_or(""))});
+    }
+    let data = body.get("data").cloned().unwrap_or(json!({}));
+    json!({"ok": true, "used": data.get("credit").cloned().unwrap_or(Value::Null),
+           "limit": data.get("limitNum").cloned().unwrap_or(Value::Null),
+           "cycle_end": data.get("cycleEndTime").cloned().unwrap_or(Value::Null)})
+}

@@ -174,6 +174,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         }
         (&Method::POST, "/accounts/set") => accounts_set(app, req).await,
         (&Method::POST, "/accounts/set-all") => accounts_set_all(app, req).await,
+        (&Method::POST, "/accounts/add-api-key") => add_api_key(app, req).await,
         (&Method::POST, "/accounts/import") => accounts_import(app, req).await,
         (&Method::POST, "/accounts/delete") => accounts_delete(app, req).await,
         (&Method::POST, "/accounts/export") | (&Method::GET, "/accounts/export") => {
@@ -1189,5 +1190,81 @@ async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
         StatusCode::OK,
         &json!({"imported": imported, "overwritten": overwritten, "skipped": skipped,
                 "failed": failed, "accounts": accounts}),
+    )
+}
+
+/// `POST /accounts/add-api-key`：先拿企业额度端点探一次，探通了才落盘。
+async fn add_api_key(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let key = body
+        .get("key")
+        .or_else(|| body.get("accessToken"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "key is required", "code": 400}}));
+    }
+    if !crate::credits::is_api_key_token(&key) {
+        return json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": "this is not a static API key: expected the ck_/pt_ prefix issued by the CodeBuddy API console", "code": 400}}),
+        );
+    }
+    let probe = crate::credits::probe_api_key(app, &key).await;
+    if probe.get("ok").and_then(Value::as_bool) != Some(true) {
+        app.log("accounts", "WARN", &format!("API Key 探测失败，未落盘: {}", probe.get("error").and_then(Value::as_str).unwrap_or("")));
+        return json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": format!("probe failed: {}", probe.get("error").and_then(Value::as_str).unwrap_or("unknown")), "code": 400}}),
+        );
+    }
+    let uid = body
+        .get("uid")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| crate::credits::api_key_id(&key));
+    if uid.is_empty() {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "cannot derive uid from this key", "code": 400}}));
+    }
+    let path = app.state.accounts_dir.join(format!("{uid}.json"));
+    let existed = path.exists();
+    let nickname = body.get("nickname").and_then(Value::as_str).unwrap_or("").to_string();
+    let account = json!({
+        "uid": uid,
+        "nickname": nickname,
+        "accessToken": key,
+        "realm": "cn",
+        "platform": "CLI",
+        "source": "api-key",
+        "enabled": true,
+        "tasksEnabled": false,
+    });
+    if let Err(e) = crate::state::write_json_atomic(&path, &account) {
+        return json_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &json!({"error": {"message": format!("cannot save account: {e}"), "code": 500}}),
+        );
+    }
+    app.state.reload();
+    app.log("accounts", "INFO", &format!("加 API Key: uid={} probe ok({}/{})",
+        &uid[..uid.len().min(8)],
+        probe.get("used").and_then(Value::as_i64).unwrap_or(0),
+        probe.get("limit").and_then(Value::as_i64).unwrap_or(0)));
+    let view = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .find(|a| a.uid() == uid)
+        .map(|a| account_view(&a, crate::state::now_epoch()))
+        .unwrap_or(Value::Null);
+    json_resp(
+        StatusCode::OK,
+        &json!({"ok": true, "uid": uid, "nickname": nickname, "updated": existed, "probe": probe, "account": view}),
     )
 }
