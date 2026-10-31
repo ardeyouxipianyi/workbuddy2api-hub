@@ -178,7 +178,16 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 "ported": false,
             }),
         ),
-        (&Method::GET, "/tasks") => tasks_view(app),
+        (&Method::GET, "/tasks") => {
+            let uid = req
+                .uri()
+                .query()
+                .unwrap_or("")
+                .split('&')
+                .find_map(|p| p.strip_prefix("uid="))
+                .unwrap_or("");
+            json_resp(StatusCode::OK, &crate::tasks::view(app, uid).await)
+        }
         (&Method::GET, "/scheduler") => json_resp(
             StatusCode::OK,
             &json!({
@@ -920,32 +929,6 @@ async fn realm_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let _ = crate::state::write_json_atomic(&path, &json!({"realm": realm}));
     app.state.reload();
     json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": ["intl", "cn"]}))
-}
-
-/// `/tasks`：任务面板要的形状。任务引擎（签到/成长/猫猫/活跃/保活）还没移植，
-/// 所以任务清单是空的、summary 归零——宁可显示「暂无任务」，也不编造进度。
-fn tasks_view(app: &std::sync::Arc<App>) -> Resp {
-    let now = crate::state::now_epoch();
-    let accounts: Vec<Value> = app
-        .state
-        .accounts_snapshot()
-        .iter()
-        .map(|a| account_view(a, now))
-        .collect();
-    let current = accounts.first().cloned().unwrap_or(Value::Null);
-    json_resp(
-        StatusCode::OK,
-        &json!({
-            "tasks": [],
-            "summary": {
-                "energy": 0, "streak_days": 0, "travel": Value::Null,
-                "makeup_cards": 0, "tiers": [], "tier_statuses": [], "lottery_chances": 0,
-            },
-            "account": current,
-            "accounts": accounts,
-            "ported": false,
-        }),
-    )
 }
 
 /// `POST /accounts/product`：切换出站身分（cli / workbuddy / vscode）。

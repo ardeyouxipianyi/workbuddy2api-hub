@@ -19,6 +19,7 @@ mod responses;
 mod sse;
 mod state;
 mod stream;
+mod tasks;
 mod upstream;
 mod usage;
 
