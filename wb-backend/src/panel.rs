@@ -186,6 +186,17 @@ fn header_ip(raw: &str) -> Option<String> {
     text.parse::<std::net::IpAddr>().ok().map(|ip| ip.to_string())
 }
 
+/// 这个请求带的面板会话是否有效（别的模块拿来判「面板已登录」）。
+pub(crate) fn session_ok<B>(app: &App, req: &Request<B>) -> bool {
+    let token = req
+        .headers()
+        .get("x-panel-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    app.panel.token_ok(token.as_deref())
+}
+
 fn token_of(req: &Request<Incoming>) -> Option<String> {
     req.headers()
         .get("x-panel-token")
@@ -306,7 +317,6 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
     }
 
     let out = match (&method, path.as_str()) {
-        (_, p) if p.starts_with("/accounts/") => crate::accounts_ops::unknown_endpoint(&method),
         (&Method::GET, "/realm") => json_resp(
             StatusCode::OK,
             &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
@@ -468,6 +478,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::GET, path) | (&Method::POST, path) if path.starts_with("/proxy/") => {
             crate::proxy_slots::handle(app, req).await
         }
+        // 未登记的 /accounts/* 才是「unknown account endpoint」；这条必须排在所有
+        // /accounts/... 具体分支之后，否则会把 credits / export / delete 一起吞掉。
+        (_, p) if p.starts_with("/accounts/") => crate::accounts_ops::unknown_endpoint(&method),
         (&Method::POST, _) => not_ported(&path),
         _ => json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "not found", "code": 404}})),
     };

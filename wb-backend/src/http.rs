@@ -88,6 +88,11 @@ fn auth_hint(has_key: bool) -> &'static str {
 /// `/v1` 的鉴权闸门：返回写进 usage 行的 key id，失败时返回 401 响应。
 /// 报文与 Python 版（wb_proxy.py:18866-18881）逐字一致，客户端看到的是同一句提示。
 pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> {
+    // 面板会话也算「已授权」：浏览器只带 X-Panel-Token 去读 /v1/models 这类管理接口，
+    // 不该把 API key 放进 localStorage（Python 的 _key_ok 同一条规则）。
+    if crate::panel::session_ok(app, req) {
+        return Ok(String::new());
+    }
     let supplied = auth::supplied(req.headers(), req.uri().query());
     match auth::check(&app.state, &supplied) {
         Ok(passed) if !passed.required => Ok(String::new()),
