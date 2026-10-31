@@ -119,16 +119,14 @@ try:
     check("unbound slot is direct", acct.proxy == "", acct.proxy)
     acct.proxy_slot = "slot-1"
     pool.apply_proxy_slots(slots)
-    opener = C._opener(acct.proxy)
-    handler = next(h for h in opener.handlers
-                   if isinstance(h, urllib.request.ProxyHandler))
-    check("opener pins http/https",
-          handler.proxies.get("http") == acct.proxy
-          and handler.proxies.get("https") == acct.proxy, handler.proxies)
-    direct_proxies = [h.proxies for h in C._opener("").handlers
-                      if isinstance(h, urllib.request.ProxyHandler)]
-    check("direct opener ignores env proxies",
-          all(not proxies for proxies in direct_proxies), direct_proxies)
+    import base64
+    import wb_upstream_pool as U
+    req_a = urllib.request.Request("http://x", headers={"x-auth-token": "a"})
+    req_b = urllib.request.Request("http://x", headers={"x-auth-token": "b"})
+    check("pool isolates by codearts token",
+          bool(U._identity_discriminator(req_a))
+          and U._identity_discriminator(req_a) != U._identity_discriminator(req_b),
+          (U._identity_discriminator(req_a), U._identity_discriminator(req_b)))
     seen = []
     orig_json = C._json_http
     C._json_http = lambda method, url, headers=None, body=None, \
@@ -151,14 +149,19 @@ try:
     check("relogin re-resolves proxy",
           pool.get("u1").proxy == "http://127.0.0.1:7890",
           pool.get("u1").proxy)
-    # A real HTTP proxy must receive the absolute-form request line.
+    # A real HTTP proxy must receive the absolute-form request line, the
+    # credentials, and a reused connection on the second call.
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    proxied = []
+    proxied, auths = [], []
+    expected_auth = "Basic " + base64.b64encode(b"user:pass").decode()
 
     class ProxyProbe(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
         def do_GET(self):
             proxied.append(self.path)
+            auths.append(self.headers.get("Proxy-Authorization") or "")
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
@@ -169,15 +172,24 @@ try:
 
     proxy_srv = ThreadingHTTPServer(("127.0.0.1", 0), ProxyProbe)
     threading.Thread(target=proxy_srv.serve_forever, daemon=True).start()
-    proxy_url = "http://127.0.0.1:%d" % proxy_srv.server_address[1]
-    status, raw = C._http("GET", "http://codearts.invalid/probe",
-                          proxy=proxy_url)
+    proxy_url = "http://user:pass@127.0.0.1:%d" % proxy_srv.server_address[1]
+    reused_before = U.stats().get("reused", 0)
+    first = C._http("GET", "http://codearts.invalid/probe", proxy=proxy_url)
+    second = C._http("GET", "http://codearts.invalid/probe", proxy=proxy_url)
+    U.close_all()
     proxy_srv.shutdown()
     proxy_srv.server_close()
-    check("http request goes through proxy", status == 200 and raw == b"{}",
-          (status, raw))
+    check("http request goes through proxy",
+          first == (200, b"{}") and second == (200, b"{}"), (first, second))
     check("proxy saw absolute URI",
-          proxied == ["http://codearts.invalid/probe"], proxied)
+          proxied == ["http://codearts.invalid/probe"] * 2, proxied)
+    check("proxy auth header sent", auths == [expected_auth] * 2, auths)
+    if U.enabled():
+        check("proxy connection reused",
+              U.stats().get("reused", 0) > reused_before,
+              (reused_before, U.stats()))
+    else:
+        check("proxy connection reused (pool disabled)", True)
     # Do not leave the fake proxy bound for the chat tests below.
     acct.proxy_slot = ""
     acct.auth.pop("proxySlot", None)

@@ -178,6 +178,7 @@ CodeArts 的 OAuth、token 续期、账号池、模型发现、聊天 SSE 和签
 - API Key 可以绑定 `codearts` 出口，三个出口可以同时用；
 - 看板「账号」页的 CodeArts 视图可以添加（OAuth）、启用、停用、清冷却、签到、删除 CodeArts 账号。
 - CodeArts 账号支持绑定「账号代理槽」：在账号表的「出口」列选择槽位后，聊天、模型发现、token 续期、签到、积分查询都走该槽；槽位地址变化自动跟随，禁用或删除槽位回退直连。首次 OAuth 换取 token 时还没有账号可绑定，仍直连。
+- CodeArts 的出站请求复用与 WorkBuddy 相同的 `wb_upstream_pool`：连接复用、代理认证、`no_proxy` 旁路和失效连接重试都在同一条路径上，不再使用独立的 urllib opener。代理槽按 HTTP/HTTPS 代理实现。
 
 **首次配置**
 

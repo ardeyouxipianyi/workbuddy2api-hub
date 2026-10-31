@@ -762,30 +762,16 @@ def invalidate_pool(accounts_dir=None):
 # HTTP
 # ---------------------------------------------------------------------------
 
-_OPENER_CACHE = {}
-_OPENER_LOCK = threading.Lock()
-_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def _urlopen(req, timeout=30.0, proxy=""):
+    """Send through the same keep-alive/proxy path as WorkBuddy accounts.
 
-
-def _opener(proxy=""):
-    """Build (and cache) an opener pinned to one proxy slot.
-
-    Empty/blank means direct, and direct deliberately ignores the process
-    environment proxies: a CodeArts account that is not bound to a slot must
-    keep the pre-slot behaviour (no accidental HTTP_PROXY). One opener per
-    proxy URL keeps each account's traffic on its own exit IP.
+    wb_accounts.urlopen() is the single transport entry point: it uses
+    wb_upstream_pool (connection reuse, proxy auth, no_proxy, stale-connection
+    retry) and falls back to urllib for the cases the pool cannot replay.
+    Importing it lazily avoids a module cycle with wb_settings/wb_proxy.
     """
-    proxy = str(proxy or "").strip()
-    if not proxy:
-        return _DIRECT_OPENER
-    with _OPENER_LOCK:
-        opener = _OPENER_CACHE.get(proxy)
-        if opener is None:
-            opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-            )
-            _OPENER_CACHE[proxy] = opener
-        return opener
+    import wb_accounts
+    return wb_accounts.urlopen(req, timeout=timeout, proxy=proxy)
 
 
 def _error_text(raw):
@@ -809,7 +795,7 @@ def _http(method, url, headers=None, body=None, timeout=30.0, proxy=""):
     req = urllib.request.Request(url, data=body, headers=headers or {},
                                  method=method)
     try:
-        with _opener(proxy).open(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout=timeout, proxy=proxy) as resp:
             return resp.status, resp.read(ERROR_BODY_MAX * 4)
     except urllib.error.HTTPError as exc:
         try:
@@ -1597,7 +1583,7 @@ def _client_chat(acct, body, session_key):
         req = urllib.request.Request(SNAP_HOST + EP_CHAT, data=raw,
                                      headers=headers, method="POST")
         try:
-            resp = _opener(acct.proxy).open(req, timeout=timeout)
+            resp = _urlopen(req, timeout=timeout, proxy=acct.proxy)
         except urllib.error.HTTPError as exc:
             try:
                 err = exc.read(ERROR_BODY_MAX)

@@ -597,7 +597,8 @@ def _host_header_value(url):
 #: 池键里用来区分「同一出口上的不同账号/凭据」的请求头，按优先级取第一个有值的。
 #: 取凭据的哈希而不是 uid：调用点不必改动，凡是带凭据的请求都自动隔离；只把
 #: sha256 前 16 位放进键里，token 本身不进日志、也不在池里多存一份。
-_IDENTITY_HEADER_FIELDS = ("authorization", "x-refresh-token", "x-user-id")
+_IDENTITY_HEADER_FIELDS = ("authorization", "x-refresh-token", "x-user-id",
+                           "x-auth-token")
 
 
 def _header_lookup(pairs):
