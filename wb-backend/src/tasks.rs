@@ -154,6 +154,398 @@ pub async fn growth_summary(app: &Arc<App>, account: &AccountFile) -> Value {
     out
 }
 
+/// 专家/团队事件必须每次换 id：上游按 (eventCode, id) 去重，重复 id 不加进度。
+const EXPERT_IDS: &[(&str, &str)] = &[
+    ("ex_PZw8Gu81HfN4", "运维工程师"), ("ex_ROsDtJbzADFV", "产品经理"),
+    ("ex_SMUnl0nJbPix", "UI设计师"), ("ex_ZTR062oVBOCW", "数据分析师"),
+    ("ex_a3sSSFBy8qaC", "后端架构师"), ("ex_aG1kvKbq8lPx", "文案策划"),
+    ("ex_al1vxtUOYQ10", "测试专家"), ("ex_cZfiyuET9UQP", "安全顾问"),
+    ("ex_eggOvQuVP0hq", "算法工程师"), ("ex_hSwsQjkSKnkX", "前端工程师"),
+    ("ex_mMbwwmFA9n9P", "项目管理专家"), ("ex_uAQE5POfk7Zh", "增长运营专家"),
+];
+const TEAM_IDS: &[(&str, &str)] = &[
+    ("CloudOpsTeam", "运维专家团队"), ("CloudContentTeam", "内容专家团队"),
+    ("CloudDevTeam", "研发专家团队"), ("ProductStrategyTeam", "产品战略团队"),
+    ("MarketingCampaignTeam", "营销活动团队"), ("SalesBattleTeam", "销售作战团队"),
+];
+
+/// 只认桌面端真实行为的任务：伪造事件不推进，跳过并在日志里给深链。
+const DESKTOP_ONLY: &[(&str, &str)] = &[
+    ("RichMeow_Chat", "在桌面端发起 1 次对话"),
+    ("Library_read", "在桌面端打开「资料库」并读完介绍文档"),
+    ("Buddy_App", "在桌面端左上角「发现应用」进入任意一个 Buddy 应用"),
+    ("Buddy_App_QQ", "在桌面端「发现应用」进入「企鹅教师助手」"),
+];
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn in_night_window() -> bool {
+    let hour = crate::state::local_stamp()[11..13].parse::<u32>().unwrap_or(12);
+    hour >= 23 || hour < 8
+}
+
+/// 一种任务类型对应的规范事件（逐字段对齐 `wb_tasks.build_event`）。
+fn build_event(uid: &str, kind: &str, idx: i64, expert: Option<(&str, &str)>) -> Value {
+    let now = now_ms();
+    let cid = format!("wb-task-{now}-{idx}");
+    let rid = format!("{cid}-req");
+    match kind {
+        "canvas" => json!({"eventCode": "wbx_design_canvas_task_create", "timestamp": now,
+            "reportDelay": 0, "conversationId": cid, "requestId": rid,
+            "source": "summon_keyword", "isCustomModel": false, "name": "",
+            "inputLength": 12, "id": format!("wbx-canvas-{now}"), "cost": 0,
+            "isSuccessful": true, "userId": uid}),
+        "template" => json!({"eventCode": "agent_task_created_with_template", "timestamp": now,
+            "reportDelay": 0, "isCustomModel": true, "id": idx.to_string(),
+            "name": "幻灯片", "requestId": rid, "conversationId": cid, "userId": uid}),
+        "expert" | "team" | "lighthouse" => {
+            let (ex_id, name) = match expert {
+                Some((id, name)) => (id, name),
+                None if kind == "lighthouse" => ("ex_2cvvUZQhDyeJ", "腾讯轻量云专家"),
+                None if kind == "team" => ("CloudOpsTeam", "运维专家团队"),
+                None => ("ContentCreator", "内容创作专家"),
+            };
+            json!({"eventCode": "expert_actual_use", "timestamp": now, "reportDelay": 0,
+                "mode": "CLOUD", "id": ex_id, "name": name, "expertTitle": name,
+                "type": "02-Engineering", "expertType": if kind == "team" { "team" } else { "agent" },
+                "source": "builtin", "version": "1.0.2", "cost": 0, "characterCount": 12,
+                "conversationId": cid, "requestId": rid, "messageId": rid,
+                "requestModelId": "deepseek-v4-flash", "requestModelName": "DeepSeek V4 Flash",
+                "userId": uid})
+        }
+        "skill" => json!({"eventCode": "skill_info", "timestamp": now, "reportDelay": 0,
+            "skillId": "skill_2096525080079265792", "name": "pptx", "userId": uid}),
+        "automation" => json!({"eventCode": "automated_task_create_suc", "timestamp": now,
+            "reportDelay": 0, "name": "每周工作整理", "type": "cron", "source": "manually",
+            "modelId": "deepseek-v4-flash", "modelIsThinking": false,
+            "conversationId": cid, "requestId": rid,
+            "schedule": {"type": "recurring", "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0"},
+            "prompt": "每周五自动整理本周工作", "userId": uid}),
+        "playbook" => json!({"eventCode": "playbook_prompt_send", "timestamp": now,
+            "reportDelay": 0, "id": "worker-ledger-freedom-dashboard", "name": "打工人小账本",
+            "type": "other", "promptLength": 10, "isOfficial": 1,
+            "source": "discover", "conversationId": cid, "requestId": rid, "userId": uid}),
+        "skin" => json!({"eventCode": "appearance_skin_apply", "timestamp": now, "reportDelay": 0,
+            "action": "apply", "source": "settings_close", "id": "theme-tkmw7j",
+            "vipLevel": "free", "series": "craft", "type": "unknown",
+            "name": "和平精英激战金秋", "userId": uid}),
+        "chat" | "glmchat" | "cat" => {
+            let (m_id, m_nm) = if matches!(kind, "glmchat" | "cat") {
+                ("glm-5.2", "GLM-5.2")
+            } else {
+                ("deepseek-v4-flash", "DeepSeek V4 Flash")
+            };
+            json!({"eventCode": "chat_request_send", "timestamp": now, "reportDelay": 0,
+                "mode": if kind == "cat" { "night" } else { "craft" },
+                "conversationId": cid, "requestId": rid, "inputLength": 12,
+                "requestModelId": m_id, "requestModelName": m_nm,
+                "isPlan": false, "agentName": "default", "agentType": "conversation",
+                "userId": uid})
+        }
+        _ => json!({"eventCode": "heartbeat", "timestamp": now, "userId": uid}),
+    }
+}
+
+async fn post(app: &Arc<App>, account: &AccountFile, path: &str, body: Value) -> Result<Value, String> {
+    let resp = app
+        .upstream
+        .post(format!("{CN_CHAT}{path}"))
+        .headers(headers(account))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {}", text.chars().take(200).collect::<String>()));
+    }
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+async fn report_events(app: &Arc<App>, account: &AccountFile, events: &[Value]) -> bool {
+    matches!(
+        post(app, account, "/v2/report", Value::Array(events.to_vec())).await,
+        Ok(d) if d.get("code").and_then(Value::as_i64) == Some(0)
+    )
+}
+
+/// 批量接取；返回 (成功码, 失败说明)。
+async fn accept_tasks(app: &Arc<App>, account: &AccountFile, codes: &[String]) -> (Vec<String>, Option<String>) {
+    if codes.is_empty() {
+        return (Vec::new(), None);
+    }
+    match post(app, account, "/v2/activity/growth/tasks/accept", json!({"task_codes": codes})).await {
+        Ok(d) if d.get("code").and_then(Value::as_i64) == Some(0) => {
+            let accepted = d
+                .pointer("/data/results")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter(|item| {
+                            matches!(
+                                item.get("status").and_then(Value::as_str),
+                                Some("accepted") | Some("already_accepted")
+                            )
+                        })
+                        .filter_map(|item| item.get("task_code").and_then(Value::as_str).map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            (accepted, None)
+        }
+        Ok(d) => (Vec::new(), Some(d.get("msg").and_then(Value::as_str).unwrap_or("接取被拒绝").to_string())),
+        Err(e) => (Vec::new(), Some(e)),
+    }
+}
+
+/// 领奖；400 时降级到 web 域再试一次（`wb_tasks.claim_task`）。
+async fn claim_task(app: &Arc<App>, account: &AccountFile, code: &str) -> (bool, i64, Option<String>) {
+    let path = format!("/activity/growth/tasks/{code}/claim");
+    match post(app, account, &path, json!({})).await {
+        Ok(d) if d.get("code").and_then(Value::as_i64) == Some(0) => {
+            (true, d.pointer("/data/credit").and_then(Value::as_i64).unwrap_or(0), None)
+        }
+        Ok(d) => (
+            false,
+            0,
+            Some(d.get("msg").and_then(Value::as_str).unwrap_or("领奖被拒").to_string()),
+        ),
+        Err(e) => (false, 0, Some(e)),
+    }
+}
+
+fn task_spec_entry(code: &str) -> Option<(&'static str, &'static str, i64, i64)> {
+    TASK_SPECS
+        .iter()
+        .find(|(c, _, _, _)| *c == code)
+        .map(|(c, name, target, reward)| (*c, *name, *target, *reward))
+}
+
+/// 推进单个任务：已完成→领奖；否则上报事件点亮再领奖。
+async fn progress_one(
+    app: &Arc<App>,
+    account: &AccountFile,
+    task: &Value,
+    logs: &mut Vec<String>,
+    gap_ms: u64,
+    claim: bool,
+) -> i64 {
+    let code = task.get("task_code").and_then(Value::as_str).unwrap_or("").to_string();
+    let Some((_, name, spec_target, _)) = task_spec_entry(&code) else {
+        return 0;
+    };
+    if UNFORGEABLE.iter().any(|(c, _)| *c == code) {
+        logs.push(format!("⏭ 任务 [{name}] 需真实操作完成，跳过"));
+        return 0;
+    }
+    let status = task.get("status").and_then(Value::as_str).unwrap_or("");
+    let cur = task.get("current").and_then(|v| v.as_i64()).unwrap_or(0);
+    let target = task.get("target").and_then(|v| v.as_i64()).unwrap_or(spec_target);
+    if status == "claimed" {
+        return 0;
+    }
+    if status == "completed" || cur >= target {
+        if !claim {
+            logs.push(format!("⏸ 任务 [{name}] 已达成，等待手动领取"));
+            return 0;
+        }
+        let (ok, credit, msg) = claim_task(app, account, &code).await;
+        tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
+        if ok {
+            logs.push(format!("✓ 任务 [{name}] 领奖成功: +{credit} 积分"));
+            return credit;
+        }
+        logs.push(format!("! 任务 [{name}] 领奖失败: {}", msg.unwrap_or("未知原因".into())));
+        return 0;
+    }
+    if let Some((_, why)) = DESKTOP_ONLY.iter().find(|(c, _)| *c == code) {
+        logs.push(format!("⏭ 任务 [{name}] 需真实操作完成: {why}, 跳过事件伪造"));
+        return 0;
+    }
+    if code == "black_cat" && !in_night_window() {
+        logs.push(format!("🌙 任务 [{name}] 仅 23:00-08:00 上报计数，当前不在窗口，跳过"));
+        return 0;
+    }
+    let task_type = task.get("task_type").and_then(Value::as_str).unwrap_or("");
+    if status == "not_accepted" && task_type != "auto" {
+        logs.push(format!("⏭ 任务 [{name}] 仍未接取，跳过（先解决接取失败）"));
+        return 0;
+    }
+
+    let need = (target - cur).max(1);
+    let kind = kind_of(&code);
+    logs.push(format!("正在点亮任务 [{name}] (需上报 {need} 次)..."));
+    let uid = account.uid();
+    let mut all_ok = true;
+    for i in 0..need {
+        let expert = if kind == "team" {
+            Some(TEAM_IDS[(cur + i) as usize % TEAM_IDS.len()])
+        } else if kind == "expert" {
+            Some(EXPERT_IDS[(cur + i) as usize % EXPERT_IDS.len()])
+        } else {
+            None
+        };
+        let event = build_event(&uid, kind, i, expert);
+        if !report_events(app, account, &[event]).await {
+            all_ok = false;
+        }
+        if i + 1 < need {
+            tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
+        }
+    }
+    if !all_ok {
+        logs.push(format!("! 任务 [{name}] 部分事件上报失败，继续尝试领奖"));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    // 等上游把进度落账：只在前几次快查，进度确实在涨才继续等。
+    let mut prog = cur;
+    for attempt in 0..6 {
+        let fresh = growth_tasks(app, account)
+            .await
+            .into_iter()
+            .find(|x| x.get("task_code").and_then(Value::as_str) == Some(code.as_str()));
+        if let Some(fresh) = fresh {
+            prog = fresh.get("current").and_then(|v| v.as_i64()).unwrap_or(0);
+            let st = fresh.get("status").and_then(Value::as_str).unwrap_or("");
+            if prog >= target || st == "completed" || st == "claimed" {
+                break;
+            }
+            if prog > cur {
+                tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+                continue;
+            }
+        }
+        if attempt < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        } else {
+            break;
+        }
+    }
+    if prog < target {
+        logs.push(format!("? 任务 [{name}] 已上报但进度 {prog}/{target} 未达成，领奖顺延到下次"));
+        tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
+        return 0;
+    }
+    if !claim {
+        logs.push(format!("⏸ 任务 [{name}] 已点亮，等待手动领取"));
+        tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
+        return 0;
+    }
+    let (ok, credit, msg) = claim_task(app, account, &code).await;
+    tokio::time::sleep(std::time::Duration::from_millis(gap_ms)).await;
+    if ok {
+        logs.push(format!("✓ 任务 [{name}] 点亮并领奖成功: +{credit} 积分"));
+        credit
+    } else {
+        logs.push(format!("! 任务 [{name}] 进度已达但领奖失败: {}", msg.unwrap_or("未知原因".into())));
+        0
+    }
+}
+
+fn kind_of(code: &str) -> &'static str {
+    match code {
+        "create_canvas" => "canvas",
+        "template_5" => "template",
+        "expert_5" | "WorkBuddy_Valorant" => "expert",
+        "Expert_team_use_3" => "team",
+        "skill_1" => "skill",
+        "automation_1" => "automation",
+        "playbook_prompt" => "playbook",
+        "Expert_lighthouse" => "lighthouse",
+        "Hp_Appearance" => "skin",
+        "chat_5" | "first_buddy" | "RichMeow_Chat" | "Library_read" | "Buddy_App" | "Buddy_App_QQ" => "chat",
+        "Model_chat_GLM5.2" => "glmchat",
+        "black_cat" => "cat",
+        _ => "heartbeat",
+    }
+}
+
+/// 执行一轮成长任务：auto 先跑 → 批量接取 → 逐个点亮领奖。
+///
+/// shortcut: 猫猫旅行（buddy travel）未移植，日志里明说。
+pub async fn run(app: &Arc<App>, uid: &str, claim: bool) -> Value {
+    let targets: Vec<AccountFile> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .filter(|a| a.realm() == "cn" && !a.is_api_key() && a.enabled())
+        .filter(|a| uid.is_empty() || uid == "all" || a.uid() == uid)
+        .collect();
+    if targets.is_empty() {
+        return json!({"ok": false, "msg": "未找到参与任务的国内版账号", "logs": [], "credit_added": 0});
+    }
+    let mut all_logs = Vec::new();
+    let mut total = 0i64;
+    for (i, account) in targets.iter().enumerate() {
+        all_logs.push(format!(
+            "====== {} ({}) 执行成长任务 ({}/{}) ======",
+            account.str("nickname"),
+            account.uid(),
+            i + 1,
+            targets.len()
+        ));
+        let mut logs = Vec::new();
+        let mut tasks = growth_tasks(app, account).await;
+        if tasks.is_empty() {
+            all_logs.push("未能获取到任务清单，跳过该账号".into());
+            continue;
+        }
+        // auto 类不需要接取，且可能是 single 任务的前置（first_buddy）。
+        for task in tasks.clone() {
+            if task.get("task_type").and_then(Value::as_str) == Some("auto") {
+                total += progress_one(app, account, &task, &mut logs, 1000, claim).await;
+            }
+        }
+        let pending: Vec<String> = tasks
+            .iter()
+            .filter(|t| {
+                t.get("status").and_then(Value::as_str) == Some("not_accepted")
+                    && t.get("task_type").and_then(Value::as_str) != Some("auto")
+                    && !t.get("unforgeable").and_then(Value::as_bool).unwrap_or(false)
+            })
+            .filter_map(|t| t.get("task_code").and_then(Value::as_str).map(String::from))
+            .collect();
+        if !pending.is_empty() {
+            logs.push(format!("发现 {} 个待接取任务，正在批量接取...", pending.len()));
+            let (accepted, err) = accept_tasks(app, account, &pending).await;
+            if !accepted.is_empty() {
+                logs.push(format!("✓ 已接取 {} 个任务", accepted.len()));
+            }
+            if let Some(err) = err {
+                logs.push(format!("! 接取失败: {err}"));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            tasks = growth_tasks(app, account).await;
+        }
+        for task in tasks.iter() {
+            if task.get("task_type").and_then(Value::as_str) == Some("auto") {
+                continue;
+            }
+            total += progress_one(app, account, task, &mut logs, 1000, claim).await;
+        }
+        logs.push("猫猫旅行（buddy travel）还没移植到 Rust 后端，本轮跳过".into());
+        // 跑完顺手刷新余额，和 Python 版一致（结果已写回账号档）。
+        crate::credits::fetch_one(app, account).await;
+        all_logs.extend(logs);
+    }
+    all_logs.push(format!("====== 全部 {} 个账号执行完毕，累计新增 +{total} 积分 ======", targets.len()));
+    json!({"ok": true, "logs": all_logs, "credit_added": total})
+}
+
+/// 单独领一个任务（面板行内「领取」按钮）。
+pub async fn claim_one(app: &Arc<App>, account: &AccountFile, code: &str) -> Value {
+    let (ok, credit, msg) = claim_task(app, account, code).await;
+    json!({"ok": ok, "credit": credit, "msg": msg.unwrap_or_default()})
+}
+
 /// 面板 `/tasks` 的完整响应：挑一个国内版账号查，附带账号清单给下拉框。
 pub async fn view(app: &Arc<App>, uid: &str) -> Value {
     let cn: Vec<AccountFile> = app

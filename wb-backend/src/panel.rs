@@ -163,6 +163,8 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         }
         (&Method::POST, "/accounts/credits") => accounts_credits_fetch(app, req).await,
         (&Method::POST, "/accounts/product") => accounts_product(app, req).await,
+        (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
+        (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
         (&Method::POST, "/panel/password") => not_ported("/panel/password"),
@@ -997,4 +999,27 @@ async fn accounts_credits_fetch(app: &std::sync::Arc<App>, req: Request<Incoming
     };
     obj.insert("refreshed".into(), json!(ok));
     json_resp(StatusCode::OK, &Value::Object(obj))
+}
+
+/// `POST /tasks/run`：跑一轮成长任务（接取 → 点亮 → 领奖）。
+async fn tasks_run(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = crate::http::body_json(req).await.unwrap_or(json!({}));
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    let claim = body.get("claim").and_then(Value::as_bool).unwrap_or(true);
+    json_resp(StatusCode::OK, &crate::tasks::run(app, uid, claim).await)
+}
+
+/// `POST /tasks/claim`：单独领一个任务的奖励。
+async fn tasks_claim(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    let code = body.get("code").and_then(Value::as_str).unwrap_or("");
+    let Some(account) = app.state.accounts_snapshot().into_iter().find(|a| a.uid() == uid) else {
+        return json_resp(StatusCode::NOT_FOUND, &json!({"ok": false, "error": "未找到指定账号"}));
+    };
+    let out = crate::tasks::claim_one(app, &account, code).await;
+    json_resp(StatusCode::OK, &out)
 }
