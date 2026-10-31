@@ -164,6 +164,16 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/accounts/credits") => accounts_credits_fetch(app, req).await,
         (&Method::POST, "/accounts/product") => accounts_product(app, req).await,
         (&Method::POST, "/accounts/checkin") => checkin(app, req).await,
+        (&Method::POST, "/scheduler/toggle") => {
+            let on = app.scheduler.enabled();
+            app.scheduler.set_enabled(!on);
+            json_resp(StatusCode::OK, &json!({"ok": true, "enabled": !on,
+                "msg": if on { "调度器已暂停" } else { "调度器已恢复" }}))
+        }
+        (&Method::POST, "/scheduler/trigger") => {
+            let out = crate::scheduler::daily(app).await;
+            json_resp(StatusCode::OK, &json!({"ok": true, "msg": "已触发巡检保活", "result": out}))
+        }
         (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
@@ -191,14 +201,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 .unwrap_or("");
             json_resp(StatusCode::OK, &crate::tasks::view(app, uid).await)
         }
-        (&Method::GET, "/scheduler") => json_resp(
-            StatusCode::OK,
-            &json!({
-                "enabled": false, "mode": "Rust 后端未启用调度器", "mode_cn": "", "mode_intl": "",
-                "last_run_time": "", "next_run_time": "", "windows": [], "quota_scans": [],
-                "daily_chat": {}, "logs": [], "ported": false,
-            }),
-        ),
+        (&Method::GET, "/scheduler") => json_resp(StatusCode::OK, &app.scheduler.status()),
         (&Method::GET, "/updates") => json_resp(
             StatusCode::OK,
             &json!({

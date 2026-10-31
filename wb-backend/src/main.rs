@@ -13,6 +13,7 @@ mod identity;
 mod http;
 mod models;
 mod panel;
+mod scheduler;
 mod pool;
 mod record;
 mod responses;
@@ -48,6 +49,7 @@ pub struct App {
     pub pool: pool::Pool,
     /// 面板会话（X-Panel-Token）与口令。
     pub panel: panel::Panel,
+    pub scheduler: scheduler::Scheduler,
 }
 
 impl App {
@@ -109,7 +111,10 @@ async fn main() -> std::io::Result<()> {
         recorder: usage::Recorder::new(args.usage_dir.clone()),
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
+        scheduler: scheduler::Scheduler::default(),
     });
+
+    scheduler::spawn(app.clone());
 
     let listener = TcpListener::bind((args.host.as_str(), args.port)).await?;
     eprintln!(
