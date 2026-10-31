@@ -99,6 +99,16 @@ impl Pricing {
             .cost_for_row(row, self.settings(settings).enabled, details)
     }
 
+    /// 整扫一次的行级成本：面板聚合（/usage、perf、analytics、recent）都走这里，
+    /// 避免逐行克隆价表。
+    pub fn cost_rows(
+        &self,
+        rows: &[&Value],
+        settings: &Map<String, Value>,
+    ) -> Vec<crate::pricing_store::RowCost> {
+        self.store.cost_rows(rows, self.settings(settings).enabled)
+    }
+
     pub fn status(&self, settings: &Map<String, Value>) -> Value {
         let values = self.settings(settings);
         let policies = self.store.load_policies();

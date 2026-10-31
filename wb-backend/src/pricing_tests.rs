@@ -153,6 +153,33 @@ fn referenced_policy_survives_newer_price() {
 }
 
 #[test]
+fn batch_pricing_matches_the_single_row_entry_point() {
+    // 面板聚合走 cost_rows（各表只读一次），单行走 cost_for_row；两条路径必须同值，
+    // 否则「列表里的成本」和「汇总里的成本」会互相打架。
+    let dir = std::env::temp_dir().join(format!(
+        "wb-pricing-batch-{}",
+        crate::sse::hex_token(6)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let store = PricingStore::new(dir.clone(), None);
+    let rows = vec![
+        json!({"model":"glm-5.3","at":100.0,"prompt_tokens":1000000,"cached_tokens":0,"completion_tokens":0}),
+        json!({"model":"no-such-model","at":100.0,"prompt_tokens":10,"completion_tokens":1}),
+    ];
+    let refs: Vec<&Value> = rows.iter().collect();
+    let batch = store.cost_rows(&refs, true);
+    assert_eq!(batch.len(), 2);
+    let single = store.cost_for_row(&rows[0], true, false);
+    assert!(batch[0].known);
+    assert!((batch[0].cny - single["cny"].as_f64().unwrap()).abs() < 1e-12);
+    assert!(!batch[1].known, "没有价目表的模型必须报未计价");
+    // 主开关关掉时一律不计价，也不该被算成「缺价」。
+    let off = store.cost_rows(&refs, false);
+    assert!(off.iter().all(|cost| !cost.known && cost.disabled));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn fixed_openrouter_sample_builds_python_shaped_snapshot() {
     let defaults = Defaults::parse(include_str!("../assets/pricing-defaults.json")).unwrap();
     let or_models: Map<String, Value> = serde_json::from_value(json!({

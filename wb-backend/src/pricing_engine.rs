@@ -128,7 +128,7 @@ pub fn compute_row(row: &Value, pricing: &Value, markup: f64) -> ComputedCost {
         unit,
         factor,
         markup,
-        &Value::Object(Map::new()),
+        &Value::Null,
         band,
     )
 }

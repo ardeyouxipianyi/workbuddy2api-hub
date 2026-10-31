@@ -39,6 +39,23 @@ pub struct PricingStore {
     write_lock: Mutex<()>,
 }
 
+/// 一行计价要读的全部输入（一次扫描只取一份）。
+struct Inputs {
+    policies: HashMap<String, Value>,
+    timeline: Vec<Value>,
+    doc: Value,
+    overrides: BTreeMap<String, String>,
+    markup: BTreeMap<String, f64>,
+}
+
+/// 批量计价的结果：面板聚合只关心这三个量。
+#[derive(Clone, Copy)]
+pub struct RowCost {
+    pub cny: f64,
+    pub known: bool,
+    pub disabled: bool,
+}
+
 impl PricingStore {
     pub fn new(data_dir: PathBuf, configured_file: Option<PathBuf>) -> Self {
         let bundled = serde_json::from_str(BUNDLED_PRICING).unwrap_or_else(|_| json!({}));
@@ -217,11 +234,15 @@ impl PricingStore {
     }
 
     pub fn markup_for(&self, model: &str) -> f64 {
+        self.markup_map().get(model).copied().unwrap_or(1.0)
+    }
+
+    fn markup_map(&self) -> BTreeMap<String, f64> {
         let path = self.markup_path();
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.markup_cache.lock().unwrap().as_ref() {
             if cached_key == &key {
-                return value.get(model).copied().unwrap_or(1.0);
+                return value.clone();
             }
         }
         let mut value = BTreeMap::new();
@@ -237,9 +258,8 @@ impl PricingStore {
                 }
             }
         }
-        let result = value.get(model).copied().unwrap_or(1.0);
-        *self.markup_cache.lock().unwrap() = Some((key, value));
-        result
+        *self.markup_cache.lock().unwrap() = Some((key, value.clone()));
+        value
     }
 
     pub fn current_policy_id(&self, model: &str, enabled: bool, variants: bool) -> Option<String> {
@@ -369,13 +389,50 @@ impl PricingStore {
         if !enabled {
             return base_cost(Value::Null, true, details);
         }
+        self.cost_from(row, &self.inputs(), details)
+    }
+
+    /// 一次扫描里每行都要计价时用这个：策略/时间线/价表/覆盖/加价各只读一次。
+    /// 逐行调 cost_for_row 会把这些表克隆 16k 次，面板一刷新就把内存顶上去
+    /// （Python 也是整扫复用同一份 _pricing_inputs）。
+    pub fn cost_rows(&self, rows: &[&Value], enabled: bool) -> Vec<RowCost> {
+        if !enabled {
+            return vec![RowCost { cny: 0.0, known: false, disabled: true }; rows.len()];
+        }
+        let inputs = self.inputs();
+        rows.iter()
+            .map(|row| {
+                if row.is_null() {
+                    return RowCost { cny: 0.0, known: false, disabled: false };
+                }
+                let cost = self.cost_from(row, &inputs, false);
+                RowCost {
+                    cny: cost.get("cny").and_then(Value::as_f64).unwrap_or(0.0),
+                    known: cost.get("known").and_then(Value::as_bool).unwrap_or(false),
+                    disabled: false,
+                }
+            })
+            .collect()
+    }
+
+    fn inputs(&self) -> Inputs {
+        Inputs {
+            policies: self.load_policies(),
+            timeline: self.load_timeline(),
+            doc: self.load_pricing(),
+            overrides: self.effective_overrides(),
+            markup: self.markup_map(),
+        }
+    }
+
+    fn cost_from(&self, row: &Value, inputs: &Inputs, details: bool) -> Value {
         let Some(model) = row.get("model").and_then(Value::as_str) else {
             return base_cost(Value::Null, false, details);
         };
-        let markup = self.markup_for(model);
-        let overrides = self.effective_overrides();
-        let policies = self.load_policies();
-        let timeline = self.load_timeline();
+        let markup = inputs.markup.get(model).copied().unwrap_or(1.0);
+        let overrides = &inputs.overrides;
+        let policies = &inputs.policies;
+        let timeline = &inputs.timeline;
         let mut backfilled = false;
         let mut policy_id = row
             .get("cost_policy")
@@ -389,7 +446,7 @@ impl PricingStore {
             );
         }
         if let Some(policy) = policy_id.as_deref().and_then(|id| policies.get(id)) {
-            let mut cost = price_row_with_policy(row, policy, model, &overrides, markup, details);
+            let mut cost = price_row_with_policy(row, policy, model, overrides, markup, details);
             add_source(
                 &mut cost,
                 policy_id.as_deref().unwrap_or(""),
@@ -399,8 +456,7 @@ impl PricingStore {
             add_markup(&mut cost, markup, details);
             return cost;
         }
-        let doc = self.load_pricing();
-        let mut cost = price_row_with_doc(row, &doc, model, &overrides, markup, details);
+        let mut cost = price_row_with_doc(row, &inputs.doc, model, overrides, markup, details);
         add_source(&mut cost, "builtin", None, false);
         add_markup(&mut cost, markup, details);
         cost

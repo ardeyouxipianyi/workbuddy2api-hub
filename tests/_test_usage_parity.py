@@ -66,10 +66,6 @@ MATRIX = [
 # 这样与具体模型/账号无关。{"*"} 表示这个接口还没开始对齐。
 # 修掉一批就把它从表里删掉 —— 表变小才是进度，剩下的差异才叫回归。
 KNOWN_DIFFS = {
-    "/usage?realm=all&range=today": {"cost_cny"},
-    "/usage?realm=all&range=week": {"cost_cny"},
-    "/usage?realm=all&range=month": {"cost_cny"},
-    "/usage?realm=cn&range=today": {"cost_cny"},
     "/usage/perf?realm=all&range=today": {"*"},
     "/usage/perf?realm=all&range=month": {"*"},
     "/usage/analytics?realm=all&range=today": {"*"},
@@ -79,7 +75,6 @@ KNOWN_DIFFS = {
     "/usage/timeseries?realm=all&range=month": {"credits"},
     "/usage/by-account": {"models"},
     "/usage/remaining": {"activity_floor", "activity_floor_iso", "models", "rows"},
-    "/usage/recent?limit=20": {"*"},
     "/pricing": {"timeline"},
 }
 
