@@ -394,7 +394,12 @@ fn human_delta(seconds: i64) -> String {
 
 /// `/settings`：settings.json 原样 + 面板要的几个派生键。
 fn settings(app: &std::sync::Arc<App>) -> Resp {
-    let state = app.state.settings_snapshot();
+    let mut state = app.state.settings_snapshot();
+    if crate::pricing::normalize_refresh_setting(&mut state) {
+        let path = app.state.accounts_dir.join("settings.json");
+        let _ = crate::state::write_json_atomic(&path, &Value::Object(state.clone()));
+        app.state.reload();
+    }
     let mut out = state;
     let keys = out.get("api_keys").and_then(Value::as_array).cloned().unwrap_or_default();
     let live: Vec<Value> = keys
@@ -408,7 +413,7 @@ fn settings(app: &std::sync::Arc<App>) -> Resp {
     out.insert("auth_required".into(), json!(!live.is_empty()));
     out.insert("panel_password_is_default".into(), json!(false));
     out.insert("realm".into(), json!(app.state.current_realm()));
-    out.insert("usd_cny".into(), json!(7.1));
+    crate::pricing::enrich_settings(&mut out, &app.pricing);
     // 模型额度：观察清单、周期与最近一次快照（面板「模型额度查询」区块）。
     out.insert("window_probe".into(), json!(crate::quota::window_probe_enabled(app)));
     out.insert("quota_scan_models".into(), json!(crate::quota::watched_models(app)));
@@ -446,6 +451,7 @@ fn usage_rows(app: &std::sync::Arc<App>) -> Vec<Value> {
 /// `/usage`：面板顶部的总量卡片（26 个键，见 golden/panel/usage.json）。
 fn usage(app: &std::sync::Arc<App>) -> Resp {
     let rows = usage_rows(app);
+    let settings = app.state.settings_snapshot();
     let mut totals = json!({
         "requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
@@ -456,6 +462,7 @@ fn usage(app: &std::sync::Arc<App>) -> Resp {
         "wall_ms_sum": 0, "wall_samples": 0,
     });
     let mut accounts_map = Map::new();
+    let mut cost_missing = Map::new();
     for row in &rows {
         let n = |k: &str| row.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
         for key in ["prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens", "total_tokens"] {
@@ -463,6 +470,21 @@ fn usage(app: &std::sync::Arc<App>) -> Resp {
             totals[key] = json!(v);
         }
         totals["requests"] = json!(totals["requests"].as_i64().unwrap_or(0) + 1);
+        totals["credit"] = json!(
+            totals["credit"].as_f64().unwrap_or(0.0)
+                + row.get("credit").and_then(Value::as_f64).unwrap_or(0.0)
+        );
+        let cost = app.pricing.cost_for_row(row, &settings, false);
+        if cost.get("known").and_then(Value::as_bool) == Some(true) {
+            totals["cost_cny"] = json!(
+                totals["cost_cny"].as_f64().unwrap_or(0.0)
+                    + cost.get("cny").and_then(Value::as_f64).unwrap_or(0.0)
+            );
+        } else if cost.get("disabled").and_then(Value::as_bool) != Some(true) {
+            let model = row.get("model").and_then(Value::as_str).unwrap_or("");
+            let count = cost_missing.get(model).and_then(Value::as_i64).unwrap_or(0) + 1;
+            cost_missing.insert(model.to_string(), json!(count));
+        }
         if row.get("outcome").and_then(Value::as_str) != Some("completed") {
             totals["errors"] = json!(totals["errors"].as_i64().unwrap_or(0) + 1);
         }
@@ -489,7 +511,8 @@ fn usage(app: &std::sync::Arc<App>) -> Resp {
         .unwrap_or(""));
     totals["log_file"] = json!(app.recorder_path().display().to_string());
     totals["realm"] = json!(app.state.current_realm());
-    totals["usd_cny"] = json!(7.1);
+    totals["usd_cny"] = json!(app.pricing.usd_cny());
+    totals["cost_missing"] = Value::Object(cost_missing);
     totals["accounts_map"] = Value::Object(accounts_map);
     json_resp(StatusCode::OK, &totals)
 }
@@ -639,7 +662,13 @@ fn usage_recent(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
     rows.reverse();
     let total = rows.len();
     let start = (page - 1) * limit;
-    let slice: Vec<Value> = rows.into_iter().skip(start).take(limit).collect();
+    let settings = app.state.settings_snapshot();
+    let slice: Vec<Value> = rows
+        .into_iter()
+        .skip(start)
+        .take(limit)
+        .map(|row| app.pricing.enrich_usage_row(&row, &settings))
+        .collect();
     json_resp(
         StatusCode::OK,
         &json!({
@@ -647,7 +676,7 @@ fn usage_recent(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
             "page": page,
             "limit": limit,
             "total_pages": if total == 0 { 1 } else { (total + limit - 1) / limit },
-            "usd_cny": 7.1,
+            "usd_cny": app.pricing.usd_cny(),
             "rows": slice,
         }),
     )
@@ -1007,6 +1036,18 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
     let mut settings = app.state.settings_snapshot();
     let mut applied = Vec::new();
     for (key, value) in patch {
+        if let Some(result) = crate::pricing::apply_setting(&mut settings, key, value) {
+            match result {
+                Ok(applied_key) => applied.push(applied_key),
+                Err(message) => {
+                    return json_resp(
+                        StatusCode::BAD_REQUEST,
+                        &json!({"error": {"message": message, "type": "invalid_request_error", "code": 400}}),
+                    )
+                }
+            }
+            continue;
+        }
         // 观察清单要先规整（去空白/去重/保序），与 Python 版落盘的口径一致。
         if key == "quota_scan_models" {
             let Some(models) = clean_models(value) else {

@@ -15,6 +15,18 @@ mod models;
 mod activity;
 mod agents;
 mod panel;
+mod pricing;
+mod pricing_catalog;
+mod pricing_cost;
+mod pricing_engine;
+mod pricing_io;
+mod pricing_panel;
+mod pricing_policy;
+mod pricing_settings;
+mod pricing_store;
+#[cfg(test)]
+mod pricing_tests;
+mod pricing_view;
 mod scheduler;
 mod pool;
 mod quota;
@@ -52,6 +64,8 @@ pub struct App {
     pub pool: pool::Pool,
     /// 面板会话（X-Panel-Token）与口令。
     pub panel: panel::Panel,
+    /// 价估算策略、按行回算与手动刷新状态。
+    pub pricing: pricing::Pricing,
     pub scheduler: scheduler::Scheduler,
     /// 最近 500 条面板/后端事件，`GET /logs` 直接读它（面板「运行日志」页）。
     pub logs: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
@@ -122,6 +136,7 @@ fn parse_args() -> Args {
 async fn main() -> std::io::Result<()> {
     let args = parse_args();
     let state = state::State::load(&args.accounts_dir, &args.usage_dir);
+    let pricing = pricing::Pricing::new(std::path::Path::new(&args.usage_dir));
     // shortcut: 上游连接不做池化调优，M1 只要求功能等价，压测在 M7 前再看
     let upstream = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -135,6 +150,7 @@ async fn main() -> std::io::Result<()> {
         recorder: usage::Recorder::new(args.usage_dir.clone()),
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
+        pricing,
         scheduler: scheduler::Scheduler::default(),
         logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
     });

@@ -224,7 +224,7 @@ async fn once(
     let first_ms = agg.first_chunk_at.map(|at| ((at - started_at) * 1000.0) as i64);
     let usage = agg.client_usage();
     crate::record::record(
-        &app.recorder,
+        app,
         crate::record::Row {
             model: &ctx.model,
             stream: false,
@@ -431,7 +431,7 @@ async fn stream_response(
         let started_at = crate::sse::epoch_now() - started.elapsed().as_secs_f64();
         let first_ms = first_chunk_at.map(|at| ((at - started_at) * 1000.0) as i64);
         crate::record::record(
-            &app.recorder,
+            app.as_ref(),
             crate::record::Row {
                 model: &ctx.model,
                 stream: true,

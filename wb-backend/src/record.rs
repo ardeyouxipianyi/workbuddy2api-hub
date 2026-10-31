@@ -4,13 +4,9 @@
 //! 所以这里用有序 Map 按原文顺序插入，不要改成 struct + serde（那样顺序会被
 //! 字段声明绑死，也难对齐「条件字段」）。
 //!
-//! shortcut: `cost_policy` 恒为 null —— 计价总开关默认关，开启后由 wb_pricing
-//! 铸策略 id，那是 M4 面板/计价一起做的活。
-
 use serde_json::{json, Map, Value};
 
 use crate::fingerprint::Fingerprint;
-use crate::usage::Recorder;
 
 pub struct Row<'a> {
     pub model: &'a str,
@@ -59,7 +55,7 @@ pub fn best_cached_tokens(usage: &Value) -> i64 {
     0
 }
 
-pub fn record(recorder: &Recorder, row: Row<'_>) {
+pub fn record(app: &crate::App, row: Row<'_>) {
     let mut out = Map::new();
     // 1-2：完成时刻（本地时区，无 TZ 后缀，与 Python time.strftime 一致）。
     let now = std::time::SystemTime::now()
@@ -119,7 +115,14 @@ pub fn record(recorder: &Recorder, row: Row<'_>) {
     }
     out.insert("realm".into(), json!(row.realm));
     out.insert("key".into(), json!(row.key));
-    out.insert("cost_policy".into(), Value::Null);
+    let settings = app.state.settings_snapshot();
+    out.insert(
+        "cost_policy".into(),
+        app.pricing
+            .current_policy_id(row.model, &settings)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
     if let Some(effort) = row.effort {
         out.insert("reasoning_effort".into(), json!(effort));
     }
@@ -133,7 +136,7 @@ pub fn record(recorder: &Recorder, row: Row<'_>) {
         let pct = (cached as f64 * 100.0 / prompt_tokens as f64 * 10.0).round() / 10.0;
         out.insert("cache_hit_pct".into(), json!(pct));
     }
-    recorder.append(&Value::Object(out));
+    app.recorder.append(&Value::Object(out));
 }
 
 /// `time.strftime("%Y-%m-%dT%H:%M:%S")` 的本地时间，不依赖 libc 的 TZ 处理。
