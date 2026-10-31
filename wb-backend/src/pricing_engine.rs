@@ -104,6 +104,13 @@ pub fn compute_row(row: &Value, pricing: &Value, markup: f64) -> ComputedCost {
         return ComputedCost::unknown();
     };
     let meta = pricing.get("meta").unwrap_or(&Value::Null);
+    let usd_cny = as_f64(meta.get("usd_cny")).filter(|n| *n != 0.0).unwrap_or(1.0);
+    compute_entry(entry, usd_cny, row, markup)
+}
+
+/// 不带「政策文档」的行级计价：调用方自己给条目和汇率。
+/// 批量计价走这里，省掉每行拼一份 models/meta 文档和成本明细。
+pub fn compute_entry(entry: &Value, usd_cny: f64, row: &Value, markup: f64) -> ComputedCost {
     let unit = as_f64(entry.get("unit"))
         .filter(|n| *n != 0.0)
         .unwrap_or(1_000_000.0);
@@ -115,9 +122,7 @@ pub fn compute_row(row: &Value, pricing: &Value, markup: f64) -> ComputedCost {
         .unwrap_or("")
         .eq_ignore_ascii_case("USD")
     {
-        as_f64(meta.get("usd_cny"))
-            .filter(|n| *n != 0.0)
-            .unwrap_or(1.0)
+        usd_cny
     } else {
         1.0
     };

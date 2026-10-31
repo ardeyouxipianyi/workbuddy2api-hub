@@ -30,22 +30,22 @@ pub struct PricingStore {
     configured_file: Option<PathBuf>,
     bundled: Value,
     defaults: Defaults,
-    pricing_cache: Mutex<Option<(FileKey, Value)>>,
-    policies_cache: Mutex<Option<(FileKey, HashMap<String, Value>)>>,
-    timeline_cache: Mutex<Option<(FileKey, Vec<Value>)>>,
-    override_cache: Mutex<Option<(FileKey, BTreeMap<String, String>)>>,
-    markup_cache: Mutex<Option<(FileKey, BTreeMap<String, f64>)>>,
+    pricing_cache: Mutex<Option<(FileKey, std::sync::Arc<Value>)>>,
+    policies_cache: Mutex<Option<(FileKey, std::sync::Arc<HashMap<String, Value>>)>>,
+    timeline_cache: Mutex<Option<(FileKey, std::sync::Arc<Vec<Value>>)>>,
+    override_cache: Mutex<Option<(FileKey, std::sync::Arc<BTreeMap<String, String>>)>>,
+    markup_cache: Mutex<Option<(FileKey, std::sync::Arc<BTreeMap<String, f64>>)>>,
     live_index: RwLock<Option<LiveIndex>>,
     write_lock: Mutex<()>,
 }
 
 /// 一行计价要读的全部输入（一次扫描只取一份）。
 struct Inputs {
-    policies: HashMap<String, Value>,
-    timeline: Vec<Value>,
-    doc: Value,
-    overrides: BTreeMap<String, String>,
-    markup: BTreeMap<String, f64>,
+    policies: std::sync::Arc<HashMap<String, Value>>,
+    timeline: std::sync::Arc<Vec<Value>>,
+    doc: std::sync::Arc<Value>,
+    overrides: std::sync::Arc<BTreeMap<String, String>>,
+    markup: std::sync::Arc<BTreeMap<String, f64>>,
 }
 
 /// 批量计价的结果：面板聚合只关心这三个量。
@@ -104,13 +104,13 @@ impl PricingStore {
         self.data_dir.join("pricing-markup.json")
     }
 
-    pub fn load_pricing(&self) -> Value {
+    pub fn load_pricing(&self) -> std::sync::Arc<Value> {
         let path = self
             .configured_file
             .clone()
             .or_else(|| Some(PathBuf::from("pricing/pricing.json")));
         let Some(path) = path else {
-            return self.bundled.clone();
+            return std::sync::Arc::new(self.bundled.clone());
         };
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.pricing_cache.lock().unwrap().as_ref() {
@@ -127,6 +127,7 @@ impl PricingStore {
         } else {
             self.bundled.clone()
         };
+        let value = std::sync::Arc::new(value);
         *self.pricing_cache.lock().unwrap() = Some((key, value.clone()));
         value
     }
@@ -137,7 +138,7 @@ impl PricingStore {
             .unwrap_or(1.0)
     }
 
-    pub fn load_policies(&self) -> HashMap<String, Value> {
+    pub fn load_policies(&self) -> std::sync::Arc<HashMap<String, Value>> {
         let path = self.policies_path();
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.policies_cache.lock().unwrap().as_ref() {
@@ -147,11 +148,12 @@ impl PricingStore {
         }
         let rows = read_jsonl(&path);
         let value = load_policy_map(rows);
+        let value = std::sync::Arc::new(value);
         *self.policies_cache.lock().unwrap() = Some((key, value.clone()));
         value
     }
 
-    pub fn load_timeline(&self) -> Vec<Value> {
+    pub fn load_timeline(&self) -> std::sync::Arc<Vec<Value>> {
         let path = self.timeline_path();
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.timeline_cache.lock().unwrap().as_ref() {
@@ -168,6 +170,7 @@ impl PricingStore {
                 .unwrap_or(0.0)
                 .total_cmp(&as_f64(right.get("at")).unwrap_or(0.0))
         });
+        let rows = std::sync::Arc::new(rows);
         *self.timeline_cache.lock().unwrap() = Some((key, rows.clone()));
         rows
     }
@@ -176,12 +179,13 @@ impl PricingStore {
         current_assignment(&self.load_timeline())
     }
 
+    /// 原样返回一份可写的副本（只有写路径要改它，读路径走 effective_overrides）。
     pub fn runtime_overrides(&self) -> BTreeMap<String, String> {
         let path = self.overrides_path();
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.override_cache.lock().unwrap().as_ref() {
             if cached_key == &key {
-                return value.clone();
+                return (**value).clone();
             }
         }
         let mut value = BTreeMap::new();
@@ -202,14 +206,15 @@ impl PricingStore {
                 }
             }
         }
+        let value = std::sync::Arc::new(value);
         *self.override_cache.lock().unwrap() = Some((key, value.clone()));
-        value
+        (*value).clone()
     }
 
-    pub fn effective_overrides(&self) -> BTreeMap<String, String> {
+    pub fn effective_overrides(&self) -> std::sync::Arc<BTreeMap<String, String>> {
         let mut value = self.defaults.overrides.clone();
         value.extend(self.runtime_overrides());
-        value
+        std::sync::Arc::new(value)
     }
 
     pub fn save_runtime_override(&self, model: &str, reference: &str) -> Result<(), String> {
@@ -229,7 +234,7 @@ impl PricingStore {
         }
         crate::state::write_json_atomic(&path, &serde_json::to_value(&values).unwrap_or_default())
             .map_err(|error| error.to_string())?;
-        *self.override_cache.lock().unwrap() = Some((file_key(&path), values));
+        *self.override_cache.lock().unwrap() = Some((file_key(&path), std::sync::Arc::new(values)));
         Ok(())
     }
 
@@ -237,7 +242,7 @@ impl PricingStore {
         self.markup_map().get(model).copied().unwrap_or(1.0)
     }
 
-    fn markup_map(&self) -> BTreeMap<String, f64> {
+    fn markup_map(&self) -> std::sync::Arc<BTreeMap<String, f64>> {
         let path = self.markup_path();
         let key = file_key(&path);
         if let Some((cached_key, value)) = self.markup_cache.lock().unwrap().as_ref() {
@@ -258,6 +263,7 @@ impl PricingStore {
                 }
             }
         }
+        let value = std::sync::Arc::new(value);
         *self.markup_cache.lock().unwrap() = Some((key, value.clone()));
         value
     }
@@ -344,7 +350,7 @@ impl PricingStore {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let mut known = self.load_policies();
+        let mut known = (*self.load_policies()).clone();
         let (_previous_at, previous) = self.current_assignment();
         let mut assignment = if merge {
             previous.clone()
@@ -396,22 +402,23 @@ impl PricingStore {
     /// 逐行调 cost_for_row 会把这些表克隆 16k 次，面板一刷新就把内存顶上去
     /// （Python 也是整扫复用同一份 _pricing_inputs）。
     /// 整包计价：各表只读一次（逐行调 cost_for_row 会把它们克隆上万次）。
-    /// 计价链是 Value 形状的，这里给每行拼一个只有计价字段的小对象——比让整份
-    /// 日志常驻 4 KB/行的 Value 便宜得多。
+    /// 计价链是 Value 形状的，这里给每行拼一个只有计价字段的小对象；成本只取
+    /// cny/known 两个数，不拼明细——否则 2.7 万行要 400 ms，面板切区间一眼就卡。
     pub fn cost_rows(&self, rows: &[&crate::panel_usage::Row], enabled: bool) -> Vec<RowCost> {
         if !enabled {
             return vec![RowCost { cny: 0.0, known: false, disabled: true }; rows.len()];
         }
         let inputs = self.inputs();
+        // 政策条目按 id 只拼一次（同一套政策的 2 万行不必各拼一份）。
+        let mut entries: HashMap<String, (Value, f64)> = HashMap::new();
+        let history = crate::pricing_policy::PolicyHistory::new(&inputs.timeline);
         rows.iter()
             .map(|row| {
-                if row.at <= 0.0 && row.model.is_none() {
+                let Some(model) = row.model.as_deref() else {
                     return RowCost { cny: 0.0, known: false, disabled: false };
-                }
+                };
                 let mut view = Map::new();
-                if let Some(model) = row.model.as_deref() {
-                    view.insert("model".into(), json!(model));
-                }
+                view.insert("model".into(), json!(model));
                 view.insert("at".into(), json!(row.at));
                 view.insert("prompt_tokens".into(), json!(row.prompt_tokens));
                 view.insert("cached_tokens".into(), json!(row.cached_tokens));
@@ -419,12 +426,41 @@ impl PricingStore {
                 if let Some(policy) = &row.cost_policy {
                     view.insert("cost_policy".into(), policy.clone());
                 }
-                let cost = self.cost_from(&Value::Object(view), &inputs, false);
-                RowCost {
-                    cny: cost.get("cny").and_then(Value::as_f64).unwrap_or(0.0),
-                    known: cost.get("known").and_then(Value::as_bool).unwrap_or(false),
-                    disabled: false,
+                let view = Value::Object(view);
+                let markup = inputs.markup.get(model).copied().unwrap_or(1.0);
+                let mut policy_id = row
+                    .cost_policy
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                if policy_id.is_none() {
+                    (policy_id, _) = history.resolve(row.at, model);
                 }
+                let cost = match policy_id.as_deref().filter(|id| inputs.policies.contains_key(*id)) {
+                    Some(id) => {
+                        let (entry, usd_cny) = entries.entry(id.to_string()).or_insert_with(|| {
+                            let policy = &inputs.policies[id];
+                            (
+                                crate::pricing_policy::policy_entry(policy),
+                                as_f64(policy.get("usd_cny"))
+                                    .unwrap_or(crate::pricing_engine::USD_CNY),
+                            )
+                        });
+                        crate::pricing_engine::compute_entry(entry, *usd_cny, &view, markup)
+                    }
+                    None => {
+                        let doc = &inputs.doc;
+                        let entry = doc.pointer("/models").and_then(|models| models.get(model));
+                        let usd_cny = as_f64(doc.pointer("/meta/usd_cny"))
+                            .filter(|value| *value != 0.0)
+                            .unwrap_or(1.0);
+                        match entry {
+                            Some(entry) => crate::pricing_engine::compute_entry(entry, usd_cny, &view, markup),
+                            None => return RowCost { cny: 0.0, known: false, disabled: false },
+                        }
+                    }
+                };
+                RowCost { cny: cost.cny, known: cost.known, disabled: false }
             })
             .collect()
     }

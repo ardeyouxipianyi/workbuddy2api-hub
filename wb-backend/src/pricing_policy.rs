@@ -270,31 +270,50 @@ fn assignment_of(row: &Value) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// 时间线预处理：批量计价时，每行都重建 ats 数组和整张 assignment 太贵
+/// （2.7 万行约 250 ms）。这里一次摊平，之后按行二分查。
+pub struct PolicyHistory {
+    ats: Vec<f64>,
+    assignments: Vec<BTreeMap<String, String>>,
+}
+
+impl PolicyHistory {
+    pub fn new(timeline: &[Value]) -> Self {
+        Self {
+            ats: timeline
+                .iter()
+                .map(|row| as_f64(row.get("at")).unwrap_or(0.0))
+                .collect(),
+            assignments: timeline.iter().map(assignment_of).collect(),
+        }
+    }
+
+    pub fn resolve(&self, epoch_sec: f64, model: &str) -> (Option<String>, bool) {
+        if self.ats.is_empty() {
+            return (None, false);
+        }
+        let found = self.ats.partition_point(|at| *at <= epoch_sec);
+        let index = found.saturating_sub(1);
+        if let Some(id) = self.assignments[index].get(model) {
+            return (Some(id.clone()), false);
+        }
+        for (at, assignment) in self.ats.iter().zip(&self.assignments) {
+            if *at < epoch_sec {
+                continue;
+            }
+            if let Some(id) = assignment.get(model) {
+                return (Some(id.clone()), true);
+            }
+        }
+        for assignment in self.assignments[..=index].iter().rev() {
+            if let Some(id) = assignment.get(model) {
+                return (Some(id.clone()), true);
+            }
+        }
+        (None, false)
+    }
+}
+
 pub fn policy_ref_at(timeline: &[Value], epoch_sec: f64, model: &str) -> (Option<String>, bool) {
-    if timeline.is_empty() {
-        return (None, false);
-    }
-    let ats: Vec<f64> = timeline
-        .iter()
-        .map(|row| as_f64(row.get("at")).unwrap_or(0.0))
-        .collect();
-    let found = ats.partition_point(|at| *at <= epoch_sec);
-    let index = found.saturating_sub(1);
-    if let Some(id) = assignment_of(&timeline[index]).get(model) {
-        return (Some(id.clone()), false);
-    }
-    for row in timeline {
-        if as_f64(row.get("at")).unwrap_or(0.0) < epoch_sec {
-            continue;
-        }
-        if let Some(id) = assignment_of(row).get(model) {
-            return (Some(id.clone()), true);
-        }
-    }
-    for row in timeline[..=index].iter().rev() {
-        if let Some(id) = assignment_of(row).get(model) {
-            return (Some(id.clone()), true);
-        }
-    }
-    (None, false)
+    PolicyHistory::new(timeline).resolve(epoch_sec, model)
 }
