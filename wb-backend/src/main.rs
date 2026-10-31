@@ -30,6 +30,7 @@ mod panel_password;
 mod panel_read;
 mod panel_settings;
 mod panel_usage;
+mod usage_index;
 mod pricing;
 mod pricing_catalog;
 mod pricing_cost;

@@ -126,6 +126,130 @@ fn load_rows(path: &std::path::Path) -> Arc<Vec<Row>> {
     shared
 }
 
+/// 行里没有 key 字段（不是空串）在桶里的标记：JSON 里不会出现 NUL，足够区分。
+pub const MISSING_KEY: &str = "\u{0}";
+
+/// 增量聚合缓存：新追加的行折进小时桶，窗口视图只加桶。
+///
+/// 判定很简单——文件变长就只读尾部、折新增的行；文件变短/换文件、计价输入变了、
+/// 账号出口表变了，就整份重建（一次约 150 ms，正常一天也碰不到几次）。
+struct IndexCache {
+    path: std::path::PathBuf,
+    offset: u64,
+    pricing: String,
+    realms: String,
+    /// 用 Arc 是为了让请求线程拿着快照慢慢算，不长期占锁；写时复制只在新数据到达
+    /// 且正好有人在读时发生。
+    index: std::sync::Arc<crate::usage_index::Index>,
+}
+
+static INDEX_CACHE: std::sync::OnceLock<std::sync::Mutex<IndexCache>> = std::sync::OnceLock::new();
+
+fn realms_stamp(app: &App) -> String {
+    let mut parts: Vec<String> = account_realms(app)
+        .into_iter()
+        .map(|(uid, realm)| format!("{uid}={realm}"))
+        .collect();
+    parts.push(app.state.current_realm());
+    parts.join(";")
+}
+
+/// 本地小时桶的起点与日键（日键给窗口排序，起点给窗口过滤）。
+fn local_hour(at: f64) -> (i32, i32, f64) {
+    let stamp = at as libc::time_t;
+    let mut value: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&stamp, &mut value) }.is_null() {
+        return (0, 0, at);
+    }
+    let day = (value.tm_year + 1900) * 10_000 + (value.tm_mon + 1) * 100 + value.tm_mday;
+    let hour = value.tm_hour;
+    value.tm_min = 0;
+    value.tm_sec = 0;
+    let start = unsafe { libc::mktime(&mut value) };
+    (day, hour, if start > 0 { start as f64 } else { at })
+}
+
+fn advance_index(cache: &mut IndexCache, app: &Arc<App>) {
+    let path = app.recorder_path();
+    let settings = app.state.settings_snapshot();
+    let pricing = app.pricing.stamp(&settings);
+    let realms = realms_stamp(app);
+    let length = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+    if path != cache.path || pricing != cache.pricing || realms != cache.realms || length < cache.offset {
+        cache.path = path.clone();
+        cache.offset = 0;
+        cache.index = std::sync::Arc::new(crate::usage_index::Index::default());
+    }
+    if length == cache.offset {
+        cache.pricing = pricing;
+        cache.realms = realms;
+        return;
+    }
+    let mut tail: Vec<u8> = Vec::new();
+    if let Ok(mut file) = std::fs::File::open(&path) {
+        use std::io::{Read, Seek, SeekFrom};
+        if file.seek(SeekFrom::Start(cache.offset)).is_ok() && file.read_to_end(&mut tail).is_err() {
+            tail.clear();
+        }
+    }
+    // 只折完整的行：末半行留给下次（offset 停在最后一个换行之后）。
+    let complete = tail
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let text = String::from_utf8_lossy(&tail[..complete]).to_string();
+    let rows: Vec<Row> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(Row::parse)
+        .collect();
+    let refs: Vec<&Row> = rows.iter().collect();
+    let costs = app.pricing.cost_rows(&refs, &settings);
+    let realms_map = account_realms(app);
+    let current = app.state.current_realm();
+    let index = std::sync::Arc::make_mut(&mut cache.index);
+    for (offset, row) in rows.iter().enumerate() {
+        let (day, hour, start) = local_hour(row.at);
+        let realm = row_realm(row, &realms_map, &current);
+        let key = crate::usage_index::CellKey {
+            model: row.model.clone().unwrap_or_default(),
+            account: row.account.clone().unwrap_or_default(),
+            // 没有 key 字段和 key 为空串是两回事：analytics 把前者归到
+            // __before_keys__、后者归到 __no_key__（Python 的 row["key"] 判定）。
+            key: row.key.clone().unwrap_or_else(|| MISSING_KEY.to_string()),
+            realm,
+        };
+        let seq = index.rows;
+        index.rows += 1;
+        index
+            .hours
+            .entry((day, hour))
+            .or_default()
+            .entry(key)
+            .or_default()
+            .add_row(row, costs[offset], seq, start);
+    }
+    cache.offset += complete as u64;
+    cache.pricing = pricing;
+    cache.realms = realms;
+}
+
+fn usage_index(app: &Arc<App>) -> std::sync::Arc<crate::usage_index::Index> {
+    let cache = INDEX_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(IndexCache {
+            path: std::path::PathBuf::new(),
+            offset: 0,
+            pricing: String::new(),
+            realms: String::new(),
+            index: std::sync::Arc::new(crate::usage_index::Index::default()),
+        })
+    });
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    advance_index(&mut guard, app);
+    guard.index.clone()
+}
+
 fn query<'a>(req: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
     req.uri()
         .query()
@@ -231,6 +355,13 @@ fn range_bounds_query(query: &str) -> (Option<f64>, Option<f64>) {
 
 fn range_bounds(req: &Request<Incoming>) -> (Option<f64>, Option<f64>) {
     range_bounds_query(req.uri().query().unwrap_or(""))
+}
+
+/// 自定义区间（range=custom）的边界是任意时刻，桶的粒度是整点：只有它必须逐行。
+fn custom_range(req: &Request<Incoming>) -> bool {
+    query_string_value(req.uri().query().unwrap_or(""), "range")
+        .map(|value| value.trim().eq_ignore_ascii_case("custom"))
+        .unwrap_or(false)
 }
 
 fn row_at(row: &Row) -> Option<f64> {

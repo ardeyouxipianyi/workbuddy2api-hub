@@ -6,7 +6,6 @@
 //! 每个视图都有「全时段」和「窗口」两半，两半是同一趟折叠的两次输出。
 
 use super::*;
-use crate::pricing_store::RowCost;
 use serde_json::Map;
 
 #[derive(Default, Clone)]
@@ -55,6 +54,37 @@ impl Stat {
                 }
             }
         }
+    }
+
+    /// 桶化的行：`done` 是成功行，`failed` 是其余非中断行。
+    fn add_cell(&mut self, cell: &crate::usage_index::Cell) {
+        self.requests += cell.done.rows;
+        self.errors += cell.failed.rows;
+        self.add_tokens(&cell.done);
+        self.add_tokens(&cell.failed);
+        self.ttft_sum += cell.ttft_sum;
+        self.ttft_n += cell.ttft_n;
+        self.speed_sum += cell.speed_sum;
+        self.speed_n += cell.speed_n;
+        self.elapsed_sum += cell.elapsed_sum;
+        self.elapsed_n += cell.elapsed_n;
+    }
+
+    /// 只要成功行（账号/key 下的模型细分）。
+    fn add_done(&mut self, cell: &crate::usage_index::Cell) {
+        self.requests += cell.done.rows;
+        self.add_tokens(&cell.done);
+    }
+
+    /// 只加数量：requests/errors 各自由调用方数（feed 里两者是同一行的二选一）。
+    fn add_tokens(&mut self, tokens: &crate::usage_index::Tokens) {
+        self.prompt += tokens.prompt;
+        self.completion += tokens.completion;
+        self.reasoning += tokens.reasoning;
+        self.cached += tokens.cached;
+        self.total += tokens.total;
+        self.credit += tokens.credit;
+        self.cost += tokens.cost;
     }
 
     fn json(&self) -> Value {
@@ -126,8 +156,10 @@ struct Half {
     models: BTreeMap<String, Stat>,
     keys: BTreeMap<String, Entry>,
     /// 首次出现顺序：Python 的排序是稳定排序，并列项按这个顺序出（不是按 id）。
-    acct_order: Vec<String>,
-    model_order: Vec<String>,
+    model_seq: BTreeMap<String, u64>,
+    acct_seq: BTreeMap<String, u64>,
+    /// 逐行路径的行序号（桶化路径直接用 cell.seq）。
+    seen: u64,
 }
 
 fn model_of(row: &Row) -> String {
@@ -165,9 +197,9 @@ impl Half {
         let model = model_of(row);
         // 顶层的模型列表收所有行（含失败，python 的 tgt["models"] 就是这么折的）；
         // 账号/key 下的模型细分才只数成功请求。
-        if !self.models.contains_key(&model) {
-            self.model_order.push(model.clone());
-        }
+        let seq = self.seen;
+        self.seen += 1;
+        self.model_seq.entry(model.clone()).or_insert(seq);
         self.models
             .entry(model.clone())
             .or_default()
@@ -175,9 +207,7 @@ impl Half {
 
         let account = row.account.clone().unwrap_or_else(|| "(unattributed)".to_string());
         let realm = row_realm(row, realms, current);
-        if !self.accts.contains_key(&account) {
-            self.acct_order.push(account.clone());
-        }
+        self.acct_seq.entry(account.clone()).or_insert(seq);
         let entry = self.accts.entry(account).or_default();
         if entry.realm.is_empty() {
             // python 记的是**行里的 realm 字段**（可能为空），池子里的账号随后按
@@ -207,6 +237,58 @@ impl Half {
         // cross_realm 就是靠它数「这把 key 跨了几个出口」。
         *key_entry.realms.entry(realm).or_default() += 1;
         key_entry.last_at = key_entry.last_at.max(number(row, "at"));
+    }
+
+    /// 桶化的折叠：把「日 × 时 × 模型 × 账号 × key × realm」的累计量灌进这一半。
+    /// 口径与 `feed` 逐条对齐，只是不再逐行。
+    fn absorb(&mut self, key: &crate::usage_index::CellKey, cell: &crate::usage_index::Cell, known_keys: &[String]) {
+        // 只有中断行的桶：feed 连账号/模型条目都不会建，这里同样跳过。
+        if cell.done.rows == 0 && cell.failed.rows == 0 {
+            return;
+        }
+        let model = if key.model.is_empty() { "(unknown)".to_string() } else { key.model.clone() };
+        self.summary.add_cell(cell);
+        self.model_seq.entry(model.clone()).or_insert(cell.seq);
+        self.models.entry(model.clone()).or_default().add_cell(cell);
+
+        let account = if key.account.is_empty() {
+            "(unattributed)".to_string()
+        } else {
+            key.account.clone()
+        };
+        self.acct_seq.entry(account.clone()).or_insert(cell.seq);
+        let entry = self.accts.entry(account.clone()).or_default();
+        // 账号条目的 realm 取「本半里这个账号第一条带 realm 的行」（Python 的
+        // `if not entry["realm"]` 只在空串时才补，所以按 seq 顺序喂进来才会一致）。
+        if entry.realm.is_empty() {
+            entry.realm = cell.first_raw_realm.clone();
+        }
+        entry.stat.add_cell(cell);
+        if cell.done.rows > 0 {
+            entry.models.entry(model.clone()).or_default().add_done(cell);
+        }
+        for (raw, count) in &cell.raw_realms {
+            *entry.realms.entry(raw.clone()).or_default() += count;
+        }
+        entry.last_at = entry.last_at.max(cell.last_at);
+
+        let key_id = if key.key == MISSING_KEY {
+            "__before_keys__".to_string()
+        } else if key.key.is_empty() {
+            "__no_key__".to_string()
+        } else if known_keys.iter().any(|entry| entry == &key.key) {
+            key.key.clone()
+        } else {
+            "__unknown_key__".to_string()
+        };
+        let key_entry = self.keys.entry(key_id).or_default();
+        key_entry.stat.add_cell(cell);
+        if cell.done.rows > 0 {
+            key_entry.models.entry(model).or_default().add_done(cell);
+        }
+        // key 的 realms 数的是行数，键是推算出来的 realm（`row_realm`）。
+        *key_entry.realms.entry(key.realm.clone()).or_default() += cell.done.rows + cell.failed.rows;
+        key_entry.last_at = key_entry.last_at.max(cell.last_at);
     }
 }
 
@@ -339,7 +421,7 @@ fn accounts_json(
     //（Python 的 accts_list 是稳定排序）。
     let position = |row: &Value| {
         let uid = row.get("uid").and_then(Value::as_str).unwrap_or("");
-        all.acct_order.iter().position(|entry| entry == uid).unwrap_or(usize::MAX)
+        all.acct_seq.get(uid).copied().unwrap_or(u64::MAX)
     };
     let sort_key = |row: &Value| {
         (
@@ -492,15 +574,30 @@ fn keys_json(all: &Half, window: &Half, settings: &Map<String, Value>) -> Vec<Va
     rows
 }
 
+/// 按 seq（日志顺序）喂桶：账号条目的 realm 取「第一条带 realm 的行」，顺序错了就跟着错。
+fn absorb_window(
+    half: &mut Half,
+    index: &crate::usage_index::Index,
+    since: Option<f64>,
+    until: Option<f64>,
+    realm: &str,
+    known_keys: &[String],
+) {
+    let mut cells: Vec<(&crate::usage_index::CellKey, &crate::usage_index::Cell)> =
+        index.window(since, until, realm).collect();
+    cells.sort_by_key(|(_, cell)| cell.seq);
+    for (key, cell) in cells {
+        half.absorb(key, cell, known_keys);
+    }
+}
+
 /// `/usage/analytics`: 全时段 + 可选窗口。
 pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
-    let all = read_rows(app);
-    let realms = account_realms(app);
     let realm = query(req, "realm");
-    let current = app.state.current_realm();
-    let all_rows: Vec<&Row> = rows_for_realm(&all, realm.unwrap_or("all"), &realms, &current);
+    let scope = realm.unwrap_or("all");
     // 面板发的是 range=today|week|month（区间按钮），只有自定义区间才带 since/until。
     let (range_since, range_until) = range_bounds(req);
+    let explicit = query(req, "since").is_some() || query(req, "until").is_some();
     let since = query(req, "since")
         .and_then(|value| value.parse::<f64>().ok())
         .or(range_since);
@@ -508,8 +605,6 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         .and_then(|value| value.parse::<f64>().ok())
         .or(range_until);
     let settings = app.state.settings_snapshot();
-    let costs = app.pricing.cost_rows(&all_rows, &settings);
-
     let known_keys: Vec<String> = match settings.get("api_keys") {
         Some(Value::Array(keys)) => keys
             .iter()
@@ -520,16 +615,28 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     };
     let mut all_half = Half::default();
     let mut window_half = Half::default();
-    for (index, row) in all_rows.iter().enumerate() {
-        let cost = costs[index];
-        let cost_value = if cost.known { cost.cny } else { 0.0 };
-        all_half.feed(row, cost_value, &realms, &known_keys, &current);
-        let at = number(row, "at");
-        let in_window = since.map_or(true, |lower| at >= lower)
-            && until.map_or(true, |upper| at <= upper);
-        if in_window {
-            window_half.feed(row, cost_value, &realms, &known_keys, &current);
+    if explicit || custom_range(req) {
+        // 任意 since/until：桶的粒度是整点，只能逐行。
+        let all = read_rows(app);
+        let realms = account_realms(app);
+        let current = app.state.current_realm();
+        let all_rows: Vec<&Row> = rows_for_realm(&all, scope, &realms, &current);
+        let costs = app.pricing.cost_rows(&all_rows, &settings);
+        for (index, row) in all_rows.iter().enumerate() {
+            let cost = costs[index];
+            let cost_value = if cost.known { cost.cny } else { 0.0 };
+            all_half.feed(row, cost_value, &realms, &known_keys, &current);
+            let at = number(row, "at");
+            let in_window = since.map_or(true, |lower| at >= lower)
+                && until.map_or(true, |upper| at <= upper);
+            if in_window {
+                window_half.feed(row, cost_value, &realms, &known_keys, &current);
+            }
         }
+    } else {
+        let index = usage_index(app);
+        absorb_window(&mut all_half, &index, None, None, scope, &known_keys);
+        absorb_window(&mut window_half, &index, since, until, scope, &known_keys);
     }
 
     let mut models: Vec<Value> = all_half
@@ -546,7 +653,7 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         .collect();
     let position = |row: &Value| {
         let model = row.get("model").and_then(Value::as_str).unwrap_or("");
-        all_half.model_order.iter().position(|entry| entry == model).unwrap_or(usize::MAX)
+        all_half.model_seq.get(model).copied().unwrap_or(u64::MAX)
     };
     let sort_key = |row: &Value| {
         (

@@ -94,6 +94,28 @@ impl Pricing {
             .current_policy_id(model, values.enabled, values.variant_inherit)
     }
 
+    /// 计价输入的指纹：面板的增量桶用它判废（价表/政策/时间线/覆盖/加价/开关任一变化）。
+    pub fn stamp(&self, settings: &Map<String, Value>) -> String {
+        let inner = self.settings(settings);
+        let mut parts = vec![format!("enabled={}", inner.enabled), format!("usd_cny={:.6}", self.store.usd_cny())];
+        for path in [
+            self.store.policies_path(),
+            self.store.timeline_path(),
+            self.store.overrides_path(),
+            self.store.markup_path(),
+        ] {
+            let meta = std::fs::metadata(&path).ok();
+            let len = meta.as_ref().map(|meta| meta.len()).unwrap_or(0);
+            let stamp = meta
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|span| span.as_millis() as u64)
+                .unwrap_or(0);
+            parts.push(format!("{}:{len}:{stamp}", path.display()));
+        }
+        parts.join("|")
+    }
+
     pub fn cost_for_row(&self, row: &Value, settings: &Map<String, Value>, details: bool) -> Value {
         self.store
             .cost_for_row(row, self.settings(settings).enabled, details)

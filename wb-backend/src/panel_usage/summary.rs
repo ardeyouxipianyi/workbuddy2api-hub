@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::pricing_store::RowCost;
+use crate::usage_index::{Cell, CellKey, Index, Tokens};
 use serde_json::Map;
 
 fn overview_bucket(
@@ -232,25 +233,135 @@ fn representative_account(app: &App, realm: &str) -> Value {
     })
 }
 
+/// /usage 的桶：completed 行的累计量 + 账号计数（by_* 桶里没有 errors/cost_missing）。
+/// 与 `overview_bucket` 同口径，只是从小时桶来，不再逐行。
+#[derive(Default)]
+struct Fold {
+    done: Tokens,
+    failed: Tokens,
+    aborted: i64,
+    accounts: BTreeMap<String, i64>,
+    missing: BTreeMap<String, i64>,
+}
+
+fn model_key(key: &CellKey) -> String {
+    if key.model.is_empty() { "?".to_string() } else { key.model.clone() }
+}
+
+impl Fold {
+    fn add(&mut self, key: &CellKey, cell: &Cell) {
+        self.done.add(&cell.done);
+        self.failed.add(&cell.failed);
+        self.aborted += cell.aborted;
+        if cell.done.rows > 0 {
+            let account = if key.account.is_empty() { "(unattributed)" } else { key.account.as_str() };
+            *self.accounts.entry(account.to_string()).or_default() += cell.done.rows;
+        }
+        // 「没价」按模型记：Python 的 cost_missing 缺 model 字段时记 unknown。
+        let missing = cell.done.missing + cell.failed.missing;
+        if missing > 0 {
+            let model = if key.model.is_empty() { "unknown" } else { key.model.as_str() };
+            *self.missing.entry(model.to_string()).or_default() += missing;
+        }
+    }
+
+    fn bucket(&self) -> Value {
+        json!({
+            "requests": self.done.rows,
+            "accounts": self.accounts,
+            "cost_cny": self.done.cost,
+            "prompt_tokens": self.done.prompt,
+            "completion_tokens": self.done.completion,
+            "reasoning_tokens": self.done.reasoning,
+            "cached_tokens": self.done.cached,
+            "total_tokens": self.done.total,
+            "credit": self.done.credit,
+        })
+    }
+}
+
+/// 顶层的总量：requests/tokens 只算 completed；失败行只进 errors 和 credit
+/// （客户端中断连 credit 都不算，只数 errors）。
+fn apply_fold(totals: &mut Value, fold: &Fold) {
+    totals["requests"] = json!(fold.done.rows);
+    totals["errors"] = json!(fold.failed.rows + fold.aborted);
+    totals["prompt_tokens"] = json!(fold.done.prompt);
+    totals["completion_tokens"] = json!(fold.done.completion);
+    totals["reasoning_tokens"] = json!(fold.done.reasoning);
+    totals["cached_tokens"] = json!(fold.done.cached);
+    totals["total_tokens"] = json!(fold.done.total);
+    totals["credit"] = json!(fold.done.credit + fold.failed.credit);
+    totals["cost_cny"] = json!(fold.done.cost + fold.failed.cost);
+    if !fold.missing.is_empty() {
+        totals["cost_missing"] = json!(fold.missing);
+    }
+}
+
+/// 窗口内的三张明细图 + 顶层总量。桶只为 completed 的行建，否则「只有失败」的
+/// 模型会在面板上长出一张全 0 的卡片（Python 的折叠在非 completed 分支就 return）。
+fn index_maps(
+    index: &Index,
+    since: Option<f64>,
+    until: Option<f64>,
+    realm: &str,
+) -> (Fold, Value, Value, Value) {
+    let mut total = Fold::default();
+    let mut by_model: BTreeMap<String, Fold> = BTreeMap::new();
+    let mut by_realm: BTreeMap<(String, String), Fold> = BTreeMap::new();
+    let mut by_acct: BTreeMap<(String, String, String), Fold> = BTreeMap::new();
+    for (key, cell) in index.window(since, until, realm) {
+        total.add(key, cell);
+        if cell.done.rows == 0 {
+            continue;
+        }
+        let model = model_key(key);
+        let account = if key.account.is_empty() { "(unattributed)" } else { key.account.as_str() };
+        by_model.entry(model.clone()).or_default().add(key, cell);
+        by_realm
+            .entry((model.clone(), key.realm.clone()))
+            .or_default()
+            .add(key, cell);
+        by_acct
+            .entry((model, key.realm.clone(), account.to_string()))
+            .or_default()
+            .add(key, cell);
+    }
+    let model_map: Map<String, Value> = by_model.into_iter()
+        .map(|(model, fold)| (model, fold.bucket()))
+        .collect();
+    let mut realms: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    for ((model, realm), fold) in by_realm {
+        realms.entry(model).or_default().insert(realm, fold.bucket());
+    }
+    let mut accounts: BTreeMap<String, BTreeMap<String, Map<String, Value>>> = BTreeMap::new();
+    for ((model, realm, account), fold) in by_acct {
+        accounts
+            .entry(model)
+            .or_default()
+            .entry(realm)
+            .or_default()
+            .insert(account, fold.bucket());
+    }
+    let realms = realms.into_iter()
+        .map(|(model, inner)| (model, Value::Object(inner)))
+        .collect::<Map<String, Value>>();
+    let accounts = accounts.into_iter()
+        .map(|(model, inner)| {
+            let inner: Map<String, Value> = inner
+                .into_iter()
+                .map(|(realm, rows)| (realm, Value::Object(rows)))
+                .collect();
+            (model, Value::Object(inner))
+        })
+        .collect::<Map<String, Value>>();
+    (total, Value::Object(model_map), Value::Object(realms), Value::Object(accounts))
+}
+
 /// `/usage`: all-time totals for the selected realm plus pool metadata.
 pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
-    let rows = read_rows(app);
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
     let (since, until) = range_bounds(req);
-    let current = app.state.current_realm();
-    let selected: Vec<&Row> = rows_for_realm(&rows, &realm, &realms, &current)
-        .into_iter()
-        .filter(|row| {
-            if since.is_none() && until.is_none() {
-                return true;
-            }
-            row_at(row).is_some_and(|at| {
-                since.map(|lower| at >= lower).unwrap_or(true)
-                    && until.map(|upper| at <= upper).unwrap_or(true)
-            })
-        })
-        .collect();
     let mut totals = json!({
         "requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
@@ -260,11 +371,32 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         "ttft_ms_sum": 0, "ttft_samples": 0, "gen_ms_sum": 0, "gen_samples": 0,
         "wall_ms_sum": 0, "wall_samples": 0,
     });
-    let settings = app.state.settings_snapshot();
-    let costs = app.pricing.cost_rows(&selected, &settings);
-    add_overview_totals(&mut totals, &selected, &costs);
-    let current = app.state.current_realm();
-    let (by_model, by_model_realm, by_model_acct) = overview_maps(&selected, &costs, &realms, &current);
+    let (by_model, by_model_realm, by_model_acct) = if custom_range(req) {
+        let rows = read_rows(app);
+        let current = app.state.current_realm();
+        let selected: Vec<&Row> = rows_for_realm(&rows, &realm, &realms, &current)
+            .into_iter()
+            .filter(|row| {
+                if since.is_none() && until.is_none() {
+                    return true;
+                }
+                row_at(row).is_some_and(|at| {
+                    since.map(|lower| at >= lower).unwrap_or(true)
+                        && until.map(|upper| at <= upper).unwrap_or(true)
+                })
+            })
+            .collect();
+        let settings = app.state.settings_snapshot();
+        let costs = app.pricing.cost_rows(&selected, &settings);
+        add_overview_totals(&mut totals, &selected, &costs);
+        overview_maps(&selected, &costs, &realms, &current)
+    } else {
+        let index = usage_index(app);
+        let (fold, by_model, by_model_realm, by_model_acct) =
+            index_maps(&index, since, until, &realm);
+        apply_fold(&mut totals, &fold);
+        (by_model, by_model_realm, by_model_acct)
+    };
     totals["by_model"] = by_model;
     totals["by_model_realm"] = by_model_realm;
     totals["by_model_acct"] = by_model_acct;
