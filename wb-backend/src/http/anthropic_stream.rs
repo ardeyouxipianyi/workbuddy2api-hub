@@ -91,7 +91,7 @@ fn record(
     let started_at = crate::sse::epoch_now() - started.elapsed().as_secs_f64();
     let first_ms = first_at.map(|at| ((at - started_at) * 1000.0) as i64);
     crate::record::record(
-        &app.recorder,
+        app,
         crate::record::Row {
             model: &ctx.model,
             stream: true,

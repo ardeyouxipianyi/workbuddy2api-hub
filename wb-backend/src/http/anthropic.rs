@@ -165,7 +165,7 @@ fn record_completed(
     usage: &Value,
 ) {
     crate::record::record(
-        &app.recorder,
+        app,
         crate::record::Row {
             model: &ctx.model,
             stream: false,

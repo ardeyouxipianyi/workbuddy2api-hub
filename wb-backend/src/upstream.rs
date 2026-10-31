@@ -339,7 +339,7 @@ pub async fn chat_stream(
         }
         let _ = tx.send(Ok(Frame::data(Bytes::from(tail)))).await;
         record::record(
-            &app.recorder,
+            app.as_ref(),
             record::Row {
                 model: &ctx.model,
                 stream: true,
@@ -416,7 +416,7 @@ pub async fn chat_once(
     let first_ms = aggregated.first_chunk_at.map(|at| ((at - started_at) * 1000.0) as i64);
     let usage = aggregated.client_usage();
     record::record(
-        &app.recorder,
+        app,
         record::Row {
             model: &ctx.model,
             stream: false,
@@ -446,7 +446,7 @@ fn record_failure(
     message: &str,
 ) -> crate::http::Resp {
     record::record(
-        &app.recorder,
+        app,
         record::Row {
             model: &ctx.model,
             stream: false,

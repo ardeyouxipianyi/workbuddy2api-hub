@@ -307,19 +307,12 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
-        (&Method::POST, "/panel/password") => not_ported("/panel/password"),
-        (&Method::GET, "/pricing") => json_resp(
-            StatusCode::OK,
-            &json!({
-                "interval_minutes": 0, "enabled": false, "master_enabled": false,
-                "running": false, "last_run": Value::Null, "last_run_label": "",
-                "next_run": Value::Null, "next_run_label": "", "last_error": "",
-                "last_models": [], "last_extra": {}, "policies": [], "variants": [],
-                // 价格刷新属于 tasks/ops 组，还没移植：这里如实报告「未启用」，
-                // 而不是伪造一份看起来正常的价格表。
-                "ported": false,
-            }),
-        ),
+        (&Method::GET, "/pricing") | (&Method::POST, "/pricing/refresh") => {
+            match crate::pricing_panel::handle(app, req).await {
+                Some(resp) => resp,
+                None => not_ported("/pricing"),
+            }
+        }
         (&Method::GET, "/tasks") => crate::panel_read::tasks(app, &req).await,
         (&Method::GET, "/activity/history") => {
             let q = req.uri().query().unwrap_or("");

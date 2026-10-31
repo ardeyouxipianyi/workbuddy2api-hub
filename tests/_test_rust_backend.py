@@ -24,9 +24,7 @@ BINARY = next((p for p in CANDIDATES if os.path.exists(p)), None)
 #: （用例会报「把它们从 *_TODO 里删掉」），免得这份清单慢慢变成永远为真的假话。
 # 协议面已经全绿；这张表留着给下一批缺口用，空着就说明一条都不欠。
 PROTOCOL_TODO = set()
-PANEL_TODO = {
-    "/pricing",
-}
+PANEL_TODO = set()
 
 
 def _name(problem):
