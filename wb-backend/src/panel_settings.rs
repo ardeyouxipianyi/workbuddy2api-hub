@@ -1,0 +1,374 @@
+//! Runtime settings view with the same stable shape as `wb_settings.runtime_settings_view`.
+
+use std::sync::Arc;
+
+use hyper::StatusCode;
+use serde_json::{json, Map, Value};
+
+use crate::http::{json_resp, Resp};
+use crate::App;
+
+const DEFAULT_SCHEDULE_CHECKIN: &[i64] = &[9, 21];
+const DEFAULT_SCHEDULE_TRAVEL: &[i64] = &[9, 21];
+const DEFAULT_SCHEDULE_KEEPALIVE: &[i64] = &[22];
+const DEFAULT_SCHEDULE_CAT: &[i64] = &[1];
+const DEFAULT_DAILY_CHAT_TIMES: &[&str] = &["06:05", "18:05"];
+fn int_setting(settings: &Map<String, Value>, key: &str, default: i64, max: i64) -> i64 {
+    settings
+        .get(key)
+        .and_then(Value::as_i64)
+        .filter(|value| *value >= 0)
+        .unwrap_or(default)
+        .min(max)
+}
+
+fn number_setting(settings: &Map<String, Value>, key: &str, default: f64, max: f64) -> f64 {
+    settings
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|value| *value >= 0.0)
+        .unwrap_or(default)
+        .min(max)
+}
+
+fn bool_setting(settings: &Map<String, Value>, key: &str, default: bool) -> bool {
+    settings
+        .get(key)
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn string_setting<'a>(settings: &'a Map<String, Value>, key: &str, default: &'a str) -> &'a str {
+    settings.get(key).and_then(Value::as_str).unwrap_or(default)
+}
+
+fn mask(value: &str) -> String {
+    if value.len() > 8 {
+        format!("{}******{}", &value[..4], &value[value.len() - 4..])
+    } else {
+        "*".repeat(value.len())
+    }
+}
+
+fn api_keys(settings: &Map<String, Value>, deleted: bool) -> Vec<Value> {
+    settings
+        .get("api_keys")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|entry| entry.get("deleted_at").is_some() == deleted)
+                .map(|entry| {
+                    let raw = entry.get("key").and_then(Value::as_str).unwrap_or("");
+                    if deleted {
+                        json!({
+                            "id": entry.get("id").and_then(Value::as_str).unwrap_or(""),
+                            "name": entry.get("name").and_then(Value::as_str).unwrap_or(""),
+                            "realm": entry.get("realm").and_then(Value::as_str).unwrap_or(""),
+                            "created_at": entry.get("created_at").and_then(Value::as_str).unwrap_or(""),
+                            "deleted_at": entry.get("deleted_at").and_then(Value::as_str).unwrap_or(""),
+                        })
+                    } else {
+                        json!({
+                            "id": entry.get("id").and_then(Value::as_str).unwrap_or(""),
+                            "name": entry.get("name").and_then(Value::as_str).unwrap_or(""),
+                            "realm": entry.get("realm").and_then(Value::as_str).unwrap_or(""),
+                            "models": string_list(entry.get("models"), usize::MAX),
+                            "accounts": string_list(entry.get("accounts"), usize::MAX),
+                            "enabled": entry.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                            "masked": mask(raw),
+                            "source": entry.get("source").and_then(Value::as_str).unwrap_or("panel"),
+                            "created_at": entry.get("created_at").and_then(Value::as_str).unwrap_or(""),
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn string_list(value: Option<&Value>, limit: usize) -> Vec<String> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str().map(str::trim).filter(|text| !text.is_empty()) else {
+            continue;
+        };
+        if !out.iter().any(|seen| seen == text) {
+            out.push(text.to_string());
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn hours(settings: &Map<String, Value>, key: &str, default: &[i64]) -> Vec<i64> {
+    let value = settings
+        .get("schedule")
+        .and_then(Value::as_object)
+        .and_then(|schedule| schedule.get(key))
+        .and_then(Value::as_array);
+    let mut out: Vec<i64> = value
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_i64)
+        .filter(|hour| (0..=23).contains(hour))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    if out.is_empty() {
+        default.to_vec()
+    } else {
+        out
+    }
+}
+
+pub(crate) fn daily_chat_times(app: &App) -> Vec<String> {
+    let settings = app.state.settings_snapshot();
+    string_list(
+        settings
+            .get("schedule")
+            .and_then(Value::as_object)
+            .and_then(|schedule| schedule.get("daily_chat")),
+        24,
+    )
+}
+
+pub(crate) fn daily_chat_effective_times(app: &App) -> Vec<String> {
+    let explicit = daily_chat_times(app);
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    let settings = app.state.settings_snapshot();
+    let stored = string_list(
+        settings
+            .get("daily_chat_random")
+            .and_then(Value::as_object)
+            .and_then(|random| random.get("times")),
+        2,
+    );
+    if stored.is_empty() {
+        DEFAULT_DAILY_CHAT_TIMES
+            .iter()
+            .map(|time| (*time).to_string())
+            .collect()
+    } else {
+        stored
+    }
+}
+
+fn schedule(settings: &Map<String, Value>, app: &App) -> Value {
+    let explicit = daily_chat_times(app);
+    let effective = daily_chat_effective_times(app);
+    json!({
+        "checkin": hours(settings, "checkin", DEFAULT_SCHEDULE_CHECKIN),
+        "travel": hours(settings, "travel", DEFAULT_SCHEDULE_TRAVEL),
+        "keepalive": hours(settings, "keepalive", DEFAULT_SCHEDULE_KEEPALIVE),
+        "cat": hours(settings, "cat", DEFAULT_SCHEDULE_CAT),
+        "daily_chat": explicit,
+        "daily_chat_effective": effective,
+        "daily_chat_random": settings
+            .get("schedule")
+            .and_then(Value::as_object)
+            .and_then(|schedule| schedule.get("daily_chat"))
+            .and_then(Value::as_array)
+            .map(|items| items.is_empty())
+            .unwrap_or(true),
+    })
+}
+
+fn limits(settings: &Map<String, Value>) -> Map<String, Value> {
+    let stored = settings.get("limits").and_then(Value::as_object);
+    let mut out = Map::new();
+    for (key, default) in [
+        ("reserve_credits", 0),
+        ("daily_token_limit", 0),
+        ("daily_credit_limit", 0),
+        ("model_daily_token_limit", 0),
+        ("expiring_window_days", 7),
+    ] {
+        let entry = stored
+            .and_then(|values| values.get(key))
+            .and_then(Value::as_object);
+        let global = entry
+            .and_then(|value| value.get("global"))
+            .and_then(Value::as_i64)
+            .or_else(|| settings.get(key).and_then(Value::as_i64))
+            .unwrap_or(default)
+            .max(0);
+        let realm = |name: &str| {
+            entry
+                .and_then(|value| value.get(name))
+                .and_then(Value::as_i64)
+                .filter(|value| *value >= 0)
+                .map_or(Value::Null, |value| json!(value))
+        };
+        out.insert(
+            key.to_string(),
+            json!({"global": global.max(if key == "expiring_window_days" { 0 } else { 0 }), "intl": realm("intl"), "cn": realm("cn")}),
+        );
+    }
+    out
+}
+
+fn clean_products(settings: &Map<String, Value>) -> Vec<String> {
+    let values = string_list(settings.get("auto_switch_products"), 3);
+    let allowed = ["workbuddy", "vscode", "cli"];
+    if values.is_empty() {
+        allowed.iter().map(|value| (*value).to_string()).collect()
+    } else {
+        values
+            .into_iter()
+            .filter(|value| allowed.contains(&value.as_str()))
+            .collect()
+    }
+}
+
+fn web_prompts(settings: &Map<String, Value>) -> Vec<String> {
+    string_list(settings.get("daily_chat_web_prompts"), 500)
+}
+
+fn merge(out: &mut Map<String, Value>, group: Value) {
+    if let Value::Object(values) = group {
+        out.extend(values);
+    }
+}
+
+fn access_settings(settings: &Map<String, Value>) -> Value {
+    let live_keys = api_keys(&settings, false);
+    let deleted_keys = api_keys(&settings, true);
+    let global_key = std::env::var("WB_API_KEY").unwrap_or_default();
+    json!({
+        "panel_password_is_default": !settings.contains_key("panel_password_hash"),
+        "api_key_set": !global_key.is_empty(),
+        "api_key_set_by_panel": !live_keys.is_empty(),
+        "api_key_masked": mask(&global_key),
+        "auth_required": !global_key.is_empty() || !live_keys.is_empty(),
+        "api_keys": live_keys,
+        "deleted_api_keys": deleted_keys,
+    })
+}
+
+fn global_limit(limits: &Map<String, Value>, name: &str) -> Value {
+    limits
+        .get(name)
+        .and_then(|value| value.get("global"))
+        .cloned()
+        .unwrap_or(json!(0))
+}
+
+fn policy_settings(settings: &Map<String, Value>, app: &App) -> Value {
+    let limit_view = limits(settings);
+    json!({
+        "limits": limit_view,
+        "reserve_credits": global_limit(&limit_view, "reserve_credits"),
+        "daily_token_limit": global_limit(&limit_view, "daily_token_limit"),
+        "daily_credit_limit": global_limit(&limit_view, "daily_credit_limit"),
+        "model_daily_token_limit": global_limit(&limit_view, "model_daily_token_limit"),
+        "pricing_refresh_minutes": number_setting(&settings, "pricing_refresh_minutes", 5.0, 43_200.0),
+        "credits_refresh_hours": number_setting(&settings, "credits_refresh_hours", 12.0, 720.0),
+        "section_max_height": int_setting(&settings, "section_max_height", 640, 4_000),
+        "schedule": schedule(&settings, app),
+        "ui_language": string_setting(&settings, "ui_language", "zh"),
+        "pricing_variant_inherit": bool_setting(&settings, "pricing_variant_inherit", true),
+        "pricing_enabled": bool_setting(&settings, "pricing_enabled", true),
+        "auto_switch_product": bool_setting(&settings, "auto_switch_product", false),
+        "auto_switch_products": clean_products(&settings),
+        "free_model_credit_fallback": bool_setting(&settings, "free_model_credit_fallback", false),
+        "enable_anthropic_messages": bool_setting(&settings, "enable_anthropic_messages", false),
+        "filter_models_by_key": bool_setting(&settings, "filter_models_by_key", false),
+        "reasoning_effort_map": bool_setting(&settings, "reasoning_effort_map", true),
+        "models_only_available": bool_setting(&settings, "models_only_available", false),
+        "identity": crate::panel_defaults::identity(&settings),
+        "identity_version_defaults": crate::panel_defaults::identity_version_defaults(),
+    })
+}
+
+fn daily_chat_settings(settings: &Map<String, Value>) -> Value {
+    json!({
+        "daily_chat_web": bool_setting(&settings, "daily_chat_web", true),
+        "daily_chat_web_timeout": int_setting(&settings, "daily_chat_web_timeout", 120, 3_600),
+        "daily_chat_web_timeout_default": 120,
+        "daily_chat_web_timeout_max": 3_600,
+        "daily_chat_web_retry_backoff": number_setting(&settings, "daily_chat_web_retry_backoff", 5.0, 60.0),
+        "daily_chat_web_retry_backoff_default": 5.0,
+        "daily_chat_web_retry_backoff_max": 60,
+        "daily_chat_web_random_prompt": bool_setting(&settings, "daily_chat_web_random_prompt", false),
+        "daily_chat_web_prompts": web_prompts(&settings),
+        "daily_chat_web_builtin_prompts": crate::panel_defaults::builtin_prompts(),
+        "daily_chat_web_prompts_max": 500,
+        "daily_chat_models": string_list(settings.get("daily_chat_models"), 8),
+        "daily_chat_models_max": 8,
+        "daily_chat_budget": int_setting(&settings, "daily_chat_budget", 600, 7_200),
+        "daily_chat_budget_default": 600,
+        "daily_chat_budget_max": 7_200,
+        "daily_chat_startup_catchup": bool_setting(&settings, "daily_chat_startup_catchup", true),
+        "daily_chat_web_fallback_activity": bool_setting(&settings, "daily_chat_web_fallback_activity", false),
+    })
+}
+
+fn runtime_settings(settings: &Map<String, Value>, app: &Arc<App>) -> Value {
+    let prompt_defaults = json!({"mode": "passthrough", "file": "", "text": ""});
+    let upstream_defaults = json!({
+        "header_timeout_seconds": 120,
+        "idle_timeout_seconds": 300,
+        "device_token": "",
+        "device_token_file": "",
+    });
+    let usage_defaults = json!({"hour_keep_hours": 48, "day_keep_days": 32});
+    json!({
+        "local_web_tools": bool_setting(&settings, "local_web_tools", false),
+        "remaining_priority_enabled": bool_setting(&settings, "remaining_priority_enabled", false),
+        "egress_backoff_enabled": bool_setting(&settings, "egress_backoff_enabled", false),
+        "realm_fallback_enabled": bool_setting(&settings, "realm_fallback_enabled", false),
+        "account_max_concurrent": int_setting(&settings, "account_max_concurrent", 0, 10),
+        "account_max_concurrent_max": 10,
+        "account_inflight": {},
+        "affinity_stable_key_enabled": bool_setting(&settings, "affinity_stable_key_enabled", false),
+        "log_db_enabled": bool_setting(&settings, "log_db_enabled", false),
+        "log_db_max_rows": crate::panel_defaults::null_or_i64(settings.get("log_db_max_rows")),
+        "log_db_max_days": settings.get("log_db_max_days").and_then(Value::as_i64).unwrap_or(7),
+        "log_db_max_bytes": crate::panel_defaults::null_or_i64(settings.get("log_db_max_bytes")),
+        "accounts_collapsed": bool_setting(&settings, "accounts_collapsed", false),
+        "accounts_separate_tab": bool_setting(&settings, "accounts_separate_tab", false),
+        "key_before_hidden": bool_setting(&settings, "key_before_hidden", false),
+        "hidden_pages": string_list(settings.get("hidden_pages"), 32),
+        "update_check_enabled": bool_setting(&settings, "update_check_enabled", false),
+        "keep_backups": int_setting(&settings, "keep_backups", 1, 3),
+        "keep_backups_max": 3,
+        "upstream": crate::panel_defaults::mapping(&settings, "upstream", upstream_defaults),
+        "usage": crate::panel_defaults::mapping(&settings, "usage", usage_defaults),
+        "prompt": crate::panel_defaults::mapping(&settings, "prompt", prompt_defaults),
+        "window_probe": bool_setting(&settings, "window_probe", true),
+        "quota_scan_models": crate::quota::watched_models(app),
+        "quota_scan_interval_hours": crate::quota::scan_interval_hours(),
+        "quota_scans": crate::quota::scan_snapshot(app, 12),
+        "accounts_dir": app.state.accounts_dir_name(),
+        "usage_dir": app.state.usage_dir.display().to_string(),
+        "settings_file": app.state.accounts_dir.join("settings.json").display().to_string(),
+        "version": crate::VERSION,
+    })
+}
+
+pub fn view(app: &Arc<App>) -> Resp {
+    let settings = app.state.settings_snapshot();
+    let daily_chat = daily_chat_times(app);
+    let effective = daily_chat_effective_times(app);
+    let mut output = Map::new();
+    merge(&mut output, access_settings(&settings));
+    merge(&mut output, policy_settings(&settings, app));
+    merge(&mut output, daily_chat_settings(&settings));
+    merge(&mut output, runtime_settings(&settings, app));
+    if let Some(schedule) = output.get_mut("schedule").and_then(Value::as_object_mut) {
+        schedule.insert("daily_chat".into(), json!(daily_chat));
+        schedule.insert("daily_chat_effective".into(), json!(effective));
+        schedule.insert("daily_chat_random".into(), json!(daily_chat.is_empty()));
+    }
+    json_resp(StatusCode::OK, &Value::Object(output))
+}
+
+#[cfg(test)]
+mod tests;

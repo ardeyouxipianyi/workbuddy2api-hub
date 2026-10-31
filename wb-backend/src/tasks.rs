@@ -128,10 +128,7 @@ pub async fn growth_tasks(app: &Arc<App>, account: &AccountFile) -> Vec<Value> {
 
 /// 连续打卡 / 能量 / 补签卡 / 连登档位 / 抽奖次数 / 猫猫旅行。各端点独立失败。
 pub async fn growth_summary(app: &Arc<App>, account: &AccountFile) -> Value {
-    let mut out = json!({
-        "energy": 0, "streak_days": 0, "travel": {"state": "unknown"},
-        "makeup_cards": 0, "tiers": [], "tier_statuses": {}, "lottery_chances": 0,
-    });
+    let mut out = json!({"energy": 0, "streak_days": 0, "travel": {"state": "unknown"}});
     if let Ok(res) = get(app, account, "/v2/activity/growth/energy").await {
         out["energy"] = res.pointer("/data/balance").cloned().unwrap_or(json!(0));
     }
@@ -765,37 +762,4 @@ pub async fn daily_chat(app: &Arc<App>, uid: &str, uids: Option<&[String]>, trig
 pub async fn claim_one(app: &Arc<App>, account: &AccountFile, code: &str) -> Value {
     let (ok, credit, msg) = claim_task(app, account, code).await;
     json!({"ok": ok, "credit": credit, "msg": msg.unwrap_or_default()})
-}
-
-/// 面板 `/tasks` 的完整响应：挑一个国内版账号查，附带账号清单给下拉框。
-pub async fn view(app: &Arc<App>, uid: &str) -> Value {
-    let cn: Vec<AccountFile> = app
-        .state
-        .accounts_snapshot()
-        .into_iter()
-        .filter(|a| a.realm() == "cn" && !a.is_api_key())
-        .collect();
-    let target = cn
-        .iter()
-        .find(|a| a.uid() == uid)
-        .or_else(|| cn.first())
-        .cloned();
-    let now = crate::state::now_epoch();
-    let accounts: Vec<Value> = app
-        .state
-        .accounts_snapshot()
-        .iter()
-        .map(|a| crate::panel::account_view(a, now))
-        .collect();
-    let Some(account) = target else {
-        return json!({"tasks": [], "summary": {}, "account": Value::Null, "accounts": accounts});
-    };
-    let tasks = growth_tasks(app, &account).await;
-    let summary = growth_summary(app, &account).await;
-    json!({
-        "tasks": tasks,
-        "summary": summary,
-        "account": crate::panel::account_view(&account, now),
-        "accounts": accounts,
-    })
 }

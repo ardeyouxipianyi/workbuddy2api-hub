@@ -49,6 +49,32 @@ impl Scheduler {
     /// `GET /scheduler`：面板顶栏那个状态条。
     pub fn status(&self, app: &Arc<App>) -> Value {
         let now = crate::state::local_stamp();
+        let explicit_times = crate::panel_settings::daily_chat_times(app);
+        let effective = crate::panel_settings::daily_chat_effective_times(app);
+        let next_slot = effective.first().cloned().unwrap_or_default();
+        let logs: Vec<String> = app
+            .logs
+            .lock()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|entry| entry.get("tag").and_then(Value::as_str) == Some("scheduler"))
+                    .filter_map(|entry| {
+                        Some(format!(
+                            "[{}] {}",
+                            entry.get("time").and_then(Value::as_str)?,
+                            entry.get("msg").and_then(Value::as_str)?,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let settings = app.state.settings_snapshot();
+        let budget = settings
+            .get("daily_chat_budget")
+            .and_then(Value::as_i64)
+            .filter(|value| (0..=7_200).contains(value))
+            .unwrap_or(600);
         json!({
             "enabled": self.enabled(),
             "mode": "每日 09:00 签到与成长任务，每 6 小时刷新积分",
@@ -58,8 +84,16 @@ impl Scheduler {
             "next_run_time": next_run_label(&now),
             "windows": crate::quota::window_snapshot(app, 10),
             "quota_scans": crate::quota::scan_snapshot(app, 6),
-            "daily_chat": {},
-            "logs": [],
+            "daily_chat": {
+                "times": effective,
+                "random": explicit_times.is_empty(),
+                "done_slots": [],
+                "next_slot": next_slot,
+                "live": [],
+                "budget_s": budget,
+                "abandoned": 0,
+            },
+            "logs": logs,
         })
     }
 }
@@ -82,6 +116,7 @@ fn next_run_label(now: &str) -> String {
 /// 起一个 60 秒一跳的后台循环。
 pub fn spawn(app: Arc<App>) {
     tokio::spawn(async move {
+        app.log("scheduler", "INFO", "后台定时调度器已启动");
         let mut last_credit: i64 = crate::state::now_epoch();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;

@@ -13,6 +13,10 @@ use serde_json::{json, Value};
 
 use crate::{auth, health, models, App};
 
+/// Client address retained past hyper's connection layer for local-only routes.
+#[derive(Clone, Copy)]
+pub struct PeerAddr(pub std::net::IpAddr);
+
 /// 流式与非流式共用一种响应体：M1 的 `Full` 装不下 SSE 的增量写。
 pub type Resp = Response<BoxBody<Bytes, std::convert::Infallible>>;
 

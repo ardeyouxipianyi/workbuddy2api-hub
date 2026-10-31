@@ -141,18 +141,15 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             StatusCode::OK,
             &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
         ),
-        (&Method::GET, "/accounts") => accounts(app),
-        (&Method::GET, "/settings") => settings(app),
-        (&Method::GET, "/usage") => usage(app),
-        (&Method::GET, "/usage/timeseries") => usage_timeseries(app, &req),
-        (&Method::GET, "/usage/perf") => usage_perf(app),
-        (&Method::GET, "/usage/remaining") => json_resp(
-            StatusCode::OK,
-            &json!({"window_seconds": 86400, "budgets": [], "models": [], "rows": []}),
-        ),
-        (&Method::GET, "/usage/by-account") => usage_by_account(app),
-        (&Method::GET, "/usage/recent") => usage_recent(app, &req),
-        (&Method::GET, "/usage/analytics") => usage_analytics(app, &req),
+        (&Method::GET, "/accounts") => crate::panel_read::accounts(app, &req),
+        (&Method::GET, "/settings") => crate::panel_settings::view(app),
+        (&Method::GET, "/usage") => crate::panel_usage::overview(app, &req),
+        (&Method::GET, "/usage/timeseries") => crate::panel_usage::timeseries(app, &req),
+        (&Method::GET, "/usage/perf") => crate::panel_usage::perf(app, &req),
+        (&Method::GET, "/usage/remaining") => crate::panel_usage::remaining(app),
+        (&Method::GET, "/usage/by-account") => crate::panel_usage::by_account(app),
+        (&Method::GET, "/usage/recent") => crate::panel_usage::recent(app, &req),
+        (&Method::GET, "/usage/analytics") => crate::panel_usage::analytics(app, &req),
         (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
         (&Method::GET, "/accounts/credits/grants") => {
             json_resp(StatusCode::OK, &credit_grants(app))
@@ -230,16 +227,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 "ported": false,
             }),
         ),
-        (&Method::GET, "/tasks") => {
-            let uid = req
-                .uri()
-                .query()
-                .unwrap_or("")
-                .split('&')
-                .find_map(|p| p.strip_prefix("uid="))
-                .unwrap_or("");
-            json_resp(StatusCode::OK, &crate::tasks::view(app, uid).await)
-        }
+        (&Method::GET, "/tasks") => crate::panel_read::tasks(app, &req).await,
         (&Method::GET, "/activity/history") => {
             let q = req.uri().query().unwrap_or("");
             let get = |name: &str| {
@@ -252,9 +240,12 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 Err(e) => json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": e, "code": 400}})),
             }
         }
-        (&Method::GET, "/agents") => json_resp(StatusCode::OK, &crate::agents::overview(app)),
+        (&Method::GET, "/agents") => json_resp(StatusCode::OK, &crate::agents::overview(app, &req)),
         (&Method::GET, "/agents/available") => {
-            json_resp(StatusCode::OK, &json!({"models": crate::models::flat_ids()}))
+            json_resp(StatusCode::OK, &crate::agents::available(&req))
+        }
+        (&Method::GET, "/agents/model-selection") => {
+            json_resp(StatusCode::OK, &crate::agents::model_selection(app))
         }
         (&Method::POST, "/agents/model-selection") => {
             let body = crate::http::body_json(req).await.unwrap_or(json!({}));
@@ -280,29 +271,10 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             }),
         ),
         (&Method::GET, "/proxy/slots") => json_resp(StatusCode::OK, &json!({"slots": []})),
-        (&Method::GET, "/agents") | (&Method::GET, "/agents/available") => not_ported("/agents"),
         (&Method::POST, _) => not_ported(&path),
         _ => json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "not found", "code": 404}})),
     };
     Some(out)
-}
-
-/// `/accounts`：把账号档拍平成面板要的 58 个字段（`wb_accounts.py:1229 public()`）。
-fn accounts(app: &std::sync::Arc<App>) -> Resp {
-    let now = crate::state::now_epoch();
-    let mut list = Vec::new();
-    for account in app.state.accounts_snapshot() {
-        list.push(account_view(&account, now));
-    }
-    let usable = list
-        .iter()
-        .filter(|a| a.get("enabled").and_then(Value::as_bool).unwrap_or(false)
-            && !a.get("tokenExpired").and_then(Value::as_bool).unwrap_or(true))
-        .count();
-    json_resp(
-        StatusCode::OK,
-        &json!({"accounts": list, "storage": app.state.accounts_dir_name(), "usable": usable}),
-    )
 }
 
 /// 风控窗口剩余秒数；没有限制时回 null（面板按真假判断，`wb_accounts.py:1264`）。
@@ -335,7 +307,7 @@ pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Val
         "product": account.product(),
         "enterpriseId": raw.get("enterpriseId").and_then(Value::as_str).unwrap_or(""),
         "enabled": enabled,
-        "tasksEnabled": raw.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(true),
+        "tasksEnabled": raw.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(enabled),
         "weight": raw.get("weight").and_then(Value::as_i64).unwrap_or(1),
         "note": raw.get("note").and_then(Value::as_str).unwrap_or(""),
         "disabledModels": raw.get("disabledModels").cloned().unwrap_or(json!([])),
@@ -349,7 +321,7 @@ pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Val
         "tokenExpired": token_expired,
         "needRelogin": token_expired,
         "hasRefreshToken": !account.refresh_token().is_empty(),
-        "lastError": Value::Null,
+        "lastError": "",
         "lastErrorDetail": Value::Null,
         "inCooldown": false,
         "cooldownFor": Value::Null,
@@ -360,12 +332,12 @@ pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Val
         "breakerFor": Value::Null,
         "degradeFor": Value::Null,
         "fails": 0,
-        "failWindow": 1800,
+        "failWindow": 600,
         "lastFailFor": Value::Null,
         "addedAt": raw.get("addedAt").cloned().unwrap_or(Value::Null),
         "file": account.file_name(),
         "credits": raw.get("credits").cloned().unwrap_or(Value::Null),
-        "tier": raw.get("tier").cloned().unwrap_or(Value::Null),
+        "tier": raw.get("tier").filter(|value| value.is_object()).cloned().unwrap_or(Value::Null),
         "reserveCredits": raw.get("reserveCredits").and_then(Value::as_i64).unwrap_or(0),
         "reserveBlocked": false,
         "dailyTokenLimit": raw.get("dailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
@@ -376,9 +348,9 @@ pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Val
         "creditLimitReached": false,
         "modelDailyTokenLimit": raw.get("modelDailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
         "modelDailyTokens": Value::Null,
-        "lastCheckin": raw.get("lastCheckin").cloned().unwrap_or(Value::Null),
-        "lastDailyChat": raw.get("lastDailyChat").cloned().unwrap_or(Value::Null),
-        "lastActivityReport": raw.get("lastActivityReport").cloned().unwrap_or(Value::Null),
+        "lastCheckin": raw.get("lastCheckin").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
+        "lastDailyChat": raw.get("lastDailyChat").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
+        "lastActivityReport": raw.get("lastActivityReport").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
         "canCheckin": account.realm() == "cn",
         "canDailyChat": account.realm() == "intl",
         "canReportActivity": account.realm() == "cn" || account.realm() == "intl",
@@ -402,31 +374,6 @@ fn human_delta(seconds: i64) -> String {
     format!("{} min", seconds / 60)
 }
 
-/// `/settings`：settings.json 原样 + 面板要的几个派生键。
-fn settings(app: &std::sync::Arc<App>) -> Resp {
-    let state = app.state.settings_snapshot();
-    let mut out = state;
-    let keys = out.get("api_keys").and_then(Value::as_array).cloned().unwrap_or_default();
-    let live: Vec<Value> = keys
-        .iter()
-        .filter(|k| k.get("enabled").and_then(Value::as_bool).unwrap_or(true))
-        .cloned()
-        .collect();
-    out.insert("api_key_set".into(), json!(!live.is_empty()));
-    out.insert("api_key_set_by_panel".into(), json!(!live.is_empty()));
-    out.insert("api_key_masked".into(), json!(""));
-    out.insert("auth_required".into(), json!(!live.is_empty()));
-    out.insert("panel_password_is_default".into(), json!(false));
-    out.insert("realm".into(), json!(app.state.current_realm()));
-    out.insert("usd_cny".into(), json!(7.1));
-    // 模型额度：观察清单、周期与最近一次快照（面板「模型额度查询」区块）。
-    out.insert("window_probe".into(), json!(crate::quota::window_probe_enabled(app)));
-    out.insert("quota_scan_models".into(), json!(crate::quota::watched_models(app)));
-    out.insert("quota_scan_interval_hours".into(), json!(crate::quota::scan_interval_hours()));
-    out.insert("quota_scans".into(), json!(crate::quota::scan_snapshot(app, 12)));
-    json_resp(StatusCode::OK, &Value::Object(out))
-}
-
 /// `POST /quota-scan/run`：忽略查询间隔立刻查一轮。
 /// 已登记 429 窗口的配额线仍然不动（那几条交给窗口探针）。
 async fn quota_scan_run(app: &std::sync::Arc<App>) -> Resp {
@@ -437,363 +384,6 @@ async fn quota_scan_run(app: &std::sync::Arc<App>) -> Resp {
         "没有需要查询的配额线（未勾选模型或都已到下一次查询时刻）".to_string()
     };
     json_resp(StatusCode::OK, &json!({"ok": true, "sent": sent, "msg": msg}))
-}
-
-fn read_usage(path: &std::path::Path) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .collect()
-}
-
-fn usage_rows(app: &std::sync::Arc<App>) -> Vec<Value> {
-    read_usage(&app.recorder_path())
-}
-
-/// `/usage`：面板顶部的总量卡片（26 个键，见 golden/panel/usage.json）。
-fn usage(app: &std::sync::Arc<App>) -> Resp {
-    let rows = usage_rows(app);
-    let mut totals = json!({
-        "requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
-        "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
-        "credit": 0.0, "cost_cny": 0.0, "cost_missing": {},
-        "started": crate::state::now_epoch(),
-        "by_model": {}, "by_model_realm": {}, "by_model_acct": {},
-        "ttft_ms_sum": 0, "ttft_samples": 0, "gen_ms_sum": 0, "gen_samples": 0,
-        "wall_ms_sum": 0, "wall_samples": 0,
-    });
-    let mut accounts_map = Map::new();
-    for row in &rows {
-        let n = |k: &str| row.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-        for key in ["prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens", "total_tokens"] {
-            let v = totals[key].as_i64().unwrap_or(0) + n(key);
-            totals[key] = json!(v);
-        }
-        totals["requests"] = json!(totals["requests"].as_i64().unwrap_or(0) + 1);
-        if row.get("outcome").and_then(Value::as_str) != Some("completed") {
-            totals["errors"] = json!(totals["errors"].as_i64().unwrap_or(0) + 1);
-        }
-        if let Some(t) = row.get("ttft_ms").and_then(|v| v.as_i64()) {
-            totals["ttft_ms_sum"] = json!(totals["ttft_ms_sum"].as_i64().unwrap_or(0) + t);
-            totals["ttft_samples"] = json!(totals["ttft_samples"].as_i64().unwrap_or(0) + 1);
-        }
-        if let Some(t) = row.get("gen_ms").and_then(|v| v.as_i64()) {
-            totals["gen_ms_sum"] = json!(totals["gen_ms_sum"].as_i64().unwrap_or(0) + t);
-            totals["gen_samples"] = json!(totals["gen_samples"].as_i64().unwrap_or(0) + 1);
-        }
-        if let Some(t) = row.get("elapsed_ms").and_then(|v| v.as_i64()) {
-            totals["wall_ms_sum"] = json!(totals["wall_ms_sum"].as_i64().unwrap_or(0) + t);
-            totals["wall_samples"] = json!(totals["wall_samples"].as_i64().unwrap_or(0) + 1);
-        }
-        if let Some(account) = row.get("account").and_then(Value::as_str) {
-            let realm = row.get("realm").and_then(Value::as_str).unwrap_or("");
-            accounts_map.insert(account.to_string(), json!({"nickname": account, "realm": realm}));
-        }
-    }
-    totals["since"] = json!(rows
-        .first()
-        .and_then(|r| r.get("iso").and_then(Value::as_str))
-        .unwrap_or(""));
-    totals["log_file"] = json!(app.recorder_path().display().to_string());
-    totals["realm"] = json!(app.state.current_realm());
-    totals["usd_cny"] = json!(7.1);
-    totals["accounts_map"] = Value::Object(accounts_map);
-    json_resp(StatusCode::OK, &totals)
-}
-
-/// `/usage/timeseries`：按小时桶聚合（形状见 golden/panel/usage-timeseries.json）。
-fn usage_timeseries(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
-    let query = req.uri().query().unwrap_or("");
-    let mut bucket: i64 = 3600;
-    for pair in query.split('&') {
-        if let Some(v) = pair.strip_prefix("bucket=") {
-            bucket = v.parse().unwrap_or(3600).max(60);
-        }
-    }
-    let rows = usage_rows(app);
-    let until = crate::state::now_epoch();
-    let since = until as f64 - 24.0 * 3600.0;
-    let mut buckets: std::collections::BTreeMap<i64, (i64, i64)> = Default::default();
-    for row in &rows {
-        let at = row.get("at").and_then(Value::as_f64).unwrap_or(0.0);
-        if at < since {
-            continue;
-        }
-        let slot = ((at / bucket as f64).floor() as i64) * bucket;
-        let entry = buckets.entry(slot).or_insert((0, 0));
-        entry.0 += 1;
-        entry.1 += row.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
-    }
-    let series: Vec<Value> = buckets
-        .into_iter()
-        .map(|(at, (requests, tokens))| json!({"at": at, "requests": requests, "total_tokens": tokens}))
-        .collect();
-    json_resp(
-        StatusCode::OK,
-        &json!({
-            "ok": true,
-            "realm": app.state.current_realm(),
-            "bucket_seconds": bucket,
-            "since": since,
-            "until": until,
-            "series": series,
-            "credits": [],
-        }),
-    )
-}
-
-/// `/usage/perf`：延迟/成功率（15 个键）。
-fn usage_perf(app: &std::sync::Arc<App>) -> Resp {
-    let rows = usage_rows(app);
-    let sampled = rows.len() as i64;
-    let mut success = 0;
-    let mut errors = 0;
-    let mut aborted = 0;
-    let mut ttft = Vec::new();
-    let mut gen = Vec::new();
-    let mut wall = Vec::new();
-    for row in &rows {
-        match row.get("outcome").and_then(Value::as_str) {
-            Some("completed") => success += 1,
-            Some("client_aborted") => aborted += 1,
-            _ => errors += 1,
-        }
-        for (key, bucket) in [("ttft_ms", &mut ttft), ("gen_ms", &mut gen), ("elapsed_ms", &mut wall)] {
-            if let Some(v) = row.get(key).and_then(|v| v.as_i64()) {
-                bucket.push(v as f64);
-            }
-        }
-    }
-    let avg = |v: &Vec<f64>| {
-        if v.is_empty() {
-            Value::Null
-        } else {
-            json!((v.iter().sum::<f64>() / v.len() as f64).round())
-        }
-    };
-    json_resp(
-        StatusCode::OK,
-        &json!({
-            "sampled": sampled,
-            "sample_from": rows.first().and_then(|r| r.get("iso").cloned()).unwrap_or(Value::Null),
-            "sample_capped": false,
-            "success": success,
-            "errors": errors,
-            "client_aborted": aborted,
-            "success_rate_pct": if sampled > 0 { json!((success as f64 * 100.0 / sampled as f64).round()) } else { Value::Null },
-            "ttft_ms": avg(&ttft),
-            "generation_ms": avg(&gen),
-            "wall_ms": avg(&wall),
-            "tokens_per_sec": Value::Null,
-            "cache_hit_pct": Value::Null,
-            "by_model": {},
-            "by_model_realm": {},
-            "by_model_acct": {},
-        }),
-    )
-}
-
-fn usage_by_account(app: &std::sync::Arc<App>) -> Resp {
-    let rows = usage_rows(app);
-    let mut map: std::collections::BTreeMap<String, Value> = Default::default();
-    for row in &rows {
-        let Some(account) = row.get("account").and_then(Value::as_str) else { continue };
-        let entry = map.entry(account.to_string()).or_insert_with(|| json!({
-            "requests": 0, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
-        }));
-        if let Some(obj) = entry.as_object_mut() {
-            for key in ["requests", "total_tokens", "prompt_tokens", "completion_tokens"] {
-                let add = if key == "requests" {
-                    1
-                } else {
-                    row.get(key).and_then(Value::as_i64).unwrap_or(0)
-                };
-                let current = obj.get(key).and_then(Value::as_i64).unwrap_or(0);
-                obj.insert(key.into(), json!(current + add));
-            }
-        }
-    }
-    // 面板要的是**数组**（`(byAcct.accounts||[]).forEach(a => USAGE_BY_ACCOUNT[a.account]=a)`），
-    // 返回 map 会在前端抛 TypeError，而那行被 try/catch 包着，表现就是「账号列表 0/0」。
-    let accounts: Vec<Value> = map
-        .into_iter()
-        .map(|(account, stats)| {
-            let mut obj = match stats {
-                Value::Object(o) => o,
-                _ => Map::new(),
-            };
-            obj.insert("account".into(), json!(account));
-            Value::Object(obj)
-        })
-        .collect();
-    json_resp(StatusCode::OK, &json!({"accounts": accounts}))
-}
-
-/// `/usage/recent`：最近请求表（`{total,page,limit,total_pages,usd_cny,rows}`）。
-fn usage_recent(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
-    let query = req.uri().query().unwrap_or("");
-    let mut limit = 20usize;
-    let mut page = 1usize;
-    for pair in query.split('&') {
-        if let Some(v) = pair.strip_prefix("limit=") {
-            limit = v.parse().unwrap_or(20).clamp(1, 500);
-        }
-        if let Some(v) = pair.strip_prefix("page=") {
-            page = v.parse().unwrap_or(1).max(1);
-        }
-    }
-    let mut rows = usage_rows(app);
-    rows.reverse();
-    let total = rows.len();
-    let start = (page - 1) * limit;
-    let slice: Vec<Value> = rows.into_iter().skip(start).take(limit).collect();
-    json_resp(
-        StatusCode::OK,
-        &json!({
-            "total": total,
-            "page": page,
-            "limit": limit,
-            "total_pages": if total == 0 { 1 } else { (total + limit - 1) / limit },
-            "usd_cny": 7.1,
-            "rows": slice,
-        }),
-    )
-}
-
-/// 一段时间的汇总（`/usage/analytics` 的 summary.window 与 all_time 用同一套键）。
-fn bucket_of(rows: &[&Value]) -> Value {
-    let sum = |key: &str| -> i64 { rows.iter().map(|r| r.get(key).and_then(|v| v.as_i64()).unwrap_or(0)).sum() };
-    let requests = rows.len() as i64;
-    let errors = rows.iter().filter(|r| r.get("outcome").and_then(Value::as_str) != Some("completed")).count() as i64;
-    let prompt = sum("prompt_tokens");
-    let completion = sum("completion_tokens");
-    let total = sum("total_tokens");
-    let cached = sum("cached_tokens");
-    let ttft_n = rows.iter().filter(|r| r.get("ttft_ms").is_some()).count() as i64;
-    let ttft_sum: i64 = rows.iter().filter_map(|r| r.get("ttft_ms").and_then(|v| v.as_i64())).sum();
-    let elapsed_n = rows.iter().filter(|r| r.get("elapsed_ms").is_some()).count() as i64;
-    let elapsed_sum: i64 = rows.iter().filter_map(|r| r.get("elapsed_ms").and_then(|v| v.as_i64())).sum();
-    let speed_n = rows.iter().filter(|r| r.get("tokens_per_sec").is_some()).count() as i64;
-    let speed_sum: f64 = rows.iter().filter_map(|r| r.get("tokens_per_sec").and_then(|v| v.as_f64())).sum();
-    json!({
-        "requests": requests,
-        "errors": errors,
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "reasoning_tokens": sum("reasoning_tokens"),
-        "cached_tokens": cached,
-        "total_tokens": total,
-        "credit": 0.0,
-        "cost_cny": 0.0,
-        "ttft_sum": ttft_sum as f64,
-        "ttft_n": ttft_n,
-        "speed_sum": speed_sum,
-        "speed_n": speed_n,
-        "elapsed_sum": elapsed_sum as f64,
-        "elapsed_n": elapsed_n,
-        "cache_hit_pct": if total > 0 { (cached as f64 * 100.0 / total as f64 * 10.0).round() / 10.0 } else { 0.0 },
-        "reasoning_ratio": 0.0,
-        "ttft_ms_avg": if ttft_n > 0 { ttft_sum / ttft_n } else { 0 },
-        "speed_avg": if speed_n > 0 { (speed_sum / speed_n as f64 * 10.0).round() / 10.0 } else { 0.0 },
-        "elapsed_ms_avg": if elapsed_n > 0 { elapsed_sum / elapsed_n } else { 0 },
-    })
-}
-
-/// `/usage/analytics`：summary + 按账号/模型/Key 拆分。
-fn usage_analytics(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
-    let query = req.uri().query().unwrap_or("");
-    let realm_filter: Option<&str> = query
-        .split('&')
-        .find_map(|p| p.strip_prefix("realm="))
-        .filter(|v| !v.is_empty());
-    let all = usage_rows(app);
-    let until = crate::state::now_epoch() as f64;
-    let since = until - 24.0 * 3600.0;
-    let pick = |rows: &[Value], from: f64| -> Vec<Value> {
-        rows.iter()
-            .filter(|r| r.get("at").and_then(|v| v.as_f64()).unwrap_or(0.0) >= from)
-            .filter(|r| match realm_filter {
-                Some(want) => r.get("realm").and_then(Value::as_str) == Some(want),
-                None => true,
-            })
-            .cloned()
-            .collect()
-    };
-    let window_rows = pick(&all, since);
-    let all_rows = pick(&all, 0.0);
-    let win_refs: Vec<&Value> = window_rows.iter().collect();
-    let all_refs: Vec<&Value> = all_rows.iter().collect();
-
-    let accounts_meta = app.state.accounts_snapshot();
-    let mut accounts_out = Vec::new();
-    for account in &accounts_meta {
-        let uid = account.uid();
-        let mine: Vec<&Value> = win_refs
-            .iter()
-            .copied()
-            .filter(|r| r.get("account").and_then(Value::as_str) == Some(uid.as_str()))
-            .collect();
-        let mine_all: Vec<&Value> = all_refs
-            .iter()
-            .copied()
-            .filter(|r| r.get("account").and_then(Value::as_str) == Some(uid.as_str()))
-            .collect();
-        accounts_out.push(json!({
-            "uid": uid,
-            "nickname": account.data.get("nickname").cloned().unwrap_or(Value::Null),
-            "realm": account.realm(),
-            "domain": account.domain(),
-            "credits": account.data.get("credits").cloned().unwrap_or(Value::Null),
-            "window": bucket_of(&mine),
-            "all_time": bucket_of(&mine_all),
-            "window_models": [],
-            "all_models": [],
-        }));
-    }
-
-    let settings = app.state.settings_snapshot();
-    let mut keys_out = Vec::new();
-    if let Some(keys) = settings.get("api_keys").and_then(Value::as_array) {
-        for key in keys {
-            let id = key.get("id").and_then(Value::as_str).unwrap_or("");
-            let short: String = id.chars().take(12).collect();
-            let mine: Vec<&Value> = win_refs
-                .iter()
-                .copied()
-                .filter(|r| r.get("key").and_then(Value::as_str) == Some(id))
-                .collect();
-            let mine_all: Vec<&Value> = all_refs
-                .iter()
-                .copied()
-                .filter(|r| r.get("key").and_then(Value::as_str) == Some(id))
-                .collect();
-            keys_out.push(json!({
-                "key": short,
-                "name": key.get("name").cloned().unwrap_or(Value::Null),
-                "realm": key.get("realm").and_then(Value::as_str).unwrap_or(""),
-                "enabled": key.get("enabled").and_then(Value::as_bool).unwrap_or(true),
-                "source": key.get("source").and_then(Value::as_str).unwrap_or("panel"),
-                "window": bucket_of(&mine),
-                "all_time": bucket_of(&mine_all),
-            }));
-        }
-    }
-
-    json_resp(
-        StatusCode::OK,
-        &json!({
-            "window": {"since": since, "until": until},
-            "realm": realm_filter.unwrap_or(""),
-            "usd_cny": 7.1,
-            "summary": {"window": bucket_of(&win_refs), "all_time": bucket_of(&all_refs)},
-            "accounts": accounts_out,
-            "models": [],
-            "keys": keys_out,
-        }),
-    )
 }
 
 /// `/accounts/credits`：账号档 + `credits`（积分形状与 panel 一致，值来自账号文件）。

@@ -124,7 +124,7 @@ pub fn record(recorder: &Recorder, row: Row<'_>) {
         out.insert("reasoning_effort".into(), json!(effort));
     }
     if let Some(gen_ms) = row.gen_ms {
-        if gen_ms > 0 {
+        if gen_ms != 0 {
             let tps = (completion_tokens as f64 / (gen_ms as f64 / 1000.0) * 100.0).round() / 100.0;
             out.insert("tokens_per_sec".into(), json!(tps));
         }

@@ -27,17 +27,56 @@ pub fn lookup(realm: &str, model: &str) -> Option<Value> {
     items.into_iter().find(|m| m.get("id").and_then(Value::as_str) == Some(model))
 }
 
-/// 全部模型 id（intl + cn 去重），智能体配置的模型选择器用。
-pub fn flat_ids() -> Vec<String> {
+/// Model descriptors for the agent-config picker. Objects carry the catalog
+/// limits and capabilities clients use; duplicate ids across realms keep the
+/// first (international) entry.
+pub fn agent_models() -> Vec<Value> {
     let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
     for realm in ["intl", "cn"] {
         for item in entries(realm) {
-            if let Some(id) = item.get("id").and_then(Value::as_str) {
-                seen.insert(id.to_string());
+            let Some(id) = item.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if !seen.insert(id.to_string()) {
+                continue;
             }
+            let mut model = Map::new();
+            if let Some(value) = item
+                .get("max_input_tokens")
+                .or_else(|| item.get("context_length"))
+                .and_then(Value::as_i64)
+            {
+                model.insert("context_window".into(), json!(value));
+            }
+            if let Some(value) = item
+                .get("max_output_tokens")
+                .or_else(|| item.get("max_completion_tokens"))
+                .and_then(Value::as_i64)
+            {
+                model.insert("max_output".into(), json!(value));
+            }
+            if let Some(value) = item.get("name").and_then(Value::as_str) {
+                model.insert("name".into(), json!(value));
+            }
+            if item
+                .get("supports_vision")
+                .or_else(|| item.get("supports_images"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                model.insert("supports_vision".into(), json!(true));
+            }
+            if let Some(efforts) = item.get("reasoning_efforts").and_then(Value::as_array) {
+                let efforts: Vec<Value> = efforts.iter().filter(|value| value.is_string()).cloned().collect();
+                if !efforts.is_empty() {
+                    model.insert("reasoning_efforts".into(), Value::Array(efforts));
+                }
+            }
+            out.push(Value::Object(model));
         }
     }
-    seen.into_iter().collect()
+    out
 }
 
 fn entries(realm: &str) -> Vec<Value> {

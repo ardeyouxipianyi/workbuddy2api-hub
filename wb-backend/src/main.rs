@@ -15,6 +15,10 @@ mod models;
 mod activity;
 mod agents;
 mod panel;
+mod panel_defaults;
+mod panel_read;
+mod panel_settings;
+mod panel_usage;
 mod scheduler;
 mod pool;
 mod quota;
@@ -148,15 +152,16 @@ async fn main() -> std::io::Result<()> {
     );
 
     loop {
-        let (stream, _peer) = match listener.accept().await {
+        let (stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(_) => continue,
         };
         let app = app.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
-            let service = service_fn(move |req: Request<Incoming>| {
+            let service = service_fn(move |mut req: Request<Incoming>| {
                 let app = app.clone();
+                req.extensions_mut().insert(http::PeerAddr(peer.ip()));
                 async move { Ok::<_, std::convert::Infallible>(http::route(app, req).await) }
             });
             let _ = hyper::server::conn::http1::Builder::new()
