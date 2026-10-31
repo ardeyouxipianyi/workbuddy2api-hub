@@ -46,10 +46,15 @@ impl Config {
         let cache_dir = env("WB_PROXY_CATALOG_DIR")
             .filter(|v| !v.trim().is_empty())
             .map(PathBuf::from)
+            // 部署后的正确位置是「可执行文件旁边的 catalog/」（Python 也是按
+            // __file__ 取）。用 CARGO_MANIFEST_DIR 会把编译机上的路径烧进二进制：
+            // CT412 上于是往 /home/ytjungle/workbuddy2api-hub/catalog 写缓存，
+            // 两端各写各的，谁也读不到对方的。
             .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+                    .unwrap_or_else(|| Path::new(".").to_path_buf())
                     .join("catalog")
             });
         let list = |name: &str, default: &str| {
