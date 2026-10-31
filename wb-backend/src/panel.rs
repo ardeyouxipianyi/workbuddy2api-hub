@@ -102,25 +102,86 @@ fn client_ip<B>(req: &Request<B>) -> String {
     let peer = req
         .extensions()
         .get::<crate::http::PeerAddr>()
-        .map(|p| p.0.to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let loopback = peer == "127.0.0.1" || peer == "::1" || peer == "::ffff:127.0.0.1";
-    if !loopback {
-        return peer;
+        .map(|p| p.0)
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    // 公网客户端不能靠伪造头换桶：只有回环或 WB_TRUSTED_PROXIES 里的对端才配代表别人说话。
+    if !peer_trusted(peer) {
+        return peer.to_string();
     }
-    if let Some(v) = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        if !v.trim().is_empty() {
-            return v.trim().to_string();
+    let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+    if let Some(real) = header("x-real-ip").and_then(header_ip) {
+        return real;
+    }
+    if let Some(first) = header("x-forwarded-for").and_then(|v| v.split(',').next()).and_then(header_ip) {
+        return first;
+    }
+    peer.to_string()
+}
+
+/// `WB_TRUSTED_PROXIES`：逗号分隔的 IP 或 CIDR（`10.0.0.0/8,fd00::/8`），解析不了就丢。
+fn trusted_nets() -> &'static Vec<(std::net::IpAddr, u8)> {
+    static NETS: std::sync::OnceLock<Vec<(std::net::IpAddr, u8)>> = std::sync::OnceLock::new();
+    NETS.get_or_init(|| parse_trusted(&std::env::var("WB_TRUSTED_PROXIES").unwrap_or_default()))
+}
+
+fn parse_trusted(raw: &str) -> Vec<(std::net::IpAddr, u8)> {
+    raw.split(',')
+        .filter_map(|item| {
+            let item = item.trim();
+            let (addr, prefix) = match item.split_once('/') {
+                Some((a, p)) => (a.trim().parse().ok()?, p.trim().parse().ok()?),
+                None => {
+                    let addr: std::net::IpAddr = item.parse().ok()?;
+                    (addr, if addr.is_ipv4() { 32 } else { 128 })
+                }
+            };
+            let max = if addr.is_ipv4() { 32 } else { 128 };
+            (prefix <= max).then_some((addr, prefix))
+        })
+        .collect()
+}
+
+fn peer_trusted(peer: std::net::IpAddr) -> bool {
+    // Windows 双栈下连 127.0.0.1 的对端会显示成 ::ffff:127.0.0.1，也要算本机。
+    let mapped_loopback = match peer {
+        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(|v4| v4.is_loopback()).unwrap_or(false),
+        _ => false,
+    };
+    if peer.is_loopback() || mapped_loopback {
+        return true;
+    }
+    trusted_nets().iter().any(|(net, prefix)| in_net(peer, *net, *prefix))
+}
+
+fn in_net(ip: std::net::IpAddr, net: std::net::IpAddr, prefix: u8) -> bool {
+    match (ip, net) {
+        (std::net::IpAddr::V4(a), std::net::IpAddr::V4(b)) => {
+            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix as u32) };
+            (u32::from(a) & mask) == (u32::from(b) & mask)
         }
-    }
-    if let Some(v) = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = v.split(',').next() {
-            if !first.trim().is_empty() {
-                return first.trim().to_string();
-            }
+        (std::net::IpAddr::V6(a), std::net::IpAddr::V6(b)) => {
+            let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix as u32) };
+            (u128::from(a) & mask) == (u128::from(b) & mask)
         }
+        _ => false,
     }
-    peer
+}
+
+/// 代理头里的一个 IP：接受 `1.2.3.4`、`1.2.3.4:8080`、`[::1]`、`[::1]:80`；其余一律不认。
+fn header_ip(raw: &str) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > 64 || text.contains(',') {
+        return None;
+    }
+    let text = if let Some(rest) = text.strip_prefix('[') {
+        rest.split_once(']')?.0
+    } else if text.matches(':').count() == 1 {
+        let (host, port) = text.split_once(':')?;
+        if port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() { host } else { return None }
+    } else {
+        text
+    };
+    text.parse::<std::net::IpAddr>().ok().map(|ip| ip.to_string())
 }
 
 fn token_of(req: &Request<Incoming>) -> Option<String> {
@@ -1287,5 +1348,35 @@ mod login_limit_tests {
         req.extensions_mut()
             .insert(crate::http::PeerAddr(std::net::IpAddr::from([127, 0, 0, 1])));
         assert_eq!(client_ip(&req), "203.0.113.7");
+    }
+
+    #[test]
+    fn cidrs_in_wb_trusted_proxies_may_speak_for_their_clients() {
+        let nets = parse_trusted("10.0.0.0/8, fd00::/8, junk, 10.1.2.3/99, 192.168.1.5");
+        assert_eq!(nets.len(), 3, "junk 与越界的 /99 要被丢掉，裸 IP 当 /32");
+        assert!(in_net("10.9.8.7".parse().unwrap(), "10.0.0.0".parse().unwrap(), 8));
+        assert!(!in_net("11.0.0.1".parse().unwrap(), "10.0.0.0".parse().unwrap(), 8));
+        assert!(in_net("fd00::1".parse().unwrap(), "fd00::".parse().unwrap(), 8));
+        assert!(!in_net("fe80::1".parse().unwrap(), "fd00::".parse().unwrap(), 8));
+        assert!(in_net("192.168.1.5".parse().unwrap(), "192.168.1.5".parse().unwrap(), 32));
+        assert!(!in_net("192.168.1.6".parse().unwrap(), "192.168.1.5".parse().unwrap(), 32));
+    }
+
+    #[test]
+    fn proxy_headers_strip_ports_and_refuse_garbage() {
+        assert_eq!(header_ip("203.0.113.7"), Some("203.0.113.7".into()));
+        assert_eq!(header_ip("203.0.113.7:8080"), Some("203.0.113.7".into()));
+        assert_eq!(header_ip("[2001:db8::1]:443"), Some("2001:db8::1".into()));
+        assert_eq!(header_ip("[2001:db8::1]"), Some("2001:db8::1".into()));
+        assert_eq!(header_ip("1.2.3.4, 5.6.7.8"), None);
+        assert_eq!(header_ip("not-an-ip"), None);
+        assert_eq!(header_ip(""), None);
+        assert_eq!(header_ip(&"9".repeat(80)), None);
+    }
+
+    #[test]
+    fn ipv4_mapped_loopback_counts_as_the_local_machine() {
+        let mapped: std::net::IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(peer_trusted(mapped));
     }
 }
