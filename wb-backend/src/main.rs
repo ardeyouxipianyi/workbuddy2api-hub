@@ -13,6 +13,7 @@ mod identity;
 mod http;
 mod models;
 mod activity;
+pub mod agentcfg;
 mod agents;
 mod panel;
 mod scheduler;
