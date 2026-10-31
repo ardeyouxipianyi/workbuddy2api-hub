@@ -166,7 +166,11 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         }
         let body = crate::http::body_json(req).await.ok()?;
         let given = body.get("password").and_then(Value::as_str).unwrap_or("");
-        if !app.panel.password_required() || given == app.panel.password() {
+        // Python 的口令在 settings.json（PBKDF2 哈希，缺省时是默认口令）；
+        // WB_PANEL_PASSWORD 是部署时的额外口令（launcher 把 --panel-password 转成它）。
+        // 两边都认，切后端才不会把人锁在外面。
+        let env_ok = app.panel.password_required() && given == app.panel.password();
+        if env_ok || crate::panel_password::verify_app(app, given) {
             app.panel.clear_login_failures(&ip);
             let token = crate::sse::hex_token(32);
             if let Ok(mut set) = app.panel.tokens.lock() {
@@ -236,6 +240,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::GET, "/usage/by-account") => crate::panel_usage::by_account(app),
         (&Method::GET, "/usage/recent") => crate::panel_usage::recent(app, &req),
         (&Method::GET, "/usage/analytics") => crate::panel_usage::analytics(app, &req),
+        (&Method::GET, "/egress") | (&Method::POST, "/egress") => crate::egress::handle(app, req).await,
+        (&Method::POST, "/catalog/refresh") => crate::catalog_refresh::handle(app, req).await,
+        (&Method::POST, "/panel/password") => crate::panel_password::handle(app, req).await,
         (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
         (&Method::GET, "/accounts/credits/grants") => {
             json_resp(StatusCode::OK, &credit_grants(app))
