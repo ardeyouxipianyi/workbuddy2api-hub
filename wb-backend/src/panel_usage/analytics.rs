@@ -267,8 +267,15 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realms = account_realms(app);
     let realm = query(req, "realm");
     let all_rows = rows_for_realm(&all, realm.unwrap_or("all"), &realms);
-    let since = query(req, "since").and_then(|value| value.parse::<f64>().ok());
-    let until = query(req, "until").and_then(|value| value.parse::<f64>().ok());
+    // 面板发的是 range=today|week|month（区间按钮），只有自定义区间才带 since/until。
+    // 只读 since/until 会让所有区间都落进「全时段」，就是「今天显示出全部数据」。
+    let (range_since, range_until) = range_bounds(req);
+    let since = query(req, "since")
+        .and_then(|value| value.parse::<f64>().ok())
+        .or(range_since);
+    let until = query(req, "until")
+        .and_then(|value| value.parse::<f64>().ok())
+        .or(range_until);
     let window_rows: Vec<&Value> = match (since, until) {
         (None, None) => all_rows.clone(),
         _ => all_rows

@@ -13,11 +13,15 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
     let selected = rows_for_realm(&rows, &realm, &realms);
+    // 同 analytics：range=today|week|month 是面板的区间按钮，必须换算成边界。
+    let (range_since, range_until) = range_bounds(req);
     let until = query(req, "until")
         .and_then(|value| value.parse::<f64>().ok())
+        .or(range_until)
         .unwrap_or_else(epoch_now);
     let since = query(req, "since")
         .and_then(|value| value.parse::<f64>().ok())
+        .or(range_since)
         .unwrap_or(until - DAY_SECONDS);
     let step = query(req, "bucket")
         .and_then(|value| value.parse::<i64>().ok())

@@ -128,18 +128,26 @@ fn overview_maps(rows: &[&Value], realms: &BTreeMap<String, String>) -> (Value, 
 
 fn add_overview_totals(totals: &mut Value, selected: &[&Value]) {
     for row in selected {
-        totals["requests"] = json!(integer(totals, "requests") + 1);
-        for key in [
-            "prompt_tokens",
-            "completion_tokens",
-            "reasoning_tokens",
-            "cached_tokens",
-            "total_tokens",
-        ] {
-            totals[key] = json!(integer(totals, key) + integer(row, key));
-        }
-        if outcome(row) != "completed" {
+        // Python 的口径：requests/tokens 只算 completed；失败行进 errors，但
+        // 只要上游已经扣过费（不是客户端中断）就要计入 credit —— 否则面板
+        // 「今日」的额度花销永远是 0。
+        if outcome(row) == "completed" {
+            totals["requests"] = json!(integer(totals, "requests") + 1);
+            for key in [
+                "prompt_tokens",
+                "completion_tokens",
+                "reasoning_tokens",
+                "cached_tokens",
+                "total_tokens",
+            ] {
+                totals[key] = json!(integer(totals, key) + integer(row, key));
+            }
+            totals["credit"] = json!(number(totals, "credit") + number(row, "credit"));
+        } else {
             totals["errors"] = json!(integer(totals, "errors") + 1);
+            if outcome(row) != "client_aborted" {
+                totals["credit"] = json!(number(totals, "credit") + number(row, "credit"));
+            }
         }
         for (source, sum_key, count_key) in [
             ("ttft_ms", "ttft_ms_sum", "ttft_samples"),

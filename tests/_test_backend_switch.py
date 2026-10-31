@@ -91,7 +91,7 @@ class Case(object):
                 fh.write(STUB)
             os.chmod(binary, 0o755)
 
-    def start(self, attempts=3):
+    def start(self, attempts=3, expect: "str | None" = "python"):
         """起 launcher；并行跑套件时端口可能被别的套件抢走，所以换端口重试。"""
         last = None
         for attempt in range(attempts):
@@ -104,7 +104,9 @@ class Case(object):
             self.log = open(os.path.join(self.tmp, "launcher-%d.log" % attempt), "w")
             self.proc = subprocess.Popen(argv, cwd=self.app, stdout=self.log, stderr=self.log)
             try:
-                self.wait_health("python")
+                # expect=None：故意让选中后端起不来时，不能等它变健康。
+                if expect is not None:
+                    self.wait_health(expect)
                 return self
             except AssertionError as exc:
                 last = exc
@@ -345,6 +347,31 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(result["backend"], "python")
         self.assertEqual(self.case.health()["backend"], "python")
         self.assertEqual(self.case.backend_file()["backend"], "python")
+
+    def test_crash_loop_keeps_the_selected_backend(self):
+        # 后端自己崩了要一直拉它，不能悄悄换成 python：否则「设置里选的是 rust」
+        # 和真正在跑的东西对不上，崩掉这件事也被藏起来了。
+        self.case.write_caps(True, with_binary=False)
+        binary = os.path.join(self.case.app, "wb-backend")
+        with open(binary, "w") as fh:
+            fh.write("#!/bin/sh\nexit 1\n")
+        os.chmod(binary, 0o755)
+        wb_backend.write_backend(self.case.accounts, "rust", reason="seed")
+        wb_backend.START_TIMEOUT = 1.0
+        wb_backend.CRASH_LIMIT = 2
+        self.addCleanup(setattr, wb_backend, "START_TIMEOUT", 30.0)
+        self.addCleanup(setattr, wb_backend, "CRASH_LIMIT", 3)
+        self.case.stop()
+        self.case.start(expect=None)
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            if "crash_loop" in [row["event"] for row in self.case.audit_events()]:
+                break
+            time.sleep(0.5)
+        events = [row["event"] for row in self.case.audit_events()]
+        self.assertIn("crash_loop", events)
+        self.assertNotIn("fallback", events)
+        self.assertEqual(self.case.backend_file()["backend"], "rust")
 
     def test_startup_falls_back_when_rust_is_not_ready(self):
         # 上次切到 rust 之后二进制被更新删掉了：launcher 必须回落并在启动时落盘。

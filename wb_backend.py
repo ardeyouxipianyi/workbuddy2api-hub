@@ -406,24 +406,20 @@ class Supervisor(object):
             self.exits = [t for t in self.exits if now - t < CRASH_WINDOW] + [now]
             log("%s backend exited (code %s), %d exit(s) in %.0fs"
                 % (self.current, code, len(self.exits), CRASH_WINDOW))
-            if len(self.exits) >= CRASH_LIMIT:
-                other = "python" if self.current == "rust" else "rust"
-                caps = capabilities(self.app_dir)
-                if other == "rust" and not caps["ported"]:
-                    log("no fallback backend available (rust not ready)")
-                else:
-                    log("too many crashes, falling back to %s" % other)
-                    write_backend(self.accounts_dir, other, reason="crash fallback")
-                    self.audit("fallback", backend=other, detail="%d crashes" % len(self.exits))
-                    self.exits = []
-                    self.start(other)
-                    self.wait_healthy(other)
-                    backoff = 1.0
-                    continue
+            if len(self.exits) == CRASH_LIMIT:
+                # 崩了就继续拉设置里选的那个后端，不自动换成另一个：悄悄换会让人
+                # 以为还在跑 rust（面板、日志、行为全对不上），也把「它崩了」藏起来。
+                log("%s 连续 %d 次退出，继续重试（换后端请用 /app/backend-switch）"
+                    % (self.current, len(self.exits)))
+                self.audit("crash_loop", backend=self.current,
+                           detail="%d crashes" % len(self.exits))
             time.sleep(backoff)
-            backoff = min(backoff * 2, 5.0)
+            # 稳定崩着的后端不要每 5 秒重拉一次，免得刷爆日志和端口。
+            backoff = min(backoff * 2, 30.0 if len(self.exits) >= CRASH_LIMIT else 5.0)
             self.start(self.current)
-            self.wait_healthy(self.current)
+            if self.wait_healthy(self.current) is not None:
+                self.exits = []
+                backoff = 1.0
         self.stop_child()
 
 

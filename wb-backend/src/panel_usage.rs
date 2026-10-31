@@ -12,14 +12,46 @@ use crate::App;
 
 const DAY_SECONDS: f64 = 86_400.0;
 
-fn read_rows(app: &App) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(app.recorder_path()) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
+fn read_rows(app: &App) -> Arc<Vec<Value>> {
+    load_rows(&app.recorder_path())
+}
+
+/// 解析结果按 (路径, mtime, 长度) 缓存一次，所有面板视图共用同一份。
+/// 以前每个请求都重读整份 usage.jsonl（16 MB → 约 55 MB 的 Value），面板每 5 秒
+/// 并发打 /usage、/usage/perf、/usage/analytics，几次叠起来就是 500 MB ——
+/// CT412 的内存就是这么爆的。
+fn load_rows(path: &std::path::Path) -> Arc<Vec<Value>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::path::PathBuf, u64, u64, Arc<Vec<Value>>)>> =
+        std::sync::OnceLock::new();
+    let stamp = std::fs::metadata(path)
+        .map(|meta| {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            (mtime, meta.len())
+        })
+        .unwrap_or((0, 0));
+    let cache = CACHE.get_or_init(|| {
+        std::sync::Mutex::new((std::path::PathBuf::new(), 0, 0, Arc::new(Vec::new())))
+    });
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if guard.0 == path && guard.1 == stamp.0 && guard.2 == stamp.1 {
+        return guard.3.clone();
+    }
+    let rows: Vec<Value> = std::fs::read_to_string(path)
+        .map(|text| {
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let shared = Arc::new(rows);
+    *guard = (path.to_path_buf(), stamp.0, stamp.1, shared.clone());
+    shared
 }
 
 fn query<'a>(req: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
@@ -210,7 +242,27 @@ pub use timeseries::timeseries;
 
 #[cfg(test)]
 mod tests {
-    use super::{python_weekday, range_bounds_query};
+    use super::{load_rows, python_weekday, range_bounds_query};
+    use std::sync::Arc;
+
+    #[test]
+    fn usage_rows_are_parsed_once_and_refreshed_on_change() {
+        let dir = std::env::temp_dir().join(format!("wb-rows-{}", crate::sse::hex_token(8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usage.jsonl");
+        std::fs::write(&path, "{\"at\": 100}\n").unwrap();
+        let first = load_rows(&path);
+        let again = load_rows(&path);
+        assert_eq!(first.len(), 1);
+        assert!(Arc::ptr_eq(&first, &again), "缓存命中应复用同一份 Arc");
+        // 文件长大之后必须重新解析，否则面板永远看不到新请求。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, "{\"at\": 100}\n{\"at\": 200}\n").unwrap();
+        let refreshed = load_rows(&path);
+        assert_eq!(refreshed.len(), 2);
+        assert!(!Arc::ptr_eq(&first, &refreshed));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn custom_range_swaps_reversed_bounds_and_drops_invalid_values() {
