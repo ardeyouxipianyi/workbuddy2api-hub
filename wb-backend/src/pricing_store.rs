@@ -195,6 +195,27 @@ impl PricingStore {
         value
     }
 
+    pub fn save_runtime_override(&self, model: &str, reference: &str) -> Result<(), String> {
+        let _write = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut values = self.runtime_overrides();
+        if reference.is_empty() {
+            values.remove(model);
+        } else {
+            values.insert(model.to_string(), reference.to_string());
+        }
+        let path = self.overrides_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        crate::state::write_json_atomic(&path, &serde_json::to_value(&values).unwrap_or_default())
+            .map_err(|error| error.to_string())?;
+        *self.override_cache.lock().unwrap() = Some((file_key(&path), values));
+        Ok(())
+    }
+
     pub fn markup_for(&self, model: &str) -> f64 {
         let path = self.markup_path();
         let key = file_key(&path);

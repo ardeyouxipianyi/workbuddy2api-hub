@@ -42,17 +42,39 @@ fn entries(state: &State) -> Vec<(String, String)> {
 /// 一次请求带进来的凭据：`Authorization: Bearer` > `x-api-key` > `?key=`。
 pub fn supplied(req_headers: &hyper::HeaderMap, query: Option<&str>) -> String {
     if let Some(v) = req_headers.get(hyper::header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(rest) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
-            return rest.trim().to_string();
+        let value = v.trim();
+        let mut parts = value.splitn(2, char::is_whitespace);
+        let scheme = parts.next().unwrap_or("");
+        let mut supplied = if scheme.eq_ignore_ascii_case("bearer") {
+            parts.next().unwrap_or("").trim().to_string()
+        } else {
+            value.to_string()
+        };
+        if supplied.len() >= 2 {
+            let first = supplied.as_bytes()[0] as char;
+            let last = supplied.as_bytes()[supplied.len() - 1] as char;
+            if first == last && matches!(first, '\'' | '"') {
+                supplied = supplied[1..supplied.len() - 1].trim().to_string();
+            }
+        }
+        if !supplied.is_empty() {
+            return supplied;
         }
     }
-    if let Some(v) = req_headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
-        return v.trim().to_string();
+    for name in ["x-api-key", "api-key", "x-auth-token"] {
+        if let Some(v) = req_headers.get(name).and_then(|v| v.to_str().ok()) {
+            if !v.trim().is_empty() {
+                return v.trim().to_string();
+            }
+        }
     }
     if let Some(q) = query {
         for pair in q.split('&') {
-            if let Some(v) = pair.strip_prefix("key=") {
-                return v.trim().to_string();
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            if matches!(name, "key" | "api_key" | "api-key") && !value.trim().is_empty() {
+                return value.trim().to_string();
             }
         }
     }
@@ -92,4 +114,20 @@ pub fn check(state: &State, supplied_key: &str) -> Result<Auth, ()> {
         }
     }
     Err(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supplied;
+
+    #[test]
+    fn accepts_python_query_and_quote_spellings() {
+        assert_eq!(supplied(&hyper::HeaderMap::new(), Some("api_key=sk-test")), "sk-test");
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            hyper::header::HeaderValue::from_static("BEARER \"sk-quoted\""),
+        );
+        assert_eq!(supplied(&headers, None), "sk-quoted");
+    }
 }

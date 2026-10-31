@@ -39,7 +39,7 @@ pub fn json_resp(code: StatusCode, payload: &Value) -> Resp {
     *resp.status_mut() = code;
     resp.headers_mut().insert(
         hyper::header::CONTENT_TYPE,
-        hyper::header::HeaderValue::from_static("application/json"),
+        hyper::header::HeaderValue::from_static("application/json; charset=utf-8"),
     );
     resp
 }
@@ -52,7 +52,24 @@ pub fn text_resp(code: StatusCode, text: &str) -> Resp {
 
 /// Python 版所有错误都是 `{"error": {...}}`；M1 只用到这一种信封。
 pub fn error_resp(code: StatusCode, message: &str) -> Resp {
-    json_resp(code, &json!({"error": {"message": message, "type": "invalid_request_error"}}))
+    json_resp(
+        code,
+        &json!({"error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "code": code.as_u16(),
+        }}),
+    )
+}
+
+fn auth_hint(has_key: bool) -> &'static str {
+    if has_key {
+        "send it as 'Authorization: Bearer <key>' or '?key=<key>'; \
+         copy the value from the panel's 设置 page"
+    } else {
+        "no key is configured - open the dashboard and add one, \
+         or restart with --api-key"
+    }
 }
 
 /// `/v1` 的鉴权闸门：返回写进 usage 行的 key id，失败时返回 401 响应。
@@ -73,13 +90,7 @@ pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> 
                 })
                 .unwrap_or(false)
                 || std::env::var("WB_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
-            let hint = if has_key {
-                "send it as 'Authorization: Bearer ***' or '?key=<key>'; \
-                 copy the value from the panel's 设置 page"
-            } else {
-                "no key is configured - open the dashboard and add one, \
-                 or restart with --api-key"
-            };
+            let hint = auth_hint(has_key);
             Err(error_resp(
                 StatusCode::UNAUTHORIZED,
                 &format!("invalid api key - {hint}"),
@@ -124,7 +135,19 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
                 Err(resp) => resp,
             }
         }
+        (&Method::POST, "/v1/responses/compact") | (&Method::POST, "/responses/compact") => {
+            match require_auth(&app, &req) {
+                Ok(key_id) => crate::responses::handle(&app, req, key_id).await,
+                Err(resp) => resp,
+            }
+        }
+        (&Method::GET, "/v1/usage") => crate::v1_compat::usage(&app, &req),
+        (&Method::GET, "/agents/cli") => crate::misc_routes::agents_cli(),
         (&Method::GET, "/updates") => crate::updates::get(&app, &req).await,
+        (&Method::GET, "/updates/backups") => crate::updates::backups(&app, &req).await,
+        (&Method::POST, "/updates/rollback") => {
+            crate::updates::rollback(&app, req, app.listen_port).await
+        }
         (&Method::POST, "/updates/check") => crate::updates::check(&app, &req).await,
         (&Method::POST, "/updates/install") => {
             crate::updates::install(&app, &req, app.listen_port).await
@@ -137,7 +160,12 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
         | (_, "/v1/completions")
         | (_, "/v1/messages")
         | (_, "/v1/messages/count_tokens")
-        | (_, "/v1/responses") => {
+        | (_, "/v1/responses")
+        | (_, "/v1/responses/compact")
+        | (_, "/v1/usage")
+        | (_, "/agents/cli")
+        | (_, "/updates/backups")
+        | (_, "/updates/rollback") => {
             error_resp(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
         _ => match crate::panel::handle(&app, req).await {
@@ -229,7 +257,36 @@ pub async fn body_json(req: Request<Incoming>) -> Result<Value, Resp> {
             }}),
         ));
     }
-    serde_json::from_slice(&bytes).map_err(|e| {
-        error_resp(StatusCode::BAD_REQUEST, &format!("invalid json: {e}"))
-    })
+    serde_json::from_slice(&bytes)
+        .map_err(|_| error_resp(StatusCode::BAD_REQUEST, "invalid JSON body"))
+}
+
+#[cfg(test)]
+mod tests {
+    use http_body_util::BodyExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn api_error_envelope_has_python_code_field() {
+        let response = error_resp(StatusCode::UNAUTHORIZED, "invalid api key - test");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"error": {
+                "message": "invalid api key - test",
+                "type": "invalid_request_error",
+                "code": 401
+            }})
+        );
+    }
+
+    #[test]
+    fn key_hint_is_byte_for_byte_python_text() {
+        assert_eq!(
+            auth_hint(true),
+            "send it as 'Authorization: Bearer <key>' or '?key=<key>'; copy the value from the panel's 设置 page"
+        );
+    }
 }

@@ -18,6 +18,7 @@ mod models;
 mod activity;
 pub mod agentcfg;
 mod agents;
+mod misc_routes;
 mod panel;
 mod panel_defaults;
 mod panel_password;
@@ -41,21 +42,31 @@ mod pool;
 mod quota;
 mod record;
 mod responses;
+mod responses_compact;
+#[cfg(test)]
+mod responses_compact_tests;
+mod responses_stream;
 mod sse;
 mod state;
 mod stream;
+mod streak_bonus;
 mod tasks;
+mod update_backups;
 mod update_apply;
+#[cfg(test)]
+mod update_backups_tests;
 mod update_config;
 mod update_download;
 mod update_manager;
 mod update_release;
+mod update_requests;
 mod update_state;
 #[cfg(test)]
 mod update_tests;
 mod updates;
 mod upstream;
 mod usage;
+mod v1_compat;
 
 use std::sync::Arc;
 
