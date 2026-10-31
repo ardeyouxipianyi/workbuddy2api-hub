@@ -93,6 +93,7 @@ async fn messages(
     realm: String,
     chat_body: Value,
     session: Option<String>,
+    pin: Option<crate::keyref::PinnedAccount>,
 ) -> Resp {
     let started = std::time::Instant::now();
     let stream = chat_body
@@ -105,7 +106,9 @@ async fn messages(
         .unwrap_or("")
         .to_string();
     app.inflight.fetch_add(1, Ordering::Relaxed);
-    let opened = crate::upstream::open_upstream(app, &chat_body, &realm, session.as_deref()).await;
+    let opened =
+        crate::upstream::open_upstream(app, &chat_body, &realm, session.as_deref(), pin.as_ref())
+            .await;
     let result = match opened {
         Err(resp) => upstream_error(resp).await,
         Ok((candidate, ctx, upstream)) if stream => crate::http::anthropic_stream::response(
@@ -221,6 +224,7 @@ async fn nonstream(
 }
 
 pub async fn handle(app: &Arc<App>, req: Request<Incoming>) -> Resp {
+    let pin = crate::keyref::pinned(&req);
     let identity = match protocol::authorize(app, &req) {
         Ok(identity) => identity,
         Err(()) => {
@@ -261,5 +265,5 @@ pub async fn handle(app: &Arc<App>, req: Request<Incoming>) -> Resp {
             &json!({"input_tokens": crate::http::anthropic_translate::count_chat_tokens(&chat)}),
         );
     }
-    messages(app, identity, realm, chat, session).await
+    messages(app, identity, realm, chat, session, pin).await
 }

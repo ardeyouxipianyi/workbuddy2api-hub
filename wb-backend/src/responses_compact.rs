@@ -167,7 +167,7 @@ async fn collect_summary(
     started: std::time::Instant,
     stream: bool,
 ) -> Result<(String, Value), crate::http::Resp> {
-    let (candidate, context, response) = upstream::open_upstream(app, chat, realm, session).await?;
+    let (candidate, context, response) = upstream::open_upstream(app, chat, realm, session, None).await?;
     let mut response = response;
     let mut text = String::new();
     while let Some(chunk) = response.chunk().await.map_err(|error| {

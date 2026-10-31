@@ -7,14 +7,15 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use hyper::body::Incoming;
-use hyper::{Request, StatusCode};
+use hyper::Request;
 use serde_json::Value;
 
-use crate::http::{body_json, error_resp, Resp};
+use crate::http::{body_json, Resp};
 use crate::App;
 
 pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String) -> Resp {
     let started = std::time::Instant::now();
+    let pin = crate::keyref::pinned(&req);
     let realm = crate::http::requested_realm(&req, &app.state.current_realm());
     let session = crate::http::session_key_header(req.headers());
     let body = match body_json(req).await {
@@ -26,9 +27,27 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String)
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     app.inflight.fetch_add(1, Ordering::Relaxed);
     let result = if stream {
-        crate::upstream::chat_stream(app, &body, &realm, started, &key_id, session).await
+        crate::upstream::chat_stream(
+            app,
+            &body,
+            &realm,
+            started,
+            &key_id,
+            session,
+            pin.as_ref(),
+        )
+        .await
     } else {
-        crate::upstream::chat_once(app, &body, &realm, started, &key_id, session).await
+        crate::upstream::chat_once(
+            app,
+            &body,
+            &realm,
+            started,
+            &key_id,
+            session,
+            pin.as_ref(),
+        )
+        .await
     };
     app.inflight.fetch_sub(1, Ordering::Relaxed);
     result
