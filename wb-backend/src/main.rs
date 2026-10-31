@@ -12,6 +12,7 @@ mod credits;
 mod identity;
 mod http;
 mod models;
+mod activity;
 mod agents;
 mod panel;
 mod scheduler;

@@ -220,6 +220,18 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 .unwrap_or("");
             json_resp(StatusCode::OK, &crate::tasks::view(app, uid).await)
         }
+        (&Method::GET, "/activity/history") => {
+            let q = req.uri().query().unwrap_or("");
+            let get = |name: &str| {
+                q.split('&')
+                    .find_map(|p| p.strip_prefix(name).and_then(|r| r.strip_prefix('=')))
+                    .unwrap_or("")
+            };
+            match crate::activity::query(app, get("range"), get("uid"), get("task"), get("result"), get("limit")) {
+                Ok(payload) => json_resp(StatusCode::OK, &payload),
+                Err(e) => json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": e, "code": 400}})),
+            }
+        }
         (&Method::GET, "/agents") => json_resp(StatusCode::OK, &crate::agents::overview(app)),
         (&Method::GET, "/agents/available") => {
             json_resp(StatusCode::OK, &json!({"models": crate::models::flat_ids()}))
@@ -1294,10 +1306,11 @@ async fn tasks_travel(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp
 
 /// 积分包快照摊平成一张表（`credit_grants`）：只读账号档，不发上游请求。
 ///
-/// shortcut: 行里的 `action`（这笔发放对应本机哪次签到/活跃）恒为 null——活动历史
-/// 表还没移植；其余字段口径与 Python 一致。
+/// 行里的 `action` 关联本机最近一次签到/活跃：发放时间前 2 小时内到之后 10 分钟的
+/// 那条成功记录算「这次动作带来的」（上游记的发放时间常比我们的动作记录早几秒）。
 fn credit_grants(app: &App) -> Value {
     let now = crate::state::now_epoch() as f64;
+    let actions = crate::activity::grant_actions(app);
     let mut rows: Vec<Value> = Vec::new();
     let mut fetched = 0f64;
     for account in app.state.accounts_snapshot() {
@@ -1350,7 +1363,10 @@ fn credit_grants(app: &App) -> Value {
                 "no_expiry": pkg.get("no_expiry").and_then(Value::as_bool).unwrap_or(false),
                 "days_left": pkg.get("days_left").cloned().unwrap_or(Value::Null),
                 "status": status,
-                "action": Value::Null,
+                "action": create_at
+                    .and_then(|at| crate::activity::grant_action(&actions, &account.uid(), at))
+                    .map(|(task, ts, ok)| json!({"task": task, "at": ts, "ok": ok}))
+                    .unwrap_or(Value::Null),
             }));
         }
     }
@@ -1387,6 +1403,11 @@ fn credit_grants(app: &App) -> Value {
             "accounts": accounts.len(),
         },
     })
+}
+
+/// 供活动历史复用（同 `stamp_epoch`，只是给别的模块一个入口）。
+pub fn stamp_epoch_pub(text: &str) -> Option<f64> {
+    stamp_epoch(text)
 }
 
 /// `'2026-10-10 00:42:45'` → epoch（本地时区）；认不出来回 None。

@@ -254,6 +254,19 @@ pub fn local_stamp() -> String {
     )
 }
 
+/// 指定 epoch 的本地时间戳（格式同 `local_stamp`）。
+pub fn local_stamp_for(epoch: i64) -> String {
+    let tm = unsafe { libc::localtime(&epoch as *const i64) };
+    if tm.is_null() {
+        return String::new();
+    }
+    let tm = unsafe { *tm };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec
+    )
+}
+
 pub fn derive_id(uid: &str, salt: &str) -> String {
     use md5::{Digest, Md5};
     let digest = format!("{:x}", Md5::digest(format!("{salt}:{}", if uid.is_empty() { "anonymous" } else { uid }).as_bytes()));

@@ -594,6 +594,16 @@ pub async fn checkin_all(app: &Arc<App>, uid: &str) -> Value {
     let mut results = Vec::new();
     for account in &targets {
         let mut out = checkin(app, account).await;
+        crate::activity::record(
+            app,
+            &account.uid(),
+            &account.str("nickname"),
+            "cn",
+            "checkin",
+            "manual",
+            out.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            out.get("msg").and_then(Value::as_str).unwrap_or(""),
+        );
         if let Some(obj) = out.as_object_mut() {
             obj.insert("uid".into(), json!(account.uid()));
             obj.insert("nickname".into(), json!(account.str("nickname")));
