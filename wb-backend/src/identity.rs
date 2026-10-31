@@ -39,6 +39,16 @@ fn domain(realm: &str) -> &'static str {
     if realm == "cn" { "copilot.tencent.com" } else { "www.workbuddy.ai" }
 }
 
+/// 带连字符的 v4 UUID（VSCode 身分的 `X-Request-Trace-Id`）。
+fn uuid_v4() -> String {
+    let hex = crate::sse::hex_token(32);
+    let mut h: Vec<char> = hex.chars().collect();
+    h[12] = '4';
+    h[16] = '8';
+    let s: String = h.into_iter().collect();
+    format!("{}-{}-{}-{}-{}", &s[0..8], &s[8..12], &s[12..16], &s[16..20], &s[20..32])
+}
+
 /// `conversation_id_for(uid, session_key)`（`wb_identity.py:342-362`）：
 /// sha256 前 32 hex，改第 12 位为 `4`、第 16 位为 `a`，再插连字符。
 fn conversation_id_for(uid: &str, session_key: &str) -> String {
@@ -56,6 +66,8 @@ fn conversation_id_for(uid: &str, session_key: &str) -> String {
 
 pub struct Ctx<'a> {
     pub realm: &'a str,
+    /// `workbuddy` / `vscode` / `cli`：三族身分标头差别很大（见 wb_identity.headers）。
+    pub product: &'a str,
     pub uid: &'a str,
     pub token: &'a str,
     pub enterprise_id: Option<&'a str>,
@@ -65,6 +77,28 @@ pub struct Ctx<'a> {
 }
 
 /// 桌面端 chat 头族，按官方插入序。
+/// `wb_identity.normalize_product`：把各种写法收敛成三族之一。
+pub fn normalize_product(value: &str) -> &'static str {
+    match value.trim().to_lowercase().as_str() {
+        "vscode" | "vsc" | "ide" => "vscode",
+        "cli" | "codebuddy" => "cli",
+        _ => "workbuddy",
+    }
+}
+
+fn env_version(name: &str, default: &str) -> String {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_string())
+}
+
+fn set(h: &mut Vec<(String, String)>, key: &str, value: String) {
+    h.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
+    h.push((key.to_string(), value));
+}
+
+fn drop_key(h: &mut Vec<(String, String)>, key: &str) {
+    h.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
+}
+
 pub fn chat_headers(ctx: &Ctx<'_>) -> Vec<(String, String)> {
     let request_id = crate::sse::hex_token(32);
     let message_id = crate::sse::hex_token(32);
@@ -120,6 +154,56 @@ pub fn chat_headers(ctx: &Ctx<'_>) -> Vec<(String, String)> {
     // 令牌本身是 API key 形态时官方两个都发（`wb_identity.py:625-626`）。
     if ctx.token.starts_with("ck_") || ctx.token.starts_with("pt_") {
         h.push(("X-API-Key".into(), ctx.token.to_string()));
+    }
+
+    // 身分族差异（`wb_identity.build_identity_headers`）：UA、IDE 三件套与
+    // trace/会话 id 的形态按 product 换，混用会被上游判成不合法的渠道。
+    match normalize_product(ctx.product) {
+        "vscode" => {
+            let ide = env_version("WB_VSCODE_IDE_VERSION", "1.119.0");
+            let product_v = env_version("WB_VSCODE_PRODUCT_VERSION", "4.12.39997873");
+            set(&mut h, "User-Agent", format!("VSCode/{ide} CodeBuddy/{product_v}"));
+            set(&mut h, "X-IDE-Name", "VSCode".into());
+            set(&mut h, "X-IDE-Type", "VSCode".into());
+            set(&mut h, "X-IDE-Version", ide);
+            set(&mut h, "X-Product-Version", product_v);
+            set(&mut h, "X-Env-ID", "production".into());
+            // VSCode 的会话 id 是 uuid4 去连字符；trace 头形态也换成它那套。
+            drop_key(&mut h, "X-Agent-Purpose");
+            drop_key(&mut h, "X-Root-Request-ID");
+            drop_key(&mut h, "traceparent");
+            let parent_span = crate::sse::hex_token(16);
+            set(&mut h, "X-B3-ParentSpanId", parent_span.clone());
+            set(&mut h, "X-Request-Trace-Id", uuid_v4());
+            let trace_id = h.iter().find(|(k, _)| k == "X-B3-TraceId").map(|(_, v)| v.clone()).unwrap_or_default();
+            let span_id = h.iter().find(|(k, _)| k == "X-B3-SpanId").map(|(_, v)| v.clone()).unwrap_or_default();
+            set(&mut h, "b3", format!("{trace_id}-{span_id}-1-{parent_span}"));
+        }
+        "cli" => {
+            let cli = env_version("WB_IDENTITY_CLI_VERSION", "2.168.2");
+            set(&mut h, "User-Agent", format!("CLI/{cli} CodeBuddy/{cli}"));
+            set(&mut h, "X-IDE-Name", "CLI".into());
+            set(&mut h, "X-IDE-Type", "CLI".into());
+            set(&mut h, "X-IDE-Version", cli);
+            set(&mut h, "X-Agent-Runtime", "other".into());
+            // 企业号默认 true，个人号 false（`wb_identity` 的 CLI 分支）。
+            set(&mut h, "X-Private-Data", if ctx.enterprise_id.is_some() { "true" } else { "false" }.into());
+            let sdk = env_version("WB_IDENTITY_SDK_VERSION", "6.25.0");
+            let node = env_version("WB_IDENTITY_NODE_VERSION", "v22.21.1");
+            for (k, v) in [
+                ("x-stainless-lang", "js".to_string()),
+                ("x-stainless-package-version", sdk),
+                ("x-stainless-os", std::env::consts::OS.to_string()),
+                ("x-stainless-arch", match std::env::consts::ARCH { "x86_64" => "x64", "aarch64" => "arm64", other => other }.to_string()),
+                ("x-stainless-runtime", "node".into()),
+                ("x-stainless-runtime-version", node),
+                ("x-stainless-retry-count", "0".into()),
+                ("x-stainless-timeout", "1200".into()),
+            ] {
+                h.push((k.to_string(), v));
+            }
+        }
+        _ => {}
     }
     if let Some(enterprise) = ctx.enterprise_id.filter(|s| !s.is_empty()) {
         h.push(("X-Enterprise-Id".into(), enterprise.to_string()));

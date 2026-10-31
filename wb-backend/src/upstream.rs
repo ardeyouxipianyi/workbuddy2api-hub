@@ -180,6 +180,7 @@ pub(crate) async fn open_upstream(
         // 身份头族：上游按它判渠道合法性，缺了会被 11-128 拦（大 payload 才触发）。
         let headers = crate::identity::chat_headers(&crate::identity::Ctx {
             realm: &cand.realm,
+            product: &cand.product,
             uid: &cand.uid,
             token: &token,
             enterprise_id: None,

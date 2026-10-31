@@ -53,6 +53,7 @@ fn headers(account: &AccountFile) -> reqwest::header::HeaderMap {
     let mut map = reqwest::header::HeaderMap::new();
     let ctx = Ctx {
         realm: "cn",
+        product: &account.str("product"),
         uid: &account.uid(),
         token: &account.access_token(),
         enterprise_id: None,
@@ -652,6 +653,7 @@ async fn daily_chat_one(app: &Arc<App>, account: &AccountFile, trigger: &str) ->
     let model = std::env::var("WB_DAILY_CHAT_MODEL").unwrap_or_else(|_| "deepseek-v4.1-flash".into());
     let ctx = crate::identity::Ctx {
         realm: "intl",
+        product: &account.str("product"),
         uid: &account.uid(),
         token: &account.access_token(),
         enterprise_id: None,
