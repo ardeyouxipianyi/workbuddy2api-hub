@@ -266,6 +266,14 @@ pub fn derive_id(uid: &str, salt: &str) -> String {
 }
 
 /// JWT 的 exp（秒）；解析不出来就是 None，调用方自己回落。
+/// JWT 的 sub（导入时用来补 uid）。
+pub fn jwt_sub(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let raw = base64url_decode(payload)?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    value.get("sub").and_then(Value::as_str).map(|s| s.to_string())
+}
+
 pub fn jwt_exp(token: &str) -> Option<i64> {
     let mut parts = token.split('.');
     let _header = parts.next()?;

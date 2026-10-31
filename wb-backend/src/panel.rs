@@ -174,6 +174,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         }
         (&Method::POST, "/accounts/set") => accounts_set(app, req).await,
         (&Method::POST, "/accounts/set-all") => accounts_set_all(app, req).await,
+        (&Method::POST, "/accounts/import") => accounts_import(app, req).await,
         (&Method::POST, "/accounts/delete") => accounts_delete(app, req).await,
         (&Method::POST, "/accounts/export") | (&Method::GET, "/accounts/export") => {
             accounts_export(app, &req)
@@ -1063,4 +1064,85 @@ async fn checkin(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
         .unwrap_or(0);
     app.log("tasks", "INFO", &format!("签到完成 {ok} 个账号"));
     json_resp(StatusCode::OK, &out)
+}
+
+/// `POST /accounts/import`：导入导出文档 / 裸数组 / 单个账号对象。
+///
+/// shortcut: 只认本地账号形状（accessToken 必需），桌面客户端凭据扫描与
+/// at-rest 解密没移植；已存在的 uid 直接跳过而不是覆盖。
+async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let rows: Vec<Value> = match &body {
+        Value::Array(list) => list.clone(),
+        Value::Object(obj) => match obj.get("accounts").and_then(Value::as_array) {
+            Some(list) => list.clone(),
+            None if obj.contains_key("accessToken") || obj.contains_key("access_token") => vec![body.clone()],
+            None => {
+                return json_resp(
+                    StatusCode::BAD_REQUEST,
+                    &json!({"error": {"message": "not an account document: expected an accounts array, a list, or an account object", "code": 400}}),
+                )
+            }
+        },
+        _ => {
+            return json_resp(
+                StatusCode::BAD_REQUEST,
+                &json!({"error": {"message": "expected an object or a list of accounts", "code": 400}}),
+            )
+        }
+    };
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed = Vec::new();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            failed.push(json!({"error": "account row is not an object"}));
+            continue;
+        };
+        let token = obj
+            .get("accessToken")
+            .or_else(|| obj.get("access_token"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if token.is_empty() {
+            failed.push(json!({"error": "row has no accessToken"}));
+            continue;
+        }
+        let uid = obj
+            .get("uid")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+            .or_else(|| crate::state::jwt_sub(&token))
+            .unwrap_or_default();
+        if uid.is_empty() {
+            failed.push(json!({"error": "row has no uid and the token carries no sub"}));
+            continue;
+        }
+        let path = app.state.accounts_dir.join(format!("{uid}.json"));
+        if path.exists() {
+            skipped.push(json!(uid));
+            continue;
+        }
+        let mut data = obj.clone();
+        data.insert("uid".into(), json!(uid));
+        data.insert("accessToken".into(), json!(token));
+        data.entry("enabled").or_insert(json!(true));
+        data.entry("tasksEnabled").or_insert(json!(true));
+        match crate::state::write_json_atomic(&path, &Value::Object(data)) {
+            Ok(()) => imported.push(json!(uid)),
+            Err(e) => failed.push(json!({"uid": uid, "error": e.to_string()})),
+        }
+    }
+    app.state.reload();
+    let now = crate::state::now_epoch();
+    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    app.log("accounts", "INFO", &format!("导入完成: 新增 {} 跳过 {} 失败 {}", imported.len(), skipped.len(), failed.len()));
+    json_resp(
+        StatusCode::OK,
+        &json!({"imported": imported, "skipped": skipped, "failed": failed, "accounts": accounts}),
+    )
 }
