@@ -823,8 +823,17 @@ fn merge_catalog(
     _config: &Config,
 ) -> Vec<Value> {
     let mut merged: HashMap<String, Value> = HashMap::new();
+    let listed: HashSet<&str> = primary.iter().map(String::as_str).collect();
     for item in static_entries(realm) {
         if let Some(id) = item.get("id").and_then(Value::as_str) {
+            // Python 的口径（wb_proxy.merge_catalog）：远端只报付费的 hy4-preview、
+            // 不报免费的 -f 时，静态里的 -f 不再列出来，只留 -f 自己的位置。
+            if id == "hy4-preview-f"
+                && listed.contains("hy4-preview")
+                && !listed.contains("hy4-preview-f")
+            {
+                continue;
+            }
             merged.insert(id.to_string(), item);
         }
     }
@@ -991,6 +1000,24 @@ mod tests {
         );
         assert_eq!(entry.get("tags"), Some(&json!(["craft", "live"])));
         assert_eq!(entry.get("always_reasoning"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn paid_preview_hides_the_static_free_sibling() {
+        // 远端只给 hy4-preview（付费）不给 -f 时，静态的 -f 不应出现 —— 与 Python 一致。
+        let ids = vec!["hy4-preview".to_string(), "hy3".to_string()];
+        let mut meta = Map::new();
+        meta.insert(
+            "hy4-preview".into(),
+            json!({"id": "hy4-preview", "credits": "x0.5"}),
+        );
+        let merged = merge_catalog("cn", &ids, &meta, true, &config());
+        let got: Vec<&str> = merged
+            .iter()
+            .filter_map(|m| m.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(got.contains(&"hy4-preview"), "entries: {got:?}");
+        assert!(!got.contains(&"hy4-preview-f"), "entries: {got:?}");
     }
 
     #[test]
