@@ -120,6 +120,7 @@ pub fn spawn(app: Arc<App>) {
         let mut last_credit: i64 = crate::state::now_epoch();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            app.pool.refresh_guards(&app.state, true);
             if !app.scheduler.enabled() {
                 continue;
             }

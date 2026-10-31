@@ -9,6 +9,7 @@
 //! 过滤还没搬，M4 搬面板时一起做；在那之前这里只服务内置目录。
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
@@ -19,6 +20,66 @@ use crate::App;
 
 const INTL: &str = include_str!("../assets/catalog-intl.json");
 const CN: &str = include_str!("../assets/catalog-cn.json");
+
+fn bundled_free(realm: &str) -> &'static std::collections::HashSet<String> {
+    static FREE: OnceLock<(
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> = OnceLock::new();
+    let free = FREE.get_or_init(|| {
+        let collect = |raw: &str| {
+            serde_json::from_str::<Vec<Value>>(raw)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|item| {
+                    matches!(
+                        item.get("credits")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_lowercase()
+                            .as_str(),
+                        "x0.00" | "x0" | "0" | "0.00"
+                    )
+                })
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        };
+        (collect(INTL), collect(CN))
+    });
+    if realm == "cn" {
+        &free.1
+    } else {
+        &free.0
+    }
+}
+
+/// Free model ids from the bundled catalogue plus the runtime remote cache.
+pub fn free_models(realm: &str, cached: &Value) -> std::collections::HashSet<String> {
+    let mut free = bundled_free(realm).clone();
+    let entries = cached
+        .get(realm)
+        .and_then(|entry| entry.get("data"))
+        .and_then(Value::as_array);
+    for item in entries.into_iter().flatten() {
+        let credits = item
+            .get("credits")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if matches!(credits.as_str(), "x0.00" | "x0" | "0" | "0.00") {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                free.insert(id.to_string());
+            }
+        }
+    }
+    free
+}
 
 /// 目录里某个模型的元数据（effort 之类的判定要用）。
 pub fn lookup(realm: &str, model: &str) -> Option<Value> {

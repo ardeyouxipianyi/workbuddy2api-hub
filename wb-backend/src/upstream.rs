@@ -171,7 +171,7 @@ pub(crate) async fn open_upstream(
             crate::keyref::candidate(app, pin, realm, &ctx.model)
                 .map_err(|error| crate::keyref::candidate_error(pin, error))?
         } else {
-            match crate::pool::candidates(app, realm, &tried).into_iter().next() {
+            match crate::pool::candidates(app, realm, &tried, Some(&ctx.model)).into_iter().next() {
                 Some(c) => c,
                 None => break,
             }
@@ -205,6 +205,7 @@ pub(crate) async fn open_upstream(
         let resp = match sent {
             Ok(r) => r,
             Err(e) => {
+                app.pool.unknown_failure(&cand.uid);
                 last = format!("upstream unreachable: {e}");
                 if pin.is_some() {
                     break;
@@ -236,9 +237,14 @@ pub(crate) async fn open_upstream(
                     crate::quota::schedule(app, &cand.uid, &ctx.model, reset);
                 }
             }
-            crate::pool::cooldown(app, &cand.uid, 60);
             if pin.is_some() {
+                // 固定账号没得换，冷却完也只能报错回去。
+                crate::pool::cooldown(app, &cand.uid, 60);
                 break;
+            } else if code >= 500 {
+                app.pool.hard_failure(&cand.uid);
+            } else {
+                crate::pool::cooldown(app, &cand.uid, 60);
             }
             continue;
         }

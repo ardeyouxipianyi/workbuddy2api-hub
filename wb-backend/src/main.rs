@@ -7,6 +7,7 @@
 mod auth;
 mod catalog_refresh;
 mod chat;
+mod daily_usage;
 mod egress;
 mod fingerprint;
 mod health;
@@ -21,7 +22,9 @@ pub mod agentcfg;
 mod agents;
 mod misc_routes;
 mod panel;
+mod panel_account;
 mod panel_defaults;
+mod panel_limits;
 mod panel_password;
 mod panel_read;
 mod panel_settings;
@@ -41,6 +44,8 @@ mod pricing_view;
 mod proxy_slots;
 mod scheduler;
 mod pool;
+mod pool_breaker;
+mod pool_guards;
 mod quota;
 mod record;
 mod responses;
@@ -198,6 +203,7 @@ async fn main() -> std::io::Result<()> {
         // `auto` 的上限按就绪账号数算，所以要在状态装好之后才建。
         slots: slots::Slots::from_env(ready_accounts),
     });
+    app.pool.refresh_guards(&app.state, false);
 
     scheduler::spawn(app.clone());
     updates::spawn(app.clone());

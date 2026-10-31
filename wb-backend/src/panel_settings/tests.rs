@@ -17,6 +17,18 @@ fn limits_fill_every_scope() {
 }
 
 #[test]
+fn limits_coerce_strings_and_groups_like_python() {
+    let settings = Map::from_iter([(
+        "limits".to_string(),
+        json!({"daily_credit_limit": {"global": "12", "intl": 3.0, "cn": null}}),
+    )]);
+    let view = limits(&settings);
+    assert_eq!(view["daily_credit_limit"]["global"], json!(12));
+    assert_eq!(view["daily_credit_limit"]["intl"], json!(3));
+    assert_eq!(view["daily_credit_limit"]["cn"], Value::Null);
+}
+
+#[test]
 fn string_lists_are_trimmed_deduplicated_and_bounded() {
     assert_eq!(
         string_list(Some(&json!([" a ", "a", "", "b", "c"])), 2),

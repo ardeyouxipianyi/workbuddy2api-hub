@@ -512,7 +512,7 @@ pub async fn sweep(app: &Arc<App>, uid: &str, realm: &str) -> Value {
         .state
         .accounts_snapshot()
         .iter()
-        .map(|a| crate::panel::account_view(a, now))
+        .map(|a| crate::panel::account_view(app, a, now))
         .collect();
     let mut out = Map::new();
     out.insert("results".into(), Value::Array(results));
@@ -620,7 +620,7 @@ pub async fn checkin_all(app: &Arc<App>, uid: &str) -> Value {
         .state
         .accounts_snapshot()
         .iter()
-        .map(|a| crate::panel::account_view(a, now))
+        .map(|a| crate::panel::account_view(app, a, now))
         .collect();
     json!({"results": results, "accounts": accounts})
 }
