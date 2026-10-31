@@ -29,6 +29,7 @@ fn test_app(root: &std::path::Path) -> Arc<App> {
         updates: Arc::new(Manager::from_config(config)),
         logs: Default::default(),
         slots: crate::slots::Slots::from_env(0),
+        accounts_ops: crate::accounts_ops::AccountsOps::new(),
     })
 }
 

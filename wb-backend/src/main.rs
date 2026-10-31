@@ -5,6 +5,7 @@
 //! 契约来源是 Python 版（wb_proxy.py），逐字节对齐由 harness/compare.py 判定。
 
 mod auth;
+mod accounts_ops;
 mod catalog_refresh;
 mod chat;
 mod daily_usage;
@@ -102,6 +103,8 @@ pub struct App {
     pub pool: pool::Pool,
     /// 面板会话（X-Panel-Token）与口令。
     pub panel: panel::Panel,
+    /// OAuth device-flow sessions and desktop import scratch state.
+    pub(crate) accounts_ops: accounts_ops::AccountsOps,
     /// 价估算策略、按行回算与手动刷新状态。
     pub pricing: pricing::Pricing,
     pub scheduler: scheduler::Scheduler,
@@ -196,6 +199,7 @@ async fn main() -> std::io::Result<()> {
         recorder: usage::Recorder::new(args.usage_dir.clone()),
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
+        accounts_ops: accounts_ops::AccountsOps::new(),
         pricing,
         scheduler: scheduler::Scheduler::default(),
         updates: std::sync::Arc::new(updates::Manager::new(&args.accounts_dir)),

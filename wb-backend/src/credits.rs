@@ -25,15 +25,29 @@ const ENT_USAGE_V2: &str = "/v2/billing/meter/get-enterprise-user-usage";
 /// 超过这个天数的到期时间当成「永久」（免费包的周期边界能到 8 年后）。
 const EXPIRY_SENTINEL_DAYS: f64 = 730.0;
 
-fn billing_base(realm: &str) -> &'static str {
-    match realm {
-        "cn" => "https://www.codebuddy.cn",
-        _ => "https://www.workbuddy.ai",
-    }
+fn billing_base(realm: &str) -> String {
+    let (name, default) = match realm {
+        "cn" => ("WB_CN_BILLING_UPSTREAM", "https://www.codebuddy.cn"),
+        _ => ("WB_INTL_BILLING_UPSTREAM", "https://www.workbuddy.ai"),
+    };
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        .unwrap_or_else(|| default.to_string())
 }
 
-fn origin(realm: &str) -> &'static str {
+fn origin(realm: &str) -> String {
     billing_base(realm)
+}
+
+fn timeout(name: &str, default_secs: u64) -> std::time::Duration {
+    let secs = std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default_secs)
+        .max(1);
+    std::time::Duration::from_secs(secs)
 }
 
 fn headers(account: &AccountFile) -> reqwest::header::HeaderMap {
@@ -53,7 +67,7 @@ fn headers(account: &AccountFile) -> reqwest::header::HeaderMap {
         "user-agent",
         format!("WorkBuddy/{}", crate::identity::desktop_version(&realm)),
     );
-    put("origin", origin(&realm).into());
+    put("origin", origin(&realm));
     put("referer", format!("{}/", origin(&realm)));
     put("authorization", format!("Bearer {}", account.access_token()));
     put("x-user-id", uid.clone());
@@ -94,7 +108,7 @@ pub(crate) async fn post(
         .post(&url)
         .headers(headers(account))
         .json(body)
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(timeout("WB_BILLING_TIMEOUT_SECONDS", 20))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -553,10 +567,13 @@ pub async fn checkin(app: &Arc<App>, account: &AccountFile) -> Value {
     // 「今天已签到」是 HTTP 400 + code 10001，所以这里不能把 4xx 直接当失败。
     let payload = match app
         .upstream
-        .post(format!("{}/v2/billing/meter/daily-checkin", billing_base("cn")))
+        .post(format!(
+            "{}/v2/billing/meter/daily-checkin",
+            billing_base("cn")
+        ))
         .headers(headers(account))
         .json(&json!({}))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(timeout("WB_CHECKIN_TIMEOUT_SECONDS", 15))
         .send()
         .await
     {
@@ -654,7 +671,7 @@ pub async fn probe_api_key(app: &Arc<App>, token: &str) -> Value {
         .header("accept", "application/json")
         .header("user-agent", format!("WorkBuddy/{}", crate::identity::desktop_version("cn")))
         .json(&json!({}))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(timeout("WB_BILLING_PROBE_TIMEOUT_SECONDS", 15))
         .send()
         .await;
     let Ok(resp) = resp else {

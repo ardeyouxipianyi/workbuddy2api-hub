@@ -362,6 +362,7 @@ mod tests {
             )),
             logs: Default::default(),
             slots: crate::slots::Slots::from_env(0),
+            accounts_ops: crate::accounts_ops::AccountsOps::new(),
         };
         let error = match targets(&app, &Map::new()) {
             Ok(_) => panic!("empty account pool unexpectedly had targets"),
