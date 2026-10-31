@@ -144,6 +144,16 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::GET, "/usage/recent") => usage_recent(app, &req),
         (&Method::GET, "/usage/analytics") => usage_analytics(app, &req),
         (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
+        (&Method::GET, "/accounts/credits/grants") => json_resp(
+            StatusCode::OK,
+            &json!({
+                "rows": [],
+                "generated_at": Value::Null,
+                "generated_iso": "",
+                // 积分包清单来自「刷新积分」时抓的上游快照；那一步还没移植。
+                "ported": false,
+            }),
+        ),
         (&Method::GET, "/logs") => json_resp(StatusCode::OK, &json!({"total": 0, "logs": []})),
         (&Method::POST, "/accounts/set") => accounts_set(app, req).await,
         (&Method::POST, "/accounts/set-all") => accounts_set_all(app, req).await,
@@ -154,10 +164,39 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
         (&Method::POST, "/panel/password") => not_ported("/panel/password"),
-        (&Method::GET, "/pricing") => not_ported("/pricing"),
-        (&Method::GET, "/tasks") => not_ported("/tasks"),
-        (&Method::GET, "/scheduler") => not_ported("/scheduler"),
-        (&Method::GET, "/updates") => not_ported("/updates"),
+        (&Method::GET, "/pricing") => json_resp(
+            StatusCode::OK,
+            &json!({
+                "interval_minutes": 0, "enabled": false, "master_enabled": false,
+                "running": false, "last_run": Value::Null, "last_run_label": "",
+                "next_run": Value::Null, "next_run_label": "", "last_error": "",
+                "last_models": [], "last_extra": {}, "policies": [], "variants": [],
+                // 价格刷新属于 tasks/ops 组，还没移植：这里如实报告「未启用」，
+                // 而不是伪造一份看起来正常的价格表。
+                "ported": false,
+            }),
+        ),
+        (&Method::GET, "/tasks") => tasks_view(app),
+        (&Method::GET, "/scheduler") => json_resp(
+            StatusCode::OK,
+            &json!({
+                "enabled": false, "mode": "Rust 后端未启用调度器", "mode_cn": "", "mode_intl": "",
+                "last_run_time": "", "next_run_time": "", "windows": [], "quota_scans": [],
+                "daily_chat": {}, "logs": [], "ported": false,
+            }),
+        ),
+        (&Method::GET, "/updates") => json_resp(
+            StatusCode::OK,
+            &json!({
+                "current_version": env!("CARGO_PKG_VERSION"),
+                "latest_version": env!("CARGO_PKG_VERSION"),
+                "latest_tag": "", "update_available": false,
+                "enabled": false, "checking": false,
+                "last_attempt": Value::Null, "last_success": Value::Null, "last_error": "",
+                "release_url": "", "published_at": "", "install_enabled": false,
+                "ported": false,
+            }),
+        ),
         (&Method::GET, "/proxy/slots") => json_resp(StatusCode::OK, &json!({"slots": []})),
         (&Method::GET, "/agents") | (&Method::GET, "/agents/available") => not_ported("/agents"),
         (&Method::POST, _) => not_ported(&path),
@@ -894,4 +933,30 @@ async fn realm_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let _ = write_json_atomic(&path, &json!({"realm": realm}));
     app.state.reload();
     json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": ["intl", "cn"]}))
+}
+
+/// `/tasks`：任务面板要的形状。任务引擎（签到/成长/猫猫/活跃/保活）还没移植，
+/// 所以任务清单是空的、summary 归零——宁可显示「暂无任务」，也不编造进度。
+fn tasks_view(app: &std::sync::Arc<App>) -> Resp {
+    let now = crate::state::now_epoch();
+    let accounts: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| account_view(a, now))
+        .collect();
+    let current = accounts.first().cloned().unwrap_or(Value::Null);
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "tasks": [],
+            "summary": {
+                "energy": 0, "streak_days": 0, "travel": Value::Null,
+                "makeup_cards": 0, "tiers": [], "tier_statuses": [], "lottery_chances": 0,
+            },
+            "account": current,
+            "accounts": accounts,
+            "ported": false,
+        }),
+    )
 }
