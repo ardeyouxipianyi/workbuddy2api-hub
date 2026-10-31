@@ -70,6 +70,14 @@ class LegacyHealthIdentity(unittest.TestCase):
         self.assertTrue(is_backend({"ok": True, "backend": "rust"}, "rust"))
         self.assertFalse(is_backend({"ok": True, "backend": "rust"}, "python"))
 
+    def test_children_carry_launcher_marker(self):
+        """子进程必须带 WB_LAUNCHER_CHILD，否则 wb_proxy.py 会再交棒一次（无限递归）。"""
+        sys.path.insert(0, REPO)
+        import wb_backend
+        sup = wb_backend.Supervisor(REPO, "/tmp", "/tmp", "127.0.0.1", 1, [])
+        self.assertEqual(sup._env_for("python").get("WB_LAUNCHER_CHILD"), "1")
+        self.assertEqual(sup._env_for("rust").get("WB_LAUNCHER_CHILD"), "1")
+
     def test_status_reports_legacy_python_healthy(self):
         """status() 与 wait_healthy() 必须用同一套身份判定。"""
         sys.path.insert(0, REPO)

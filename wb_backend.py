@@ -188,9 +188,13 @@ class Supervisor(object):
         WB_API_KEY / WB_PANEL_PASSWORD。不转过去的话，切到 rust 会把「只靠命令行
         参数挡着」的部署变成门大开——请求不要 key、面板不要口令。
         """
-        if backend != "rust":
-            return None
+        # wb_proxy.py 里「见到 .use-launcher 就交给 launcher」那段过渡逻辑靠这个标记
+        # 认出自己是被托管的子进程；少了它就是 launcher → python → launcher 无限递归
+        # （容器重启后 entrypoint 直接起 launcher，那条路径上没有别人替我们设）。
         env = dict(os.environ)
+        env["WB_LAUNCHER_CHILD"] = "1"
+        if backend != "rust":
+            return env
         for flag, name in (("--api-key", "WB_API_KEY"), ("--panel-password", "WB_PANEL_PASSWORD")):
             value = self._flag_value(flag)
             if value:
