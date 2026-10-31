@@ -20,11 +20,31 @@ fn query_value(req: &Request<Incoming>, name: &str) -> String {
         .to_string()
 }
 
+/// `?realm=` 原样放行：`all` 表示不过滤，未知值返回空表（Python 的 list_public 就这样）；
+/// 没有这个参数才走 x-realm / 当前区域。共用的 `http::requested_realm` 只认 cn/intl，
+/// 因为 chat/models 那边不该接受 all。
+fn list_realm(query: Option<&str>, header: Option<&str>, current: &str) -> String {
+    let asked = query
+        .unwrap_or("")
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("realm="))
+        .filter(|value| !value.is_empty());
+    match asked.or(header.filter(|value| matches!(*value, "cn" | "intl" | "all"))) {
+        Some(value) => value.to_string(),
+        None => current.to_string(),
+    }
+}
+
 /// `GET /accounts`: list the selected realm, with `?realm=` taking precedence.
 pub fn accounts(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
-    let realm = crate::http::requested_realm(req, &app.state.current_realm());
+    let realm = list_realm(
+        req.uri().query(),
+        req.headers().get("x-realm").and_then(|value| value.to_str().ok()),
+        &app.state.current_realm(),
+    );
     let now = crate::state::now_epoch();
-    let usable = crate::pool::count_ready(app, &realm, None);
+    // Python 的 usable 是池子全局的（count_ready() 不按 ?realm= 过滤）。
+    let usable = crate::pool::count_ready(app, "all", None);
     let list: Vec<Value> = app
         .state
         .accounts_snapshot()
@@ -100,4 +120,22 @@ pub async fn tasks(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
             "accounts": account_list,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_realm;
+
+    #[test]
+    fn account_list_realm_keeps_all_but_chat_realm_does_not() {
+        // 面板「全部出口」：realm=all 必须原样传下去，否则国际版账号在列表里消失。
+        assert_eq!(list_realm(Some("realm=all"), None, "cn"), "all");
+        assert_eq!(list_realm(Some("range=today&realm=intl"), None, "cn"), "intl");
+        // 没有参数：x-realm 认 cn/intl/all，其余回落到当前区域（与 Python 的
+        // query or CURRENT_REALM 同序）；未知 realm 由筛选阶段返回空表。
+        assert_eq!(list_realm(None, Some("intl"), "cn"), "intl");
+        assert_eq!(list_realm(Some("realm="), Some("intl"), "cn"), "intl");
+        assert_eq!(list_realm(None, Some("bogus"), "cn"), "cn");
+        assert_eq!(list_realm(None, None, "cn"), "cn");
+    }
 }
