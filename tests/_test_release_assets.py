@@ -410,6 +410,33 @@ class PortableZipTests(unittest.TestCase):
             self.assertIn("%s/python/python.exe" % root, names)
             self.assertIn("%s/python/Lib/os.py" % root, names)
 
+    def test_a_prebuilt_backend_rides_along_as_an_executable(self):
+        # Rust 后端是可选的：打包时给了 `--backend` 就随包下发，并且要带上执行位，
+        # 否则 launcher 的 capabilities() 会在 isfile/X_OK 那步判成「没有二进制」。
+        import json
+        with tempfile.TemporaryDirectory(prefix="relzip-") as directory:
+            fake = os.path.join(directory, "wb-backend.fake")
+            with open(fake, "wb") as fh:
+                fh.write(b"\x7fELF\x02\x01\x01\x00 fake backend payload")
+            path, files = self.build(directory, backend=fake)
+            self.assertIn("wb-backend", files)
+            with zipfile.ZipFile(path) as zf:
+                info = zf.getinfo("%s/wb-backend" % tools.PACKAGE_ROOT)
+                self.assertEqual((info.external_attr >> 16) & 0o777, 0o755)
+                with open(fake, "rb") as fh:
+                    self.assertEqual(zf.read(info), fh.read())
+                manifest = json.loads(zf.read(tools.MANIFEST_NAME).decode("utf-8"))
+            self.assertIn("wb-backend", manifest["files"])
+            # 镜像/rootfs 部署只拿 app 层，二进制属于 app 层。
+            self.assertIn("wb-backend", manifest["profiles"]["app"])
+
+    def test_without_a_backend_the_package_is_python_only(self):
+        with tempfile.TemporaryDirectory(prefix="relzip-") as directory:
+            path, files = self.build(directory)
+            self.assertNotIn("wb-backend", files)
+            self.assertNotIn("%s/wb-backend" % tools.PACKAGE_ROOT,
+                             zipfile.ZipFile(path).namelist())
+
     def test_the_archive_is_not_a_source_archive(self):
         # The whole point of the round-1 fix: a ZIP without the runtime is a
         # different, much less useful asset, so the builder must not produce it.

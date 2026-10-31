@@ -49,6 +49,10 @@ PROTECTED = ["accounts/", "usage/"]
 # Reproducible-build timestamp, the same convention the .ipk recipe uses.
 DEFAULT_EPOCH = 1700000000
 
+# Rust 后端是可选组件：构建时给了就随包下发（`--backend`），没给就还是纯 Python 包。
+# 它排在 portable.txt 之外，因为干净检出里没有这个文件，写进清单会让「列出的文件都存在」失败。
+BACKEND_NAME = "wb-backend"
+
 
 def read_manifest(path=MANIFEST):
     """Manifest paths, in file order, comments and blanks dropped."""
@@ -80,7 +84,7 @@ def _zip_date(epoch):
 
 
 def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
-                   root=PACKAGE_ROOT, epoch=DEFAULT_EPOCH):
+                   root=PACKAGE_ROOT, epoch=DEFAULT_EPOCH, backend=None):
     """Write the portable ZIP and return (path, [managed files]).
 
     `runtime_dir` is the trimmed CPython the launchers look for under
@@ -96,7 +100,11 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
     portable_runtime.verify(runtime_dir)
 
     files = read_manifest()
-    missing = [p for p in files if not os.path.isfile(os.path.join(source, p))]
+    if backend:
+        if not os.path.isfile(backend):
+            raise SystemExit("--backend 指向的文件不存在：%s" % backend)
+        files = files + [BACKEND_NAME]
+    missing = [p for p in files if p != BACKEND_NAME and not os.path.isfile(os.path.join(source, p))]
     if missing:
         raise SystemExit("清单里的文件不存在：%s" % ", ".join(missing))
 
@@ -104,9 +112,13 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
     crlf_bytes = bytes([13, 10])
     lf_bytes = bytes([10])
     for name in files:
-        with open(os.path.join(source, name), "rb") as fh:
+        origin = backend if (name == BACKEND_NAME and backend) else os.path.join(source, name)
+        with open(origin, "rb") as fh:
             data = fh.read()
         lower = name.lower()
+        if name == BACKEND_NAME:
+            entries.append(("%s/%s" % (root, name), data, 0o755))
+            continue
         if lower.endswith((".sh", ".command")):
             # Issue #329: 强制 LF 换行并赋予执行位，防止 Windows 检出的 CRLF 导致 macOS / Linux 启动报 bad interpreter
             data = data.replace(crlf_bytes, lf_bytes)
@@ -146,7 +158,7 @@ def build_portable(version, tag, out_path, source=ROOT, runtime_dir=None,
         # wb_pricing.py's inlined snapshot for good.
         "profiles": {"app": [p for p in files
                               if (p.startswith("wb_") and p.endswith(".py"))
-                              or p == "dashboard.html"]},
+                              or p in ("dashboard.html", BACKEND_NAME)]},
         # The runtime is one managed subtree rather than 500 manifest lines.
         "runtime": {
             "prefix": "python/",
@@ -272,6 +284,8 @@ def main(argv=None):
                    help="trimmed CPython tree (release/portable_runtime.py prepare)")
     p.add_argument("--root", default=PACKAGE_ROOT,
                    help="folder every packaged file lives under (default %s)" % PACKAGE_ROOT)
+    p.add_argument("--backend", default=None,
+                   help="预编译的 wb-backend（musl）路径；给了就随包下发，不给就是纯 Python 包")
     p.add_argument("--epoch", type=int, default=int(os.environ.get("SOURCE_DATE_EPOCH", DEFAULT_EPOCH)))
 
     c = sub.add_parser("checksums", help="write SHA256SUMS")
@@ -294,7 +308,8 @@ def main(argv=None):
     if args.cmd == "portable":
         path, files = build_portable(args.version, args.tag, args.out,
                                      source=args.source, runtime_dir=args.runtime,
-                                     root=args.root, epoch=args.epoch)
+                                     root=args.root, epoch=args.epoch,
+                                     backend=args.backend)
         print("portable: %s（%d 个受管文件 + python/ 运行时 %s + %s）"
               % (path, len(files), portable_runtime.RUNTIME_VERSION, MANIFEST_NAME))
         print("sha256  : %s" % sha256(path))
