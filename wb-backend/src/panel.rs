@@ -161,6 +161,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/accounts/export") | (&Method::GET, "/accounts/export") => {
             accounts_export(app, &req)
         }
+        (&Method::POST, "/accounts/credits") => accounts_credits_fetch(app, req).await,
         (&Method::POST, "/accounts/product") => accounts_product(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
@@ -224,7 +225,7 @@ fn accounts(app: &std::sync::Arc<App>) -> Resp {
     )
 }
 
-fn account_view(account: &crate::state::AccountFile, now: i64) -> Value {
+pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Value {
     let raw = &account.data;
     let uid = account.uid();
     let exp = match account.expires_at() {
@@ -711,21 +712,6 @@ fn accounts_credits(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp 
     json_resp(StatusCode::OK, &json!({"accounts": list, "busy": false}))
 }
 
-/// 原子写：临时文件 + rename（0600）。账号档里有 refreshToken，权限不能松。
-fn write_json_atomic(path: &std::path::Path, value: &Value) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    let tmp = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(value).unwrap_or_default();
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(&body)?;
-        file.sync_all()?;
-    }
-    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    std::fs::rename(&tmp, path)
-}
-
 /// 找到 uid 对应的账号文件并改一个字段，返回改完的公开视图。
 fn mutate_account(
     app: &std::sync::Arc<App>,
@@ -736,7 +722,7 @@ fn mutate_account(
     let mut data = account.data.clone();
     apply(&mut data);
     let value = Value::Object(data);
-    if write_json_atomic(&account.path, &value).is_err() {
+    if crate::state::write_json_atomic(&account.path, &value).is_err() {
         return None;
     }
     app.state.reload();
@@ -908,7 +894,7 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
     }
     let path = app.state.accounts_dir.join("settings.json");
     let value = Value::Object(settings);
-    match write_json_atomic(&path, &value) {
+    match crate::state::write_json_atomic(&path, &value) {
         Ok(()) => {
             app.state.reload();
             json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
@@ -931,7 +917,7 @@ async fn realm_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
         return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "realm must be cn or intl", "code": 400}}));
     }
     let path = app.state.accounts_dir.join("active_realm.json");
-    let _ = write_json_atomic(&path, &json!({"realm": realm}));
+    let _ = crate::state::write_json_atomic(&path, &json!({"realm": realm}));
     app.state.reload();
     json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": ["intl", "cn"]}))
 }
@@ -1006,4 +992,26 @@ async fn accounts_product(app: &std::sync::Arc<App>, req: Request<Incoming>) -> 
     let now = crate::state::now_epoch();
     let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
     json_resp(StatusCode::OK, &json!({"ok": true, "product": product, "changed": changed, "accounts": accounts}))
+}
+
+/// `POST /accounts/credits`：打上游刷新积分（uid / realm / 整池）。
+async fn accounts_credits_fetch(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
+    let out = crate::credits::sweep(app, uid, realm).await;
+    let ok = out
+        .get("results")
+        .and_then(Value::as_array)
+        .map(|r| r.iter().filter(|x| x.get("ok").and_then(Value::as_bool).unwrap_or(false)).count())
+        .unwrap_or(0);
+    let mut obj = match out {
+        Value::Object(o) => o,
+        _ => Map::new(),
+    };
+    obj.insert("refreshed".into(), json!(ok));
+    json_resp(StatusCode::OK, &Value::Object(obj))
 }

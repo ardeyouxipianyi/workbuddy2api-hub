@@ -217,6 +217,21 @@ impl State {
 }
 
 /// `wb_fingerprint.derive_id`：md5("<salt>:<uid>") 改成 UUIDv4 形状。
+/// 原子写：临时文件 + rename（0600）。账号档里有 refreshToken，权限不能松。
+pub fn write_json_atomic(path: &std::path::Path, value: &Value) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(value).unwrap_or_default();
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&body)?;
+        file.sync_all()?;
+    }
+    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    std::fs::rename(&tmp, path)
+}
+
 /// 本地时间戳 `YYYY-MM-DD HH:MM:SS`（导出文档的 exportedAt 用这个口径）。
 pub fn local_stamp() -> String {
     let now = std::time::SystemTime::now()

@@ -16,7 +16,7 @@ const DESKTOP_CN: &str = "5.8.3";
 const DESKTOP_CLI: &str = "2.161.0";
 const CLI_VERSION: &str = "2.168.2";
 
-fn desktop_version(realm: &str) -> &'static str {
+pub(crate) fn desktop_version(realm: &str) -> &'static str {
     if realm == "cn" { DESKTOP_CN } else { DESKTOP_INTL }
 }
 

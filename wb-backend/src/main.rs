@@ -8,6 +8,7 @@ mod auth;
 mod chat;
 mod fingerprint;
 mod health;
+mod credits;
 mod identity;
 mod http;
 mod models;
