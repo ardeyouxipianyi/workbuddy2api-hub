@@ -144,16 +144,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::GET, "/usage/recent") => usage_recent(app, &req),
         (&Method::GET, "/usage/analytics") => usage_analytics(app, &req),
         (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
-        (&Method::GET, "/accounts/credits/grants") => json_resp(
-            StatusCode::OK,
-            &json!({
-                "rows": [],
-                "generated_at": Value::Null,
-                "generated_iso": "",
-                // 积分包清单来自「刷新积分」时抓的上游快照；那一步还没移植。
-                "ported": false,
-            }),
-        ),
+        (&Method::GET, "/accounts/credits/grants") => {
+            json_resp(StatusCode::OK, &credit_grants(app))
+        }
         (&Method::GET, "/logs") => {
             let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
             json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
@@ -1297,4 +1290,139 @@ async fn tasks_travel(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp
     let out = crate::tasks::travel(app, uid).await;
     app.log("tasks", "INFO", &format!("猫猫旅行: {}", out.get("msg").and_then(Value::as_str).unwrap_or("")));
     json_resp(StatusCode::OK, &out)
+}
+
+/// 积分包快照摊平成一张表（`credit_grants`）：只读账号档，不发上游请求。
+///
+/// shortcut: 行里的 `action`（这笔发放对应本机哪次签到/活跃）恒为 null——活动历史
+/// 表还没移植；其余字段口径与 Python 一致。
+fn credit_grants(app: &App) -> Value {
+    let now = crate::state::now_epoch() as f64;
+    let mut rows: Vec<Value> = Vec::new();
+    let mut fetched = 0f64;
+    for account in app.state.accounts_snapshot() {
+        let credits = account.data.get("credits").cloned().unwrap_or(json!({}));
+        if let Some(v) = credits.get("updated_at").and_then(Value::as_f64) {
+            fetched = fetched.max(v);
+        }
+        let packages = credits.get("packages").and_then(Value::as_array).cloned().unwrap_or_default();
+        for pkg in packages.iter().filter(|p| p.is_object()) {
+            let num = |key: &str| pkg.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+            let expire_iso = pkg
+                .get("expire_time")
+                .or_else(|| pkg.get("cycle_end_time"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let create_iso = pkg.get("create_time").and_then(Value::as_str).unwrap_or("").to_string();
+            let create_at = stamp_epoch(&create_iso);
+            let expire_at = stamp_epoch(&expire_iso);
+            let remain = num("remain");
+            let expired = pkg.get("is_expired").and_then(Value::as_bool).unwrap_or(false)
+                || expire_at.map(|t| t <= now).unwrap_or(false);
+            let status = if expired {
+                "expired"
+            } else if remain <= 0.0 {
+                "used_up"
+            } else if pkg.get("in_usage").and_then(Value::as_bool).unwrap_or(false) {
+                "active"
+            } else {
+                "available"
+            };
+            let text = |key: &str| pkg.get(key).and_then(Value::as_str).map(String::from);
+            rows.push(json!({
+                "uid": account.uid(),
+                "nickname": if account.str("nickname").is_empty() {
+                    account.uid().chars().take(8).collect::<String>()
+                } else { account.str("nickname").to_string() },
+                "realm": account.realm(),
+                "name": text("name").or_else(|| text("package_code")).unwrap_or_else(|| "Package".into()),
+                "product": text("sub_product_name").or_else(|| text("product_name")).unwrap_or_default(),
+                "grant_reason": text("grant_reason").unwrap_or_default(),
+                "size": num("size"),
+                "remain": remain,
+                "used": num("used"),
+                "unit": text("unit").unwrap_or_else(|| "credit".into()),
+                "create_at": create_at,
+                "create_iso": create_iso,
+                "expire_at": expire_at,
+                "expire_iso": expire_iso,
+                "no_expiry": pkg.get("no_expiry").and_then(Value::as_bool).unwrap_or(false),
+                "days_left": pkg.get("days_left").cloned().unwrap_or(Value::Null),
+                "status": status,
+                "action": Value::Null,
+            }));
+        }
+    }
+    // 新的在前；同一时刻按账号、包名稳定排序，避免每次刷新顺序跳。
+    rows.sort_by(|a, b| {
+        let key = |r: &Value| {
+            (
+                r.get("create_at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+                r.get("nickname").and_then(Value::as_str).unwrap_or("").to_string(),
+                r.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+            )
+        };
+        let (ta, na, pa) = key(a);
+        let (tb, nb, pb) = key(b);
+        tb.cmp(&ta).then(na.cmp(&nb)).then(pa.cmp(&pb))
+    });
+    let sum = |field: &str| rows.iter().map(|r| r.get(field).and_then(Value::as_f64).unwrap_or(0.0)).sum::<f64>();
+    let accounts: std::collections::BTreeSet<String> = rows
+        .iter()
+        .filter_map(|r| r.get("uid").and_then(Value::as_str).map(String::from))
+        .collect();
+    json!({
+        "ok": true,
+        "generated_at": now,
+        "generated_iso": crate::state::local_stamp(),
+        "fetched_at": if fetched > 0.0 { json!(fetched) } else { Value::Null },
+        "fetched_iso": if fetched > 0.0 { json!(format_stamp(fetched as i64)) } else { Value::Null },
+        "rows": rows,
+        "summary": {
+            "count": rows.len(),
+            "size": (sum("size") * 100.0).round() / 100.0,
+            "remain": (sum("remain") * 100.0).round() / 100.0,
+            "used": (sum("used") * 100.0).round() / 100.0,
+            "accounts": accounts.len(),
+        },
+    })
+}
+
+/// `'2026-10-10 00:42:45'` → epoch（本地时区）；认不出来回 None。
+fn stamp_epoch(text: &str) -> Option<f64> {
+    if text.len() < 19 {
+        return None;
+    }
+    let tm = libc::tm {
+        tm_sec: text.get(17..19)?.parse().ok()?,
+        tm_min: text.get(14..16)?.parse().ok()?,
+        tm_hour: text.get(11..13)?.parse().ok()?,
+        tm_mday: text.get(8..10)?.parse().ok()?,
+        tm_mon: text.get(5..7)?.parse::<i32>().ok()? - 1,
+        tm_year: text.get(..4)?.parse::<i32>().ok()? - 1900,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: -1,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    let epoch = unsafe { libc::mktime(&tm as *const libc::tm as *mut libc::tm) };
+    if epoch < 0 {
+        None
+    } else {
+        Some(epoch as f64)
+    }
+}
+
+fn format_stamp(epoch: i64) -> String {
+    let tm = unsafe { libc::localtime(&epoch as *const i64) };
+    if tm.is_null() {
+        return String::new();
+    }
+    let tm = unsafe { *tm };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec
+    )
 }
