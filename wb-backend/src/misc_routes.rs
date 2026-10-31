@@ -172,11 +172,19 @@ fn activity_payload(rows: Value) -> Value {
 }
 
 fn agents_cli_path() -> PathBuf {
-    std::env::var("WB_AGENTS_CLI_PATH")
+    if let Some(explicit) = std::env::var("WB_AGENTS_CLI_PATH")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new("wb_agents.py").to_path_buf())
+    {
+        return PathBuf::from(explicit);
+    }
+    // Python 版按 __file__ 找同目录的 wb_agents.py；这里的对等物是可执行文件所在的目录，
+    // 否则从别处起的服务（systemd、cwd=/）永远找不到它。
+    let beside_exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("wb_agents.py")))
+        .filter(|candidate| candidate.exists());
+    beside_exe.unwrap_or_else(|| Path::new("wb_agents.py").to_path_buf())
 }
 
 /// `GET /agents/cli` is public by contract so another machine can fetch the
