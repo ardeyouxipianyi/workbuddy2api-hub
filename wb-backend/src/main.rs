@@ -24,6 +24,15 @@ mod sse;
 mod state;
 mod stream;
 mod tasks;
+mod update_apply;
+mod update_config;
+mod update_download;
+mod update_manager;
+mod update_release;
+mod update_state;
+#[cfg(test)]
+mod update_tests;
+mod updates;
 mod upstream;
 mod usage;
 
@@ -44,6 +53,8 @@ pub struct App {
     pub state: state::State,
     pub upstream: reqwest::Client,
     pub started: std::time::Instant,
+    /// The port the update helper probes after the supervisor restarts us.
+    pub listen_port: u16,
     /// 在飞请求数：`/health` 会报给 launcher，切换时 launcher 等它归零。
     pub inflight: std::sync::atomic::AtomicUsize,
     /// usage.jsonl 的写者（单进程串行追加）。
@@ -53,6 +64,7 @@ pub struct App {
     /// 面板会话（X-Panel-Token）与口令。
     pub panel: panel::Panel,
     pub scheduler: scheduler::Scheduler,
+    pub updates: std::sync::Arc<updates::Manager>,
     /// 最近 500 条面板/后端事件，`GET /logs` 直接读它（面板「运行日志」页）。
     pub logs: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
 }
@@ -120,6 +132,9 @@ fn parse_args() -> Args {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if updates::run_helper_if_requested().await {
+        return Ok(());
+    }
     let args = parse_args();
     let state = state::State::load(&args.accounts_dir, &args.usage_dir);
     // shortcut: 上游连接不做池化调优，M1 只要求功能等价，压测在 M7 前再看
@@ -131,15 +146,18 @@ async fn main() -> std::io::Result<()> {
         state,
         upstream,
         started: std::time::Instant::now(),
+        listen_port: args.port,
         inflight: std::sync::atomic::AtomicUsize::new(0),
         recorder: usage::Recorder::new(args.usage_dir.clone()),
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
         scheduler: scheduler::Scheduler::default(),
+        updates: std::sync::Arc::new(updates::Manager::new(&args.accounts_dir)),
         logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
     });
 
     scheduler::spawn(app.clone());
+    updates::spawn(app.clone());
 
     let listener = TcpListener::bind((args.host.as_str(), args.port)).await?;
     eprintln!(

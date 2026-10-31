@@ -95,6 +95,11 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
                 Err(resp) => resp,
             }
         }
+        (&Method::GET, "/updates") => crate::updates::get(&app, &req).await,
+        (&Method::POST, "/updates/check") => crate::updates::check(&app, &req).await,
+        (&Method::POST, "/updates/install") => {
+            crate::updates::install(&app, &req, app.listen_port).await
+        }
         (&Method::OPTIONS, _) => text_resp(StatusCode::NO_CONTENT, ""),
         (_, "/health") | (_, "/v1/models") | (_, "/v1/chat/completions") | (_, "/v1/responses") => {
             error_resp(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
