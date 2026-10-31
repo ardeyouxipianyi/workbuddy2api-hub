@@ -217,6 +217,28 @@ impl State {
 }
 
 /// `wb_fingerprint.derive_id`：md5("<salt>:<uid>") 改成 UUIDv4 形状。
+/// 本地时间戳 `YYYY-MM-DD HH:MM:SS`（导出文档的 exportedAt 用这个口径）。
+pub fn local_stamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let offset = unsafe { libc::localtime(&now as *const i64) };
+    if offset.is_null() {
+        return String::new();
+    }
+    let tm = unsafe { *offset };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
+}
+
 pub fn derive_id(uid: &str, salt: &str) -> String {
     use md5::{Digest, Md5};
     let digest = format!("{:x}", Md5::digest(format!("{salt}:{}", if uid.is_empty() { "anonymous" } else { uid }).as_bytes()));

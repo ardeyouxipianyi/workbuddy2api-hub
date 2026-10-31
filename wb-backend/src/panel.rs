@@ -145,6 +145,15 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::GET, "/usage/analytics") => usage_analytics(app, &req),
         (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
         (&Method::GET, "/logs") => json_resp(StatusCode::OK, &json!({"total": 0, "logs": []})),
+        (&Method::POST, "/accounts/set") => accounts_set(app, req).await,
+        (&Method::POST, "/accounts/set-all") => accounts_set_all(app, req).await,
+        (&Method::POST, "/accounts/delete") => accounts_delete(app, req).await,
+        (&Method::POST, "/accounts/export") | (&Method::GET, "/accounts/export") => {
+            accounts_export(app, &req)
+        }
+        (&Method::POST, "/settings/save") => settings_save(app, req).await,
+        (&Method::POST, "/realm") => realm_set(app, req).await,
+        (&Method::POST, "/panel/password") => not_ported("/panel/password"),
         (&Method::GET, "/pricing") => not_ported("/pricing"),
         (&Method::GET, "/tasks") => not_ported("/tasks"),
         (&Method::GET, "/scheduler") => not_ported("/scheduler"),
@@ -660,4 +669,229 @@ fn accounts_credits(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp 
         list.push(view);
     }
     json_resp(StatusCode::OK, &json!({"accounts": list, "busy": false}))
+}
+
+/// 原子写：临时文件 + rename（0600）。账号档里有 refreshToken，权限不能松。
+fn write_json_atomic(path: &std::path::Path, value: &Value) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(value).unwrap_or_default();
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&body)?;
+        file.sync_all()?;
+    }
+    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    std::fs::rename(&tmp, path)
+}
+
+/// 找到 uid 对应的账号文件并改一个字段，返回改完的公开视图。
+fn mutate_account(
+    app: &std::sync::Arc<App>,
+    uid: &str,
+    apply: impl FnOnce(&mut Map<String, Value>),
+) -> Option<Value> {
+    let account = app.state.accounts_snapshot().into_iter().find(|a| a.uid() == uid)?;
+    let mut data = account.data.clone();
+    apply(&mut data);
+    let value = Value::Object(data);
+    if write_json_atomic(&account.path, &value).is_err() {
+        return None;
+    }
+    app.state.reload();
+    let fresh = account_view(&account_with(app, uid)?, crate::state::now_epoch());
+    Some(fresh)
+}
+
+fn account_with(app: &std::sync::Arc<App>, uid: &str) -> Option<crate::state::AccountFile> {
+    app.state.accounts_snapshot().into_iter().find(|a| a.uid() == uid)
+}
+
+/// `POST /accounts/set`：逐字段生效（`wb_proxy.py:_route_accounts_set`）。
+async fn accounts_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(uid) = body.get("uid").and_then(Value::as_str) else {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "uid required", "code": 400}}));
+    };
+    let mut updated: Option<Value> = None;
+    let fields = [
+        ("proxySlot", "proxySlot"),
+        ("proxy", "proxy"),
+        ("enabled", "enabled"),
+        ("tasksEnabled", "tasksEnabled"),
+        ("note", "note"),
+        ("disabledModels", "disabledModels"),
+    ];
+    for (key, stored) in fields {
+        if let Some(value) = body.get(key) {
+            updated = mutate_account(app, uid, |data| {
+                data.insert(stored.to_string(), value.clone());
+            });
+            if updated.is_none() {
+                return json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "no such account", "code": 404}}));
+            }
+        }
+    }
+    if let Some(weight) = body.get("weight") {
+        let weight = weight.as_i64().unwrap_or(0);
+        if !(1..=100).contains(&weight) {
+            return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "weight out of range (1-100)", "code": 400}}));
+        }
+        updated = mutate_account(app, uid, |data| {
+            data.insert("weight".into(), json!(weight));
+        });
+    }
+    match updated {
+        Some(account) => json_resp(StatusCode::OK, &json!({"account": account})),
+        None => json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": "nothing to update: pass 'enabled', 'tasksEnabled', 'proxy', 'proxySlot', 'weight' or 'note'", "code": 400}}),
+        ),
+    }
+}
+
+/// `POST /accounts/set-all`：整池启用/停用。
+async fn accounts_set_all(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+    let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
+    let uids: Vec<String> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .filter(|a| realm.is_empty() || realm == "all" || a.realm() == realm)
+        .map(|a| a.uid())
+        .collect();
+    for uid in &uids {
+        mutate_account(app, uid, |data| {
+            data.insert("enabled".into(), json!(enabled));
+        });
+    }
+    json_resp(StatusCode::OK, &json!({"ok": true, "changed": uids.len()}))
+}
+
+/// `POST /accounts/delete`：删除账号文件。
+async fn accounts_delete(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(uid) = body.get("uid").and_then(Value::as_str) else {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "uid required", "code": 400}}));
+    };
+    let Some(account) = account_with(app, uid) else {
+        return json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "no such account", "code": 404}}));
+    };
+    let removed = std::fs::remove_file(&account.path).is_ok();
+    app.state.reload();
+    let now = crate::state::now_epoch();
+    let list: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    json_resp(StatusCode::OK, &json!({"deleted": removed, "accounts": list}))
+}
+
+/// `GET /accounts/export`：自描述导出文档（`wb_accounts.build_export_document`）。
+fn accounts_export(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
+    let query = req.uri().query().unwrap_or("");
+    let realm = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("realm="))
+        .filter(|v| *v == "cn" || *v == "intl");
+    let secrets = !query.split('&').any(|p| p == "secrets=0" || p == "secrets=false");
+    let uids: Vec<String> = query
+        .split('&')
+        .filter_map(|p| p.strip_prefix("uid="))
+        .flat_map(|v| v.split(',').map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut rows = Vec::new();
+    for account in app.state.accounts_snapshot() {
+        if let Some(want) = realm {
+            if account.realm() != want {
+                continue;
+            }
+        }
+        if !uids.is_empty() && !uids.contains(&account.uid()) {
+            continue;
+        }
+        let mut row = Value::Object(account.data.clone());
+        if !secrets {
+            if let Some(obj) = row.as_object_mut() {
+                obj.remove("accessToken");
+                obj.remove("refreshToken");
+            }
+        }
+        rows.push(row);
+    }
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "format": "workbuddy-accounts",
+            "version": 1,
+            "exportedAt": crate::state::local_stamp(),
+            "count": rows.len(),
+            "accounts": rows,
+        }),
+    )
+}
+
+/// `POST /settings/save`：只接受面板管理的键；未知键原样忽略（不写脏数据）。
+async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(patch) = body.as_object() else {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "body must be an object", "code": 400}}));
+    };
+    let mut settings = app.state.settings_snapshot();
+    let mut applied = Vec::new();
+    for (key, value) in patch {
+        // 面板是 settings.json 的唯一写者；这里只认「已有键」和几个新键，
+        // 免得把前端随手带的字段写进配置文件。
+        let known = settings.contains_key(key)
+            || matches!(
+                key.as_str(),
+                "api_keys" | "deleted_api_key_ids" | "panel_password" | "active_realm"
+            );
+        if !known {
+            continue;
+        }
+        settings.insert(key.clone(), value.clone());
+        applied.push(key.clone());
+    }
+    let path = app.state.accounts_dir.join("settings.json");
+    let value = Value::Object(settings);
+    match write_json_atomic(&path, &value) {
+        Ok(()) => {
+            app.state.reload();
+            json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
+        }
+        Err(e) => json_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &json!({"error": {"message": format!("cannot save settings: {e}"), "code": 500}}),
+        ),
+    }
+}
+
+/// `POST /realm`：切默认出口（写 active_realm.json）。
+async fn realm_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
+    if realm != "cn" && realm != "intl" {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "realm must be cn or intl", "code": 400}}));
+    }
+    let path = app.state.accounts_dir.join("active_realm.json");
+    let _ = write_json_atomic(&path, &json!({"realm": realm}));
+    app.state.reload();
+    json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": ["intl", "cn"]}))
 }
