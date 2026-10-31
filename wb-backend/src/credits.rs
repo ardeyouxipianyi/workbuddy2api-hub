@@ -514,3 +514,98 @@ pub async fn sweep(app: &Arc<App>, uid: &str, realm: &str) -> Value {
     out.insert("accounts".into(), Value::Array(accounts));
     Value::Object(out)
 }
+
+/// 签到回执归一：`pending` 不写 lastCheckin（写早了当天就不再重试）。
+fn checkin_state(code: i64, msg: &str) -> &'static str {
+    let pending = ["处理中", "请勿重复操作", "系统繁忙", "稍后再试"];
+    if pending.iter().any(|k| msg.contains(k)) {
+        return "pending";
+    }
+    match code {
+        0 => {
+            if msg.contains("失败") {
+                "failed"
+            } else {
+                "checked"
+            }
+        }
+        10001 => {
+            if msg.contains("已签到") {
+                "already"
+            } else {
+                "failed"
+            }
+        }
+        _ => "failed",
+    }
+}
+
+/// 国内版每日签到（`wb_accounts.checkin`）。
+pub async fn checkin(app: &Arc<App>, account: &AccountFile) -> Value {
+    if account.realm() != "cn" || account.is_api_key() || !account.str("enterpriseId").is_empty() {
+        return json!({"ok": false, "error": "这个账号没有个人成长体系（仅国内版 OAuth 账号可签到）"});
+    }
+    // 「今天已签到」是 HTTP 400 + code 10001，所以这里不能把 4xx 直接当失败。
+    let payload = match app
+        .upstream
+        .post(format!("{}/v2/billing/meter/daily-checkin", billing_base("cn")))
+        .headers(headers(account))
+        .json(&json!({}))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(resp) => resp.text().await.ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()),
+        Err(_) => None,
+    };
+    let Some(payload) = payload else {
+        return json!({"ok": false, "state": "failed", "error": "签到请求失败"});
+    };
+    let code = payload.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    let msg = payload.get("msg").and_then(Value::as_str).unwrap_or("ok").to_string();
+    let state = checkin_state(code, &msg);
+    if state == "checked" || state == "already" {
+        let mut data = account.data.clone();
+        data.insert("lastCheckin".into(), json!(crate::state::local_stamp()));
+        let _ = crate::state::write_json_atomic(&account.path, &Value::Object(data));
+        app.state.reload();
+        json!({"ok": true, "state": state, "code": code, "msg": msg,
+               "data": payload.get("data").cloned().unwrap_or(Value::Null)})
+    } else {
+        json!({"ok": false, "state": state, "code": code, "msg": msg, "error": msg})
+    }
+}
+
+/// 面板「国内版签到」：按 uid 或全部参与任务的国内版账号逐个签到。
+pub async fn checkin_all(app: &Arc<App>, uid: &str) -> Value {
+    let targets: Vec<AccountFile> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .filter(|a| {
+            a.realm() == "cn"
+                && !a.is_api_key()
+                && a.str("enterpriseId").is_empty()
+                && (!uid.is_empty() && uid != "all" && a.uid() == uid
+                    || (uid.is_empty() || uid == "all")
+                        && a.data.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(true))
+        })
+        .collect();
+    let mut results = Vec::new();
+    for account in &targets {
+        let mut out = checkin(app, account).await;
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert("uid".into(), json!(account.uid()));
+            obj.insert("nickname".into(), json!(account.str("nickname")));
+        }
+        results.push(out);
+    }
+    let now = crate::state::now_epoch();
+    let accounts: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| crate::panel::account_view(a, now))
+        .collect();
+    json!({"results": results, "accounts": accounts})
+}

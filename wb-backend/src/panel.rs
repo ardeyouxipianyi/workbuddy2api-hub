@@ -163,6 +163,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         }
         (&Method::POST, "/accounts/credits") => accounts_credits_fetch(app, req).await,
         (&Method::POST, "/accounts/product") => accounts_product(app, req).await,
+        (&Method::POST, "/accounts/checkin") => checkin(app, req).await,
         (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
@@ -1022,4 +1023,11 @@ async fn tasks_claim(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp 
     };
     let out = crate::tasks::claim_one(app, &account, code).await;
     json_resp(StatusCode::OK, &out)
+}
+
+/// `POST /accounts/checkin`：国内版每日签到。
+async fn checkin(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = crate::http::body_json(req).await.unwrap_or(json!({}));
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    json_resp(StatusCode::OK, &crate::credits::checkin_all(app, uid).await)
 }
