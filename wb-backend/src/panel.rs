@@ -161,6 +161,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/accounts/export") | (&Method::GET, "/accounts/export") => {
             accounts_export(app, &req)
         }
+        (&Method::POST, "/accounts/product") => accounts_product(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
         (&Method::POST, "/panel/password") => not_ported("/panel/password"),
@@ -959,4 +960,50 @@ fn tasks_view(app: &std::sync::Arc<App>) -> Resp {
             "ported": false,
         }),
     )
+}
+
+/// `POST /accounts/product`：切换出站身分（cli / workbuddy / vscode）。
+/// 官方两条配额线，某条满了可以换另一条；本机只改文件，不等别的路径顺手存档。
+async fn accounts_product(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = match crate::http::body_json(req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let product = body.get("product").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    if !matches!(product.as_str(), "workbuddy" | "vscode" | "cli") {
+        return json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": "product must be 'workbuddy', 'vscode', or 'cli'", "code": 400}}),
+        );
+    }
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
+    let targets: Vec<String> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .filter(|a| {
+            if !uid.is_empty() {
+                a.uid() == uid
+            } else if !realm.is_empty() && realm != "all" {
+                a.realm() == realm
+            } else {
+                true
+            }
+        })
+        .map(|a| a.uid())
+        .collect();
+    let mut changed = Vec::new();
+    for target in &targets {
+        if mutate_account(app, target, |data| {
+            data.insert("product".into(), json!(product));
+        })
+        .is_some()
+        {
+            changed.push(target.chars().take(8).collect::<String>());
+        }
+    }
+    let now = crate::state::now_epoch();
+    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    json_resp(StatusCode::OK, &json!({"ok": true, "product": product, "changed": changed, "accounts": accounts}))
 }
