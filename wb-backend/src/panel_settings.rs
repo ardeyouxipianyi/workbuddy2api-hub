@@ -50,13 +50,24 @@ fn mask(value: &str) -> String {
     }
 }
 
+/// 面板写 `deleted_at: ""` 表示没删（不是 null、也不是缺字段）；三种都是「未删除」。
+/// 只判 `is_some()` 会把生产里每一条活着的 key 都算成已删除 —— CT412 实测面板
+/// 「设置」页直接变空，看着像 key 丢了。
+fn is_deleted(entry: &Value) -> bool {
+    match entry.get("deleted_at") {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Null) | None => false,
+        Some(_) => true,
+    }
+}
+
 fn api_keys(settings: &Map<String, Value>, deleted: bool) -> Vec<Value> {
     settings
         .get("api_keys")
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter(|entry| entry.get("deleted_at").is_some() == deleted)
+                .filter(|entry| is_deleted(entry) == deleted)
                 .map(|entry| {
                     let raw = entry.get("key").and_then(Value::as_str).unwrap_or("");
                     if deleted {

@@ -12496,17 +12496,41 @@ async function saveBackend(btn){
   const box = document.getElementById('setBackendRust');
   const target = (box && box.checked) ? 'rust' : 'python';
   if(btn) btn.disabled = true;
+  // launcher 会先等在飞请求归零（最长 60 秒）再换进程，这段等待必须说出来，
+  // 否则很像"点了没反应"，会有人连点。
+  toast('正在切换，等旧后端的在飞请求结束（最长约 70 秒）', 'warn');
   // 切换会把正在服务这个请求的进程停掉，响应可能收不到，所以「成功」只按
   // 轮询到的最终状态判定，不按这次 POST 的返回。
   try { await postJSON('/admin/backend', {backend: target}); } catch(e) { /* 进程正在易手 */ }
   let settled = false;
-  for(let i = 0; i < 60; i++){
+  // 轮询不能用 getJSON：切换会换掉进程，新进程不认旧会话，getJSON 的 401 统一处理
+  // 会把人踢回登录框，于是"切换失败"看起来像"掉线"。这里自己发请求、自己吞掉 401。
+  // 时长也要盖住 launcher 的 drain（60 秒）+ 新后端启动（约 10 秒）。
+  // 会话是存在各自进程内存里的：一经易手，新后端必然回 401。这不是失败，是换人成功的
+  // 最可靠信号，所以连续 401 几次就当成「已切换，需要重新登录」，别傻等到超时。
+  let straight401 = 0, needLogin = false;
+  for(let i = 0; i < 340; i++){
     await new Promise(function(r){ setTimeout(r, 500); });
+    let st = null, unauthorized = false;
     try {
-      const st = await getJSON('/admin/backend/status');
-      if(st && st.backend === target && st.healthy){ settled = true; break; }
-      if(st && st.last_switch && st.last_switch.ok === false){ break; }
+      const resp = await fetch('/admin/backend/status', {headers: {'X-Panel-Token': PANEL_TOKEN}});
+      if(resp.status === 401) unauthorized = true;
+      else if(resp.ok) st = await resp.json();
     } catch(e) { /* 端口短暂无人监听 */ }
+    if(unauthorized){
+      straight401 += 1;
+      if(straight401 >= 6){ needLogin = true; break; }
+      continue;
+    }
+    straight401 = 0;
+    if(st && st.backend === target && st.healthy){ settled = true; break; }
+    if(st && st.last_switch && st.last_switch.at && st.last_switch.ok === false){ break; }
+  }
+  if(needLogin){
+    toast('后端已切换，面板会话随旧进程结束 —— 请重新输入面板口令', 'warn');
+    if(btn) btn.disabled = false;
+    panelNeedsLogin();
+    return;
   }
   await loadBackendState();
   toast(settled

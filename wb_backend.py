@@ -45,7 +45,10 @@ CRASH_WINDOW = 600.0
 #: 起子进程后多久必须答 /health。
 START_TIMEOUT = 30.0
 #: 切换时等在飞请求归零的上限，超时强制切（会记一条 audit）。
-DRAIN_TIMEOUT = 60.0
+#: 60s 是「等一条长流式回复自然结束」的尺度，但面板自己每 5 秒一小把轮询，
+#: 在飞数几乎不会归零，实测每次切换都白等满 60 秒（CT412、面板开着时）。
+#: SIGTERM 本身就会让后端把手上的请求处理完，这里只留一个短窗口。
+DRAIN_TIMEOUT = 15.0
 #: SIGTERM 之后等进程退出的上限，超时 SIGKILL。
 STOP_TIMEOUT = 10.0
 
@@ -325,7 +328,9 @@ class Supervisor(object):
         return {
             "backend": self.current,
             "pid": self.proc.pid if self.proc is not None and self.proc.poll() is None else None,
-            "healthy": bool(payload and payload.get("backend") == self.current),
+            # 同一个身份判定：旧版 python 的 /health 没有 backend 字段，严格比较会让
+            # 「切回 python」永远是 unhealthy，面板那边就一直显示切换未完成。
+            "healthy": bool(payload and payload.get("ok") and self._is_backend(payload, self.current)),
             "uptime_s": round(time.time() - self.started_at, 1) if self.started_at else 0,
             "inflight": (payload or {}).get("inflight"),
             "python": {"available": True},

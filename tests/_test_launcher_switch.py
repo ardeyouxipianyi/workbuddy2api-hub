@@ -70,6 +70,20 @@ class LegacyHealthIdentity(unittest.TestCase):
         self.assertTrue(is_backend({"ok": True, "backend": "rust"}, "rust"))
         self.assertFalse(is_backend({"ok": True, "backend": "rust"}, "python"))
 
+    def test_status_reports_legacy_python_healthy(self):
+        """status() 与 wait_healthy() 必须用同一套身份判定。"""
+        sys.path.insert(0, REPO)
+        import wb_backend
+        sup = wb_backend.Supervisor(REPO, "/tmp", "/tmp", "127.0.0.1", 1, [])
+        sup.current = "python"
+        sup.started_at = 0
+        original = wb_backend.probe
+        wb_backend.probe = lambda *a, **k: {"ok": True}
+        try:
+            self.assertTrue(sup.status()["healthy"])
+        finally:
+            wb_backend.probe = original
+
 
 @unittest.skipUnless(BINARY, "wb-backend 未编译（cargo build --release --target x86_64-unknown-linux-musl）")
 class LauncherSwitch(unittest.TestCase):

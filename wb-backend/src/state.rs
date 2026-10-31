@@ -11,11 +11,16 @@ use std::sync::RwLock;
 use serde_json::{Map, Value};
 
 /// 与 wb_accounts.py:4100 同一份清单：和凭证同目录但不是账号的文件。
+// Python 只认真正的账号文件：它没有列出这几个，靠的是「没有 uid 就当不成账号」。
+// 这边 uid 缺失时会拿文件名兜底，于是这三份元数据会被数成账号（CT412 实测 16 vs 13）。
 const NON_ACCOUNT_FILES: &[&str] = &[
     "settings.json",
     "active_realm.json",
     "model_windows.json",
     "quota_scan.json",
+    "backend.json",
+    "model.json",
+    "model_entitlements.json",
 ];
 
 #[derive(Clone)]
