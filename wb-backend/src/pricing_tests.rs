@@ -309,6 +309,7 @@ fn usage_record_stamps_current_policy() {
         pricing,
         scheduler: scheduler::Scheduler::default(),
         logs: Default::default(),
+        slots: crate::slots::Slots::from_env(0),
     };
     let model = "m";
     let credited = json!({"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"credit":0.5});

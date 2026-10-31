@@ -51,6 +51,19 @@ pub fn text_resp(code: StatusCode, text: &str) -> Resp {
 }
 
 /// Python 版所有错误都是 `{"error": {...}}`；M1 只用到这一种信封。
+/// 并发闸门排不上队时的 503（OpenAI 信封；`/v1/messages` 用 anthropic::error）。
+fn busy(app: &App) -> Resp {
+    json_resp(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &json!({"error": {
+            "message": app.slots.busy_message(),
+            "type": "server_error",
+            "code": 503,
+            "gateway_hint": crate::slots::Slots::BUSY_HINT,
+        }}),
+    )
+}
+
 pub fn error_resp(code: StatusCode, message: &str) -> Resp {
     json_resp(code, &json!({"error": {"message": message, "type": "invalid_request_error"}}))
 }
@@ -106,19 +119,45 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
             Err(()) => protocol::openai_auth_error(&app),
         },
         (&Method::POST, "/v1/chat/completions") | (&Method::POST, "/chat/completions") => {
+            let _slot = match app.slots.acquire().await {
+                Some(permit) => permit,
+                None => return busy(&app),
+            };
             match require_auth(&app, &req) {
                 Ok(key_id) => crate::chat::completions(&app, req, key_id).await,
                 Err(resp) => resp,
             }
         }
-        (&Method::POST, "/v1/completions") => match protocol::authorize(&app, &req) {
-            Ok(identity) => completions::handle(&app, req, identity).await,
-            Err(()) => protocol::openai_auth_error(&app),
-        },
-        (&Method::POST, "/v1/messages") | (&Method::POST, "/v1/messages/count_tokens") => {
+        (&Method::POST, "/v1/completions") => {
+            let _slot = match app.slots.acquire().await {
+                Some(permit) => permit,
+                None => return busy(&app),
+            };
+            match protocol::authorize(&app, &req) {
+                Ok(identity) => completions::handle(&app, req, identity).await,
+                Err(()) => protocol::openai_auth_error(&app),
+            }
+        }
+        // count_tokens 不占对话槽（Python 里它走的是另一条分支）。
+        (&Method::POST, "/v1/messages/count_tokens") => anthropic::handle(&app, req).await,
+        (&Method::POST, "/v1/messages") => {
+            let _slot = match app.slots.acquire().await {
+                Some(permit) => permit,
+                None => {
+                    return anthropic::error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &app.slots.busy_message(),
+                        Some("overloaded_error"),
+                    )
+                }
+            };
             anthropic::handle(&app, req).await
         }
         (&Method::POST, "/v1/responses") | (&Method::POST, "/responses") => {
+            let _slot = match app.slots.acquire().await {
+                Some(permit) => permit,
+                None => return busy(&app),
+            };
             match require_auth(&app, &req) {
                 Ok(key_id) => crate::responses::handle(&app, req, key_id).await,
                 Err(resp) => resp,

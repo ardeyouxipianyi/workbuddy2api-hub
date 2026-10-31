@@ -41,6 +41,7 @@ mod pool;
 mod quota;
 mod record;
 mod responses;
+mod slots;
 mod sse;
 mod state;
 mod stream;
@@ -90,6 +91,8 @@ pub struct App {
     pub updates: std::sync::Arc<updates::Manager>,
     /// 最近 500 条面板/后端事件，`GET /logs` 直接读它（面板「运行日志」页）。
     pub logs: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    /// 对话并发闸门（Python 的 `_chat_slots`）：许可 drop 即释放。
+    pub slots: slots::Slots,
 }
 
 impl App {
@@ -166,6 +169,7 @@ async fn main() -> std::io::Result<()> {
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .expect("build http client");
+    let ready_accounts = state.ready_count();
     let app = Arc::new(App {
         state,
         upstream,
@@ -179,6 +183,8 @@ async fn main() -> std::io::Result<()> {
         scheduler: scheduler::Scheduler::default(),
         updates: std::sync::Arc::new(updates::Manager::new(&args.accounts_dir)),
         logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        // `auto` 的上限按就绪账号数算，所以要在状态装好之后才建。
+        slots: slots::Slots::from_env(ready_accounts),
     });
 
     scheduler::spawn(app.clone());
