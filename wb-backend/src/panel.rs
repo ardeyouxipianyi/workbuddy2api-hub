@@ -201,6 +201,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             json_resp(StatusCode::OK, &json!({"ok": true, "msg": "已触发巡检保活", "result": out}))
         }
         (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
+        (&Method::POST, "/quota-scan/run") => quota_scan_run(app).await,
         (&Method::POST, "/accounts/daily-chat") => daily_chat(app, req).await,
         (&Method::POST, "/tasks/travel") => tasks_travel(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
@@ -255,7 +256,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 "message": "一键配置（写客户端配置并做备份/回滚）还没移植到 Rust 后端；勾选清单可以保存，但不会改本机客户端配置",
                 "code": 501}}),
         ),
-        (&Method::GET, "/scheduler") => json_resp(StatusCode::OK, &app.scheduler.status()),
+        (&Method::GET, "/scheduler") => json_resp(StatusCode::OK, &app.scheduler.status(app)),
         (&Method::GET, "/updates") => json_resp(
             StatusCode::OK,
             &json!({
@@ -408,7 +409,24 @@ fn settings(app: &std::sync::Arc<App>) -> Resp {
     out.insert("panel_password_is_default".into(), json!(false));
     out.insert("realm".into(), json!(app.state.current_realm()));
     out.insert("usd_cny".into(), json!(7.1));
+    // 模型额度：观察清单、周期与最近一次快照（面板「模型额度查询」区块）。
+    out.insert("window_probe".into(), json!(crate::quota::window_probe_enabled(app)));
+    out.insert("quota_scan_models".into(), json!(crate::quota::watched_models(app)));
+    out.insert("quota_scan_interval_hours".into(), json!(crate::quota::scan_interval_hours()));
+    out.insert("quota_scans".into(), json!(crate::quota::scan_snapshot(app, 12)));
     json_resp(StatusCode::OK, &Value::Object(out))
+}
+
+/// `POST /quota-scan/run`：忽略查询间隔立刻查一轮。
+/// 已登记 429 窗口的配额线仍然不动（那几条交给窗口探针）。
+async fn quota_scan_run(app: &std::sync::Arc<App>) -> Resp {
+    let sent = crate::quota::scan_due(app, true, crate::quota::BATCH_LIMIT).await;
+    let msg = if sent > 0 {
+        format!("已查询 {sent} 条配额线")
+    } else {
+        "没有需要查询的配额线（未勾选模型或都已到下一次查询时刻）".to_string()
+    };
+    json_resp(StatusCode::OK, &json!({"ok": true, "sent": sent, "msg": msg}))
 }
 
 fn read_usage(path: &std::path::Path) -> Vec<Value> {
@@ -950,6 +968,33 @@ fn accounts_export(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
     )
 }
 
+/// `wb_settings._clean_quota_scan_models`：字符串按 `,;\n` 拆，列表逐项取字符串，
+/// 去空白、去重、保序；超过 200 个或类型不对就整条拒绝（不静默截断）。
+fn clean_models(value: &Value) -> Option<Vec<String>> {
+    let raw: Vec<&str> = match value {
+        Value::Array(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                out.push(item.as_str()?);
+            }
+            out
+        }
+        Value::String(text) => text.split([',', ';', '\n']).collect(),
+        _ => return None,
+    };
+    let mut models: Vec<String> = Vec::new();
+    for name in raw {
+        let name = name.trim();
+        if !name.is_empty() && !models.iter().any(|m| m == name) {
+            models.push(name.to_string());
+        }
+    }
+    if models.len() > 200 {
+        return None;
+    }
+    Some(models)
+}
+
 /// `POST /settings/save`：只接受面板管理的键；未知键原样忽略（不写脏数据）。
 async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let body = match crate::http::body_json(req).await {
@@ -962,6 +1007,18 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
     let mut settings = app.state.settings_snapshot();
     let mut applied = Vec::new();
     for (key, value) in patch {
+        // 观察清单要先规整（去空白/去重/保序），与 Python 版落盘的口径一致。
+        if key == "quota_scan_models" {
+            let Some(models) = clean_models(value) else {
+                return json_resp(
+                    StatusCode::BAD_REQUEST,
+                    &json!({"error": {"message": "quota_scan_models must be a list of model ids", "code": 400}}),
+                );
+            };
+            settings.insert(key.clone(), json!(models));
+            applied.push(key.clone());
+            continue;
+        }
         // 面板是 settings.json 的唯一写者；这里只认「已有键」和几个新键，
         // 免得把前端随手带的字段写进配置文件。
         let known = settings.contains_key(key)

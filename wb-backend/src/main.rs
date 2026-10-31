@@ -17,6 +17,7 @@ mod agents;
 mod panel;
 mod scheduler;
 mod pool;
+mod quota;
 mod record;
 mod responses;
 mod sse;

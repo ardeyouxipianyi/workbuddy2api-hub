@@ -47,7 +47,7 @@ impl Scheduler {
     }
 
     /// `GET /scheduler`：面板顶栏那个状态条。
-    pub fn status(&self) -> Value {
+    pub fn status(&self, app: &Arc<App>) -> Value {
         let now = crate::state::local_stamp();
         json!({
             "enabled": self.enabled(),
@@ -56,8 +56,8 @@ impl Scheduler {
             "mode_intl": "每 6 小时刷新积分（国际版活跃未移植）",
             "last_run_time": self.last_run(),
             "next_run_time": next_run_label(&now),
-            "windows": [],
-            "quota_scans": [],
+            "windows": crate::quota::window_snapshot(app, 10),
+            "quota_scans": crate::quota::scan_snapshot(app, 6),
             "daily_chat": {},
             "logs": [],
         })
@@ -114,6 +114,11 @@ pub fn spawn(app: Arc<App>) {
                 crate::credits::sweep(&app, "", "").await;
                 app.scheduler.mark_run();
             }
+
+            // 到点的额度窗口探针与定时查询：不受 enabled 影响（与 Python 版同），
+            // 一次探针最长等上游 60s，所以另起任务跑，别把巡检节奏带偏。
+            let quota_app = app.clone();
+            tokio::spawn(async move { crate::quota::tick(quota_app).await; });
         }
     });
 }

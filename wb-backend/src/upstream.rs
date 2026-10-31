@@ -219,6 +219,13 @@ pub(crate) async fn open_upstream(
             continue;
         }
         if code == 429 || code >= 500 {
+            // 429 带了重置时刻就登记额度窗口（wb_proxy 的同一条路径）：
+            // 重启不丢，探针到点抢回新一轮计时。
+            if code == 429 {
+                if let Some(reset) = crate::quota::parse_reset(&text) {
+                    crate::quota::schedule(app, &cand.uid, &ctx.model, reset);
+                }
+            }
             crate::pool::cooldown(app, &cand.uid, 60);
             continue;
         }
