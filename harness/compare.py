@@ -58,6 +58,18 @@ CASES = [
 #: GET 探测点：只读路由，两个后端都必须给出同一份字节。
 PROBES = ["/health", "/v1/models"]
 
+#: 面板只读路由：面板页面加载时真会调的那些。放在 chat 用例之后抓，
+#: 这样两侧的 /usage* 都刚好看见自己那 6 条请求（各自一个 usage 目录）。
+#: `--self-check` 不比这一组：同一后端抓两次，第二次的用量已经翻倍，
+#: 那是夹具的账，不是契约的错。
+PANEL_PROBES = [
+    "/realm", "/accounts", "/settings", "/scheduler", "/tasks",
+    "/agents", "/agents/available", "/agents/model-selection",
+    "/pricing", "/proxy/slots", "/activity/history", "/updates",
+    "/usage", "/usage/recent", "/usage/perf", "/usage/analytics",
+    "/usage/by-account", "/usage/timeseries", "/usage/remaining",
+]
+
 #: 每次运行都不同、或按设计就该不同的键：比较前整个删掉。
 #: `backend`/`version` 是「谁在服务」的自述，跨后端比较时必须忽略；其余是时间戳。
 VOLATILE_KEYS = {
@@ -92,12 +104,31 @@ def parse(raw):
         return sanitise(raw)
 
 
-def probe(base, path, timeout=60):
+def probe(base, path, timeout=60, token=None):
+    req = urllib.request.Request(base.rstrip("/") + path)
+    if token:
+        req.add_header("X-Panel-Token", token)
     try:
-        with urllib.request.urlopen(base.rstrip("/") + path, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
+
+
+def panel_login(base):
+    """面板默认口令是 admin（wb_settings.DEFAULT_PANEL_PASSWORD），夹具里没改过。
+
+    返回 X-Panel-Token；拿不到就退化成无 token（面板路由会 401，报告里能看出来）。
+    """
+    req = urllib.request.Request(
+        base.rstrip("/") + "/panel/login",
+        data=json.dumps({"password": "admin"}).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode()).get("token") or ""
+    except Exception:
+        return ""
 
 
 def call(base, case, body, timeout=90):
@@ -112,7 +143,7 @@ def call(base, case, body, timeout=90):
         return exc.code, exc.read().decode("utf-8", "replace")
 
 
-def capture(base, include_stream=True, skip=()):
+def capture(base, include_stream=True, skip=(), panel=False):
     out = {}
     for path in PROBES:
         status, raw = probe(base, path)
@@ -126,12 +157,81 @@ def capture(base, include_stream=True, skip=()):
             out[name] = {"status": status, "frames": frames}
         else:
             out[name] = {"status": status, "body": parse(raw)}
+    if panel:
+        token = panel_login(base)
+        for path in PANEL_PROBES:
+            status, raw = probe(base, path, token=token)
+            out["panel:" + path] = {"status": status, "body": parse(raw)}
     return out
+
+
+def shape(obj, depth=0):
+    """键集合与类型，忽略取值（面板 payload 的值是运行时状态）。"""
+    if isinstance(obj, dict):
+        return {k: shape(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        if not obj:
+            return []
+        inner = [shape(v, depth + 1) for v in obj]
+        merged = {}
+        for item in inner:
+            if not isinstance(item, dict):
+                return [item]
+            for k, v in item.items():
+                merged[k] = v
+        return [merged]
+    if obj is None:
+        return "null"
+    if isinstance(obj, bool):
+        return "bool"
+    if isinstance(obj, (int, float)):
+        return "number"
+    return "string"
+
+
+def _shape_delta(a, b, prefix=""):
+    """把两棵 shape 树的差异压成一行行 `路径: py=X rs=Y` / `缺键`。"""
+    out = []
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in a:
+            here = prefix + "." + k if prefix else k
+            if k not in b:
+                out.append("%s: 缺键" % here)
+            else:
+                out += _shape_delta(a[k], b[k], here)
+        for k in b:
+            if k not in a:
+                out.append("%s: 多出" % (prefix + "." + k if prefix else k))
+        return out
+    if a != b:
+        out.append("%s: py=%s rs=%s" % (prefix, json.dumps(a, ensure_ascii=False)[:60],
+                                        json.dumps(b, ensure_ascii=False)[:60]))
+    return out
+
+
+def diff_panel(a, b):
+    """面板路由逐条比「键集合 + 类型」；状态码不同也算差异。"""
+    problems = []
+    for name in list(a) + [k for k in b if k not in a]:
+        if not name.startswith("panel:"):
+            continue
+        left, right = a.get(name), b.get(name)
+        if left is None or right is None:
+            continue
+        if left["status"] != right["status"]:
+            problems.append("%s: status %s != %s" % (name[6:], left["status"], right["status"]))
+            continue
+        deltas = _shape_delta(shape(left["body"]), shape(right["body"]))
+        if deltas:
+            problems.append("%s: %s" % (name[6:], "；".join(deltas[:12])))
+    return problems
 
 
 def diff(a, b):
     problems = []
     for name in list(a) + [k for k in b if k not in a]:
+        if name.startswith("panel:"):
+            continue
         left, right = a.get(name), b.get(name)
         if left is None or right is None:
             # 一侧按里程碑跳过（如 M1 还没移植的流式），不算差异但要报出来。
@@ -362,18 +462,24 @@ def main(argv=None):
     if args.with_rust:
         fixture = Fixture(rust_binary=args.with_rust)
         try:
-            a = capture(fixture.base)
-            b = capture(fixture.rust)
+            a = capture(fixture.base, panel=True)
+            b = capture(fixture.rust, panel=True)
             response_problems = diff(a, b)
+            panel_problems = diff_panel(a, b)
             usage_problems = diff_usage(fixture.usage_dirs[0], fixture.usage_dirs[1])
             for line in response_problems + usage_problems:
                 print("[diff] " + line[:2000])
+            for line in panel_problems:
+                print("[panel] " + line[:2000])
+            print("面板路由 %d/%d 键集合与类型一致"
+                  % (len([k for k in b if k.startswith("panel:")]) - len(panel_problems),
+                     len([k for k in b if k.startswith("panel:")])))
             skipped = len(a) - len(b)
             print("%d/%d 响应项一致（python vs rust）%s；usage %s"
                   % (len(b) - len(response_problems), len(b),
                      "；跳过 %d 项未移植流式（M2）" % skipped if skipped else "",
                      "一致" if not usage_problems else "%d 处不同" % len(usage_problems)))
-            problems = response_problems + usage_problems
+            problems = response_problems + usage_problems + panel_problems
             return 1 if problems else 0
         finally:
             fixture.close()

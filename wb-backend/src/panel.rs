@@ -53,9 +53,10 @@ fn token_of(req: &Request<Incoming>) -> Option<String> {
 }
 
 fn unauth() -> Resp {
+    // 文案与 Python 一致（wb_proxy.py 的 panel 401）：客户端只认这句。
     json_resp(
         StatusCode::UNAUTHORIZED,
-        &json!({"error": {"message": "unauthorized", "type": "invalid_request_error", "code": 401}}),
+        &json!({"error": {"message": "panel password required", "type": "invalid_request_error", "code": 401}}),
     )
 }
 
@@ -119,6 +120,15 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             }
         }
         return Some(json_resp(StatusCode::OK, &json!({"ok": true})));
+    }
+
+    // `/realm` 在 Python 侧不算面板路由（wb_proxy.py 的 _is_panel_route），
+    // 面板首屏在登录前就会读它，所以这里保持免 token。
+    if (&method, path.as_str()) == (&Method::GET, "/realm") {
+        return Some(json_resp(
+            StatusCode::OK,
+            &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
+        ));
     }
 
     // 其余都要 token。
