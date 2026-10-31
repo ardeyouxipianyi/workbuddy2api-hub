@@ -86,8 +86,21 @@ fn gateway_hint() -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+fn client_allowed(req: &hyper::Request<hyper::body::Incoming>) -> bool {
+    req.extensions()
+        .get::<crate::http::PeerAddr>()
+        .map(|peer| peer.0.is_loopback())
+        .unwrap_or(true)
+}
+
 /// `GET /agents`
-pub fn overview(app: &App) -> Value {
+pub fn overview(app: &App, req: &hyper::Request<hyper::body::Incoming>) -> Value {
+    if !client_allowed(req) {
+        return json!({
+            "enabled": false,
+            "reason": "agent config is only available from the machine running the gateway",
+        });
+    }
     let state = integration_state(app);
     let clients: Vec<Value> = CLIENTS
         .iter()
@@ -154,7 +167,7 @@ pub fn overview(app: &App) -> Value {
     json!({
         "enabled": true,
         "clients": clients,
-        "models": crate::models::flat_ids(),
+        "models": crate::models::agent_models(),
         "selected_models": selection.cloned().unwrap_or_default(),
         "models_configured": selection.is_some(),
         "model_embedding_clients": MODEL_EMBEDDING_CLIENTS,
@@ -162,6 +175,22 @@ pub fn overview(app: &App) -> Value {
         "global_key_set": !keys.is_empty(),
         "auth_required": settings.get("auth_required").and_then(Value::as_bool).unwrap_or(true),
         "gateway": {"base_url": gateway_hint()},
+    })
+}
+
+/// `GET /agents/available`: cheap availability probe used before the panel
+/// loads the full integration view.
+pub fn available(req: &hyper::Request<hyper::body::Incoming>) -> Value {
+    json!({"enabled": client_allowed(req)})
+}
+
+/// `GET /agents/model-selection`: persisted picker selection.
+pub fn model_selection(app: &App) -> Value {
+    let settings = app.state.settings_snapshot();
+    let selection = settings.get("agent_model_selection").and_then(Value::as_array);
+    json!({
+        "configured": selection.is_some(),
+        "selected_models": selection.cloned().unwrap_or_default(),
     })
 }
 

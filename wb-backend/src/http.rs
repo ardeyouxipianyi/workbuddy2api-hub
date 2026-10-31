@@ -13,6 +13,10 @@ use serde_json::{json, Value};
 
 use crate::{auth, health, models, App};
 
+/// Client address retained past hyper's connection layer for local-only routes.
+#[derive(Clone, Copy)]
+pub struct PeerAddr(pub std::net::IpAddr);
+
 /// 流式与非流式共用一种响应体：M1 的 `Full` 装不下 SSE 的增量写。
 pub type Resp = Response<BoxBody<Bytes, std::convert::Infallible>>;
 
@@ -74,10 +78,6 @@ pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> 
         }
     }
 }
-
-/// 对端地址（`main.rs` 在 accept 时塞进请求扩展）。面板登录限流按它分桶。
-#[derive(Clone, Debug)]
-pub struct PeerIp(pub String);
 
 pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
     let path = req.uri().path().to_string();

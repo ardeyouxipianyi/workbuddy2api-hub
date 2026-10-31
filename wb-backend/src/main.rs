@@ -16,6 +16,10 @@ mod models;
 mod activity;
 mod agents;
 mod panel;
+mod panel_defaults;
+mod panel_read;
+mod panel_settings;
+mod panel_usage;
 mod scheduler;
 mod pool;
 mod quota;
@@ -156,11 +160,11 @@ async fn main() -> std::io::Result<()> {
         let app = app.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
-            let peer_ip = peer.ip().to_string();
             let service = service_fn(move |mut req: Request<Incoming>| {
                 let app = app.clone();
-                // 面板登录限流要按客户端分桶，对端地址只有 accept 时拿得到。
-                req.extensions_mut().insert(http::PeerIp(peer_ip.clone()));
+                // 对端地址只有 accept 时拿得到：面板登录限流按它分桶，/agents 的
+                // 本机限定也按它判断回环。
+                req.extensions_mut().insert(http::PeerAddr(peer.ip()));
                 async move { Ok::<_, std::convert::Infallible>(http::route(app, req).await) }
             });
             let _ = hyper::server::conn::http1::Builder::new()
