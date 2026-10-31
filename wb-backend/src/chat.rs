@@ -18,7 +18,7 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>) -> Resp {
     let realm = crate::http::requested_realm(&req, &app.state.current_realm());
     let body = match body_json(req).await {
         Ok(v) => v,
-        Err(e) => return error_resp(StatusCode::BAD_REQUEST, &e),
+        Err(resp) => return resp,
     };
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     app.inflight.fetch_add(1, Ordering::Relaxed);

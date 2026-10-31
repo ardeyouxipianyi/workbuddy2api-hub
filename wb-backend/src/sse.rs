@@ -18,7 +18,12 @@ pub struct Aggregated {
 }
 
 impl Aggregated {
-    pub fn into_payload(self, request_model: &Value, elapsed_ms: i64) -> Value {
+    /// 客户端看到的 usage（也是 usage 行里记的那份，与 Python 一致）。
+    pub fn client_usage(&self) -> Value {
+        usage_for_client(self.usage.clone(), &self.content, &self.reasoning)
+    }
+
+    pub fn into_payload(self, request_model: &Value, elapsed_ms: i64, usage: Value) -> Value {
         let mut message = Map::new();
         message.insert("role".into(), json!("assistant"));
         message.insert("content".into(), json!(self.content));
@@ -44,7 +49,7 @@ impl Aggregated {
                 "finish_reason": self.finish.unwrap_or_else(|| "stop".to_string()),
             }]),
         );
-        out.insert("usage".into(), self.usage.unwrap_or(Value::Null));
+        out.insert("usage".into(), usage);
         out.insert("elapsed_ms".into(), json!(elapsed_ms));
         out.insert("first_chunk_at".into(), json!(self.first_chunk_at.unwrap_or(0.0)));
         Value::Object(out)
@@ -99,8 +104,14 @@ pub fn aggregate(text: &str) -> Option<Aggregated> {
                 agg.created = n;
             }
         }
-        if chunk.get("usage").map(|u| !u.is_null()).unwrap_or(false) {
-            agg.usage = chunk.get("usage").cloned();
+        if let Some(usage) = chunk.get("usage").filter(|u| !u.is_null()) {
+            // 上游可能在中途和末帧各报一次；要的是 total_tokens 最大的那个，
+            // 不是最后出现的那个（末帧有时只补 completion_tokens）。
+            let total = |v: &Value| v.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
+            let better = agg.usage.as_ref().map(|cur| total(usage) >= total(cur)).unwrap_or(true);
+            if better {
+                agg.usage = Some(usage.clone());
+            }
         }
         let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
             continue;
@@ -134,4 +145,62 @@ pub fn epoch_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+/// 客户端看到的 usage：上游没给或全 0 时按字面估一条，命中缓存时补齐别名。
+/// （`aggregate_stream` 尾部，wb_proxy.py:15846-15867）
+fn usage_for_client(usage: Option<Value>, content: &str, reasoning: &str) -> Value {
+    let total = |v: &Value| v.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
+    let mut usage = match usage {
+        Some(u) if total(&u) != 0 => u,
+        other => {
+            if content.is_empty() && reasoning.is_empty() {
+                return other.unwrap_or(Value::Null);
+            }
+            let comp = estimate_tokens(content) + estimate_tokens(reasoning);
+            let prompt = std::cmp::max(1, comp / 2);
+            json!({
+                "prompt_tokens": prompt,
+                "completion_tokens": comp,
+                "total_tokens": prompt + comp,
+                "completion_tokens_details": {"reasoning_tokens": estimate_tokens(reasoning)},
+                "prompt_tokens_details": {"cached_tokens": 0},
+            })
+        }
+    };
+    // 归一化：有命中就把四个别名一起补齐，客户端读哪个都对。
+    let best = crate::record::best_cached_tokens(&usage);
+    if best > 0 {
+        if let Some(map) = usage.as_object_mut() {
+            map.insert("cache_read_input_tokens".into(), json!(best));
+            map.insert("cached_tokens".into(), json!(best));
+            map.insert("prompt_cache_hit_tokens".into(), json!(best));
+            if let Some(Value::Object(details)) = map.get_mut("prompt_tokens_details") {
+                details.insert("cached_tokens".into(), json!(best));
+            } else {
+                map.insert("prompt_tokens_details".into(), json!({"cached_tokens": best}));
+            }
+            if let Some(Value::Object(details)) = map.get_mut("input_tokens_details") {
+                details.insert("cached_tokens".into(), json!(best));
+            }
+        }
+    }
+    usage
+}
+
+/// `estimate_tokens`（wb_proxy.py:15595）：CJK 按字算，其余按 3.6 字/token。
+fn estimate_tokens(text: &str) -> i64 {
+    if text.is_empty() {
+        return 0;
+    }
+    let cjk = text
+        .chars()
+        .filter(|c| matches!(*c as u32, 0x4e00..=0x9fff | 0x3400..=0x4dbf))
+        .count() as i64;
+    let other = text.chars().count() as i64 - cjk;
+    if other == 0 {
+        cjk
+    } else {
+        cjk + std::cmp::max(1, (other as f64 / 3.6) as i64)
+    }
 }

@@ -51,13 +51,29 @@ def completion_body(model, text="OK", usage=None):
     }
 
 
-def sse_frames(model, text="OK"):
+def _marker(messages):
+    """读请求里的标记词，让同一条 case 能要到不同的上游行为（无 usage / 有缓存命中）。"""
+    for message in messages or []:
+        text = message.get("content")
+        if isinstance(text, str):
+            if "NOUSAGE" in text:
+                return "nousage"
+            if "WITHCACHE" in text:
+                return "cache"
+    return ""
+
+
+def sse_frames(model, text="OK", marker=""):
     """The upstream's own stream shape: chunks carrying choices, usage last."""
     frames = []
     for piece in (text[:1] or "O", text[1:] or "K"):
         frames.append({"choices": [{"index": 0, "delta": {"content": piece}}]})
-    frames.append({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                   "usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}})
+    frames.append({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+    if marker != "nousage":
+        usage = {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}
+        if marker == "cache":
+            usage["prompt_tokens_details"] = {"cached_tokens": 7}
+        frames[-1]["usage"] = usage
     out = []
     for frame in frames:
         frame.update({"id": "chatcmpl-fixture", "object": "chat.completion.chunk",
@@ -65,6 +81,12 @@ def sse_frames(model, text="OK"):
         out.append("data: " + json.dumps(frame, ensure_ascii=False) + "\n\n")
     out.append("data: [DONE]\n\n")
     return "".join(out).encode("utf-8")
+
+
+def sse_parts(model, text="OK", marker=""):
+    """SSE 按帧切片；由 handler 逐片 flush，客户端才能观察到「首字节早于末字节」。"""
+    return [frame + b"\n\n"
+            for frame in sse_frames(model, text, marker).split(b"\n\n") if frame.strip()]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -121,15 +143,24 @@ class Handler(BaseHTTPRequestHandler):
             self.seen.append(key)
             fixture = self._fixture(model, messages)
             usage = (fixture or {}).get("usage")
+            marker = _marker(messages)
             if body.get("stream"):
                 payload = (fixture or {}).get("sse")
-                data = payload.encode("utf-8") if isinstance(payload, str) else (
-                    sse_frames(model, (fixture or {}).get("text", "OK")))
+                parts = ([payload.encode("utf-8")] if isinstance(payload, str) else
+                         sse_parts(model, (fixture or {}).get("text", "OK"), marker))
+                data_len = sum(len(p) for p in parts)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Length", str(data_len))
                 self.end_headers()
-                return self.wfile.write(data)
+                # 逐片 flush + 20ms：一次性写到底的话 `ttft_ms`/`gen_ms` 会退化成
+                # 「谁先读完谁先记」，`tokens_per_sec` 有无就成了噪声；20ms 让
+                # gen_ms 在毫秒粒度上稳定 > 0。
+                for part in parts:
+                    self.wfile.write(part)
+                    self.wfile.flush()
+                    time.sleep(0.02)
+                return None
             return self._json(200, fixture["body"] if fixture and fixture.get("body")
                               else completion_body(model, (fixture or {}).get("text", "OK"), usage))
         if path.endswith("/auth/token/refresh") or path.endswith("/auth/state") or \

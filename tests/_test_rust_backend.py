@@ -36,5 +36,51 @@ class RustBackendParity(unittest.TestCase):
         self.assertEqual(problems, [], "Rust 后端与 Python 后端不一致：\n" + "\n".join(problems))
 
 
+@unittest.skipUnless(BINARY, "wb-backend 未编译（cargo build --manifest-path wb-backend/Cargo.toml）")
+class RustBodyLimit(unittest.TestCase):
+    """413 的报文形状（specs/http-surface.md §413）：独立的进程，改小上限即可验。"""
+
+    def test_payload_too_large(self):
+        import json
+        import socket
+        import subprocess
+        import tempfile
+        import time
+        import urllib.error
+        import urllib.request
+
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        tmp = tempfile.mkdtemp(prefix="wb-limit-")
+        env = dict(os.environ, WB_MAX_PAYLOAD_BYTES="1024")
+        proc = subprocess.Popen([BINARY, "--host", "127.0.0.1", "--port", str(port),
+                                 "--accounts-dir", tmp, "--usage-dir", tmp],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                try:
+                    urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=1).read()
+                    break
+                except Exception:
+                    time.sleep(0.1)
+            body = b'{"model":"m","messages":[' + b'{"role":"user","content":"x"},' * 200 + b']}'
+            req = urllib.request.Request("http://127.0.0.1:%d/v1/chat/completions" % port,
+                                         data=body, headers={"Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(req, timeout=10)
+            self.assertEqual(caught.exception.code, 413)
+            payload = json.loads(caught.exception.read())["error"]
+            self.assertIn("payload too large (", payload["message"])
+            self.assertIn("> 1024 limit)", payload["message"])
+            self.assertEqual(payload["code"], 413)
+            self.assertIn("WB_MAX_PAYLOAD_BYTES", payload["gateway_hint"])
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -211,7 +211,23 @@ pub async fn chat_once(
     };
 
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    // 逐个 chunk 读而不是 text()：`ttft_ms` 量的是「首字节什么时候到」，读完再
+    // 打时间戳会把首字延迟记成整个响应时间（gen_ms 恒为 0）。
+    let mut text = String::new();
+    let mut first_chunk_at: Option<f64> = None;
+    let mut resp = resp;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if first_chunk_at.is_none() {
+                    first_chunk_at = Some(crate::sse::epoch_now());
+                }
+                text.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            Ok(None) => break,
+            Err(e) => return fail(&format!("upstream stream error: {e}")),
+        }
+    }
     if !status.is_success() {
         // 错误码到报文的映射（11-128 / 11158 / 11140 / 11102 / 14220）在 M2。
         return fail(&format!(
@@ -222,14 +238,18 @@ pub async fn chat_once(
     }
 
     let elapsed = started.elapsed().as_millis() as i64;
-    let aggregated = match crate::sse::aggregate(&text) {
+    let mut aggregated = match crate::sse::aggregate(&text) {
         Some(agg) => agg,
         None => return fail("upstream stream error"),
     };
+    // 首块时刻以「真正收到第一个字节」为准，聚合器自己打的只是解析时刻。
+    aggregated.first_chunk_at = first_chunk_at.or(aggregated.first_chunk_at);
 
     let started_at = crate::sse::epoch_now() - started.elapsed().as_secs_f64();
     let first_ms = aggregated.first_chunk_at.map(|at| ((at - started_at) * 1000.0) as i64);
-    let usage = aggregated.usage.clone();
+    // 响应与 usage 行用的是同一份（已兜底/归一化的）usage，别各算一份。
+    let usage = aggregated.client_usage();
+    let usage_ref = if usage.is_null() { None } else { Some(&usage) };
     record::record(
         &app.recorder,
         record::Row {
@@ -240,7 +260,7 @@ pub async fn chat_once(
             ttft_ms: first_ms,
             gen_ms: first_ms.map(|first| elapsed - first),
             requested_model: Some(&requested_model),
-            usage: usage.as_ref(),
+            usage: usage_ref,
             fp: Some(&fp),
             account: Some(&uid),
             realm: &account_realm,
@@ -248,6 +268,6 @@ pub async fn chat_once(
             effort: effort.as_deref(),
         },
     );
-    let payload = aggregated.into_payload(&json!(model), elapsed);
+    let payload = aggregated.into_payload(&json!(model), elapsed, usage);
     crate::http::json_resp(StatusCode::OK, &payload)
 }

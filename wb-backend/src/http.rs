@@ -72,20 +72,41 @@ pub fn requested_realm(req: &Request<Incoming>, current: &str) -> String {
     current.to_string()
 }
 
-/// 读整个请求体。M1 的上限沿用 Python 版（WB_MAX_BODY_MB，默认 64）。
-pub async fn body_json(req: Request<Incoming>) -> Result<Value, String> {
-    let limit = std::env::var("WB_MAX_BODY_MB")
+/// 请求体上限：`WB_MAX_PAYLOAD_BYTES`，默认 16 MiB（wb_proxy.py:42）。
+fn payload_limit() -> usize {
+    std::env::var("WB_MAX_PAYLOAD_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(64)
-        * 1024
-        * 1024;
+        .unwrap_or(16 * 1024 * 1024)
+}
+
+/// 超限报文的 `gateway_hint`（wb_proxy.py:13722）——客户端/人靠它知道去改哪个开关。
+fn gateway_hint_413() -> &'static str {
+    "single request body exceeds the gateway cap (WB_MAX_PAYLOAD_BYTES, default 16MB); \
+     raise it and restart wb-proxy"
+}
+
+/// 读整个请求体；超限时回 Python 版同一条 413 报文。
+pub async fn body_json(req: Request<Incoming>) -> Result<Value, Resp> {
+    let limit = payload_limit();
     let bytes = http_body_util::BodyExt::collect(req.into_body())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            error_resp(StatusCode::BAD_REQUEST, &format!("invalid request body: {e}"))
+        })?
         .to_bytes();
     if bytes.len() > limit {
-        return Err("request body too large".into());
+        return Err(json_resp(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &json!({"error": {
+                "message": format!("payload too large ({} bytes > {} limit)", bytes.len(), limit),
+                "type": "invalid_request_error",
+                "code": 413,
+                "gateway_hint": gateway_hint_413(),
+            }}),
+        ));
     }
-    serde_json::from_slice(&bytes).map_err(|e| format!("invalid json: {e}"))
+    serde_json::from_slice(&bytes).map_err(|e| {
+        error_resp(StatusCode::BAD_REQUEST, &format!("invalid json: {e}"))
+    })
 }

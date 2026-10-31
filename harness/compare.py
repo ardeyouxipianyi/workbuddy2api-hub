@@ -43,6 +43,12 @@ CASES = [
                                   {"role": "user", "content": "hi"}]}, True),
     ("chat.stream", {"model": MODEL, "max_tokens": 32, "stream": True,
                      "messages": [{"role": "user", "content": "hi"}]}, False),
+    # 上游不报 usage：网关要按字面估一条（写作 usage_missing 的那条路径）。
+    ("chat.nousage", {"model": MODEL, "max_tokens": 32,
+                      "messages": [{"role": "user", "content": "NOUSAGE hi"}]}, True),
+    # 上游报了缓存命中：网关要把四个别名补齐，usage 行与响应都用同一份。
+    ("chat.cached", {"model": MODEL, "max_tokens": 32,
+                     "messages": [{"role": "user", "content": "WITHCACHE hi"}]}, True),
     ("chat.tools", {"model": MODEL, "max_tokens": 32,
                     "messages": [{"role": "user", "content": "weather?"}],
                     "tools": [{"type": "function", "function": {
@@ -61,6 +67,10 @@ VOLATILE_KEYS = {
 }
 
 
+#: 由耗时推导出来的值：字段该不该出现是契约，具体数字不是（同一请求两次跑都不一样）。
+RATE_KEYS = {"tokens_per_sec"}
+
+
 def sanitise(obj):
     """递归删掉易变键；JSON 结构比较按对象比，不按字节比。
 
@@ -68,7 +78,8 @@ def sanitise(obj):
     那是给机器看的分隔符，不是契约。真正要盯的是字段、类型、取值和顺序。
     """
     if isinstance(obj, dict):
-        return {k: sanitise(v) for k, v in obj.items() if k not in VOLATILE_KEYS}
+        return {k: ("<derived>" if k in RATE_KEYS else sanitise(v))
+                for k, v in obj.items() if k not in VOLATILE_KEYS}
     if isinstance(obj, list):
         return [sanitise(v) for v in obj]
     return obj

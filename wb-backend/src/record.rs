@@ -33,7 +33,7 @@ fn int_of(v: Option<&Value>) -> i64 {
 }
 
 /// `_best_cached_tokens`（wb_proxy.py:817-844）：六个别名里第一个正数。
-fn best_cached_tokens(usage: &Value) -> i64 {
+pub fn best_cached_tokens(usage: &Value) -> i64 {
     let pick = |path: &[&str]| -> i64 {
         let mut cur = usage;
         for key in path {
