@@ -66,16 +66,9 @@ MATRIX = [
 # 这样与具体模型/账号无关。{"*"} 表示这个接口还没开始对齐。
 # 修掉一批就把它从表里删掉 —— 表变小才是进度，剩下的差异才叫回归。
 KNOWN_DIFFS = {
-    "/usage/perf?realm=all&range=today": {"*"},
-    "/usage/perf?realm=all&range=month": {"*"},
-    "/usage/analytics?realm=all&range=today": {"*"},
-    "/usage/analytics?realm=all&range=month": {"*"},
-    "/usage/timeseries?realm=all&range=today": {"credits"},
-    "/usage/timeseries?realm=all&range=week": {"credits"},
-    "/usage/timeseries?realm=all&range=month": {"credits"},
-    "/usage/by-account": {"models"},
-    "/usage/remaining": {"activity_floor", "activity_floor_iso", "models", "rows"},
-    "/pricing": {"timeline"},
+    # rows/models 需要 Python 的 cap 来源（limit-events + model_caps），尚未移植；
+    # floor 与 iso 已对齐。见 _test_rust_backend.py 的 PANEL_TODO。
+    "/usage/remaining": {"rows", "models", "budgets"},
 }
 
 
@@ -249,6 +242,9 @@ def diff(left, right, path="", out=None):
         elif not math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9):
             out.append((path, left, right))
         return out
+    if _soft(path) and isinstance(left, str) and isinstance(right, str):
+        # 形如 "2026-10-31 22:12:14" 的「本响应生成时刻」：两次请求必然差几秒。
+        return out
     if left != right:
         out.append((path, short(left), short(right)))
     return out
@@ -259,6 +255,18 @@ def short(value):
         return "<%s len=%d>" % (type(value).__name__, len(value))
     text = str(value)
     return text if len(text) <= 48 else text[:45] + "..."
+
+
+def normalise(body, backend):
+    """把响应里指向本后端自己的目录换成占位符。
+
+    两个后端各拿一份语料副本，所以 `timeline`/`log_file` 这类字段里的绝对路径
+    必然不同。这是夹具的差异，不是口径差异，比之前要抹掉。
+    """
+    text = json.dumps(body, ensure_ascii=False)
+    for prefix, token in ((backend.usage_dir, "<usage>"), (backend.accounts_dir, "<accounts>")):
+        text = text.replace(prefix, token)
+    return json.loads(text)
 
 
 class UsageParity(unittest.TestCase):
@@ -308,7 +316,7 @@ class UsageParity(unittest.TestCase):
                 unexpected.append("%s: 状态码 python=%s rust=%s"
                                   % (path, py_status, rust_status))
                 continue
-            found = diff(rust_body, py_body)
+            found = diff(normalise(rust_body, self.rust), normalise(py_body, self.py))
             known = KNOWN_DIFFS.get(path, set())
             for step, rust_value, py_value in found:
                 leaf = step.rsplit("/", 1)[-1].split("[")[0]

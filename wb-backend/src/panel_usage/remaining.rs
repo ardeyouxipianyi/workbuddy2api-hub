@@ -90,12 +90,40 @@ fn model_totals(pairs: BTreeMap<PairKey, PairValue>, floor: f64) -> (Vec<Value>,
     (models.into_values().collect(), output_rows)
 }
 
+/// 本地时区里「昨天 00:00」的 epoch——判定下界取整天边界而不是 now−24h，
+/// 同一天里不变，面板轮询之间才不会抖（Python 的 _remaining_activity_floor）。
+fn yesterday_midnight() -> f64 {
+    local_midnight(1).unwrap_or_else(|| crate::state::now_epoch() as f64 - DAY_SECONDS)
+}
+
+fn local_stamp_with_seconds(epoch: f64) -> String {
+    unsafe {
+        let time = epoch as libc::time_t;
+        let mut value: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&time, &mut value).is_null() {
+            return String::new();
+        }
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            value.tm_year + 1900,
+            value.tm_mon + 1,
+            value.tm_mday,
+            value.tm_hour,
+            value.tm_min,
+            value.tm_sec
+        )
+    }
+}
+
 pub fn remaining(app: &Arc<App>) -> Resp {
     let now = crate::state::now_epoch() as f64;
-    let floor = now - DAY_SECONDS;
+    let floor = yesterday_midnight();
     let rows = read_rows(app);
     let accounts = app.state.accounts_snapshot();
     let realms = account_realms(app);
+    // shortcut: 这里按 usage 活动取 (账号, 模型) 对；Python 还要用它自己的 cap 来源
+    // （limit-events.jsonl + 凭证档 model_caps）过滤，那套子系统尚未移植 —— 有 cap
+    // 的部署上两边行集合会不同，属已知缺口（PANEL_TODO 里登记）。
     let pairs = collect_pairs(&rows, &accounts, &realms, floor);
     let (models, output_rows) = model_totals(pairs, floor);
     json_resp(
@@ -105,7 +133,7 @@ pub fn remaining(app: &Arc<App>) -> Resp {
             "generated_at": now,
             "generated_iso": crate::state::local_stamp(),
             "activity_floor": floor,
-            "activity_floor_iso": crate::state::local_stamp(),
+            "activity_floor_iso": local_stamp_with_seconds(floor),
             "budgets": [],
             "models": models,
             "rows": output_rows,

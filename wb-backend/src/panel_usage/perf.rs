@@ -24,23 +24,27 @@ fn feed_perf(bucket: &mut Perf, row: &Value) {
         _ => bucket.errors += 1,
     }
     if outcome(row) == "completed" {
+        // Python 的判定不统一，照抄：ttft/gen/cache_hit 看「不是 None」（0 也收），
+        // tokens_per_sec 看真值（0 不收）；wall 三种结果都收，但也看真值。
         for (key, target) in [
             ("ttft_ms", &mut bucket.ttft),
             ("gen_ms", &mut bucket.generation),
-            ("tokens_per_sec", &mut bucket.rates),
             ("cache_hit_pct", &mut bucket.cache),
         ] {
             if let Some(value) = row.get(key).and_then(Value::as_f64) {
                 target.push(value);
             }
         }
+        if let Some(value) = row.get("tokens_per_sec").and_then(Value::as_f64) {
+            if value != 0.0 {
+                bucket.rates.push(value);
+            }
+        }
     }
-    if outcome(row) != "client_aborted" {
-        if let Some(value) = row.get("elapsed_ms").and_then(Value::as_f64) {
+    if let Some(value) = row.get("elapsed_ms").and_then(Value::as_f64) {
+        if value != 0.0 {
             bucket.wall.push(value);
         }
-    } else if let Some(value) = row.get("elapsed_ms").and_then(Value::as_f64) {
-        bucket.wall.push(value);
     }
 }
 
@@ -50,12 +54,14 @@ fn metric(values: &[f64]) -> Value {
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
+    // Python 的 round() 是「五取偶」：n=2 时 p50 落在 0.5 上取 0（取最小值而不是最大值）。
+    // 用四舍五入会整整差一个样本，面板上就是另一个数。
     let rank = |percent: f64| {
-        let index = (percent / 100.0 * (sorted.len() - 1) as f64).round() as usize;
+        let index = (percent / 100.0 * (sorted.len() - 1) as f64).round_ties_even() as usize;
         sorted[index.min(sorted.len() - 1)]
     };
     json!({
-        "avg": ((values.iter().sum::<f64>() / values.len() as f64) * 10.0).round() / 10.0,
+        "avg": ((values.iter().sum::<f64>() / values.len() as f64) * 10.0).round_ties_even() / 10.0,
         "p50": rank(50.0),
         "p90": rank(90.0),
         "p99": rank(99.0),
@@ -196,7 +202,16 @@ pub fn perf(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let sampled = &rows[start..];
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
-    let selected = rows_for_realm(sampled, &realm, &realms);
+    // 区间必须过滤：不然「今日」把整份样本都算进去了（Python 是按窗口收样的）。
+    let (since, until) = range_bounds(req);
+    let in_window = |row: &&Value| {
+        let at = number(row, "at");
+        since.map_or(true, |lower| at >= lower) && until.map_or(true, |upper| at <= upper)
+    };
+    let selected: Vec<&Value> = rows_for_realm(sampled, &realm, &realms)
+        .into_iter()
+        .filter(in_window)
+        .collect();
     let result = aggregate_perf(selected, &realms);
     let total = result.total;
     json_resp(

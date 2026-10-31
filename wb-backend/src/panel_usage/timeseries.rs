@@ -36,6 +36,7 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
             }
         });
     let mut buckets: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut credits: Vec<Value> = Vec::new();
     for row in selected {
         let at = number(row, "at");
         if at < since || at > until {
@@ -66,7 +67,24 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         if outcome(row) != "client_aborted" {
             entry["credit"] = json!(number(entry, "credit") + number(row, "credit"));
         }
+        // 「最近计费行」：Python 只收 credit > 0 的行，倒序留 50 条（面板的悬停明细）。
+        if number(row, "credit") > 0.0 {
+            credits.push(json!({
+                "at": at,
+                "iso": row.get("iso").cloned().unwrap_or_else(|| json!("")),
+                "model": row.get("model").cloned().unwrap_or_else(|| json!("")),
+                "account": row.get("account").cloned().unwrap_or_else(|| json!("")),
+                "credit": number(row, "credit"),
+                "total_tokens": integer(row, "total_tokens"),
+            }));
+        }
     }
+    credits.sort_by(|left, right| {
+        number(right, "at")
+            .partial_cmp(&number(left, "at"))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    credits.truncate(50);
     json_resp(
         StatusCode::OK,
         &json!({
@@ -76,7 +94,7 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
             "since": since,
             "until": until,
             "series": buckets.into_values().collect::<Vec<_>>(),
-            "credits": [],
+            "credits": credits,
         }),
     )
 }

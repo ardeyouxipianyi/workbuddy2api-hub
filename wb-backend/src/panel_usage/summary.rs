@@ -282,13 +282,17 @@ pub fn by_account(app: &Arc<App>) -> Resp {
     let mut accounts: Vec<Value> = grouped
         .into_iter()
         .map(|(account, items)| {
-            let mut models: BTreeMap<String, i64> = BTreeMap::new();
+            // Python 是「按次数降序、次数相同保持首次出现顺序」（sorted 是稳定排序），
+            // 所以这里不能用 BTreeMap 收集——那会把并列项按 id 排掉。
+            let mut models: Vec<(String, i64)> = Vec::new();
             for row in &items {
-                let model = row.get("model").and_then(Value::as_str).unwrap_or("?");
-                *models.entry(model.to_string()).or_default() += 1;
+                let model = row.get("model").and_then(Value::as_str).unwrap_or("?").to_string();
+                match models.iter_mut().find(|(name, _)| *name == model) {
+                    Some((_, count)) => *count += 1,
+                    None => models.push((model, 1)),
+                }
             }
-            let mut models: Vec<(String, i64)> = models.into_iter().collect();
-            models.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+            models.sort_by(|left, right| right.1.cmp(&left.1));
             json!({
                 "account": account,
                 "requests": items.len(),
