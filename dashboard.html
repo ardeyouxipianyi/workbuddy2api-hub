@@ -12456,10 +12456,12 @@ async function loadBackendState(){
   try { data = await getJSON('/admin/backend/status'); } catch(e) { data = null; }
   BACKEND_STATE = data;
   if(!data){
-    stateEl.textContent = '(状态未知)';
+    // 404 = 这一版后端还没有 /admin/backend（旧版 python 就是这样）。说清怎么走，
+    // 别让人对着「状态未知」猜。
+    stateEl.textContent = '(这一版后端没有切换接口)';
     stateEl.style.color = 'var(--warn)';
-    detailEl.textContent = '读不到后端状态。';
-    missingEl.textContent = '';
+    detailEl.textContent = '切到 Rust 后端之后，这里的开关才生效。';
+    missingEl.textContent = '先在容器里执行 /app/backend-switch rust';
     if(box){ box.disabled = true; box.checked = false; }
     if(btn) btn.disabled = true;
     return;
