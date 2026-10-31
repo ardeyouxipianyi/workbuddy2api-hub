@@ -151,6 +151,14 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
             json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
         }
+        (&Method::POST, "/shutdown") => {
+            // 先回 200，再让进程退：面板点「停止服务」期待立刻看到结果。
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                std::process::exit(0);
+            });
+            json_resp(StatusCode::OK, &json!({"ok": true, "shutting_down": true}))
+        }
         (&Method::POST, "/logs/clear") => {
             if let Ok(mut ring) = app.logs.lock() {
                 ring.clear();
@@ -286,6 +294,16 @@ fn accounts(app: &std::sync::Arc<App>) -> Resp {
     )
 }
 
+/// 风控窗口剩余秒数；没有限制时回 null（面板按真假判断，`wb_accounts.py:1264`）。
+fn restricted_for(account: &crate::state::AccountFile, now: f64) -> Value {
+    let left = (account.restricted_until() - now).max(0.0).round();
+    if left > 0.0 {
+        json!(left)
+    } else {
+        Value::Null
+    }
+}
+
 pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Value {
     let raw = &account.data;
     let uid = account.uid();
@@ -324,7 +342,7 @@ pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Val
         "lastErrorDetail": Value::Null,
         "inCooldown": false,
         "cooldownFor": Value::Null,
-        "restrictedFor": Value::Null,
+        "restrictedFor": restricted_for(account, now as f64),
         "modelCooldowns": [],
         "softStreak": 0,
         "unscopedStreak": 0,

@@ -45,6 +45,19 @@ impl AccountFile {
         }
     }
 
+    /// 上游风控窗口的截止时刻（epoch）；0 表示没有限制。
+    pub fn restricted_until(&self) -> f64 {
+        if let Some(n) = self.data.get("restrictedUntil").and_then(Value::as_f64) {
+            return n.max(0.0);
+        }
+        // 老档可能是秒级字符串或毫秒；认不出来就当没限制（宁可选中，不误封）。
+        self.data
+            .get("restrictedUntil")
+            .and_then(|v| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+            .map(|n| n.max(0.0))
+            .unwrap_or(0.0)
+    }
+
     pub fn enabled(&self) -> bool {
         self.data.get("enabled").and_then(Value::as_bool).unwrap_or(true)
     }

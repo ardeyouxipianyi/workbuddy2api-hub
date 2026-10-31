@@ -63,6 +63,9 @@ pub fn candidates(app: &Arc<App>, realm: &str, tried: &[String]) -> Vec<Candidat
         .filter(|a| a.realm() == realm)
         .filter(|a| !tried.contains(&a.uid()))
         .filter(|a| !app.pool.cooling(&a.uid()))
+        // 上游风控窗口（`wb_accounts.py:989` 的 restrictedUntil，camelCase）：
+        // 窗口期内的号选了也是 403，直接跳过。
+        .filter(|a| a.restricted_until() <= now as f64)
         .filter(|a| a.enabled())
         .filter(|a| !a.str("accessToken").is_empty())
         .filter(|a| a.expires_at() == 0 || a.expires_at() > now - 3600)
