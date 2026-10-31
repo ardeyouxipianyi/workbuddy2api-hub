@@ -248,14 +248,13 @@ pub async fn chat_stream(
             first_chunk_at: None,
         };
         let mut first_chunk_at: Option<f64> = None;
-        let mut broken = false;
+        let mut broken: Option<String> = None;
         loop {
             let chunk = match resp.chunk().await {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("wb-backend: upstream stream error: {e}");
-                    broken = true;
+                    broken = Some(format!("upstream stream aborted: {e}"));
                     break;
                 }
             };
@@ -273,9 +272,13 @@ pub async fn chat_stream(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if frame.get("error").is_some() {
-                    eprintln!("wb-backend: upstream error frame during stream");
-                    broken = true;
+                if let Some(err) = frame.get("error") {
+                    let message = err
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("upstream error")
+                        .to_string();
+                    broken = Some(message);
                     break;
                 }
                 crate::sse::absorb(&mut agg, &frame);
@@ -293,7 +296,7 @@ pub async fn chat_stream(
                     }
                 }
             }
-            if broken {
+            if broken.is_some() {
                 break;
             }
         }
@@ -305,17 +308,23 @@ pub async fn chat_stream(
         });
         let usage = agg.client_usage();
         let mut tail = String::new();
-        if !broken && !usage.is_null() {
-            tail.push_str(&emitter.usage_frame(&usage));
+        match broken.as_deref() {
+            // 坏流：只发一条 error 帧，不发 finish/usage/[DONE]。
+            Some(message) => tail.push_str(&emitter.error_frame(message)),
+            None => {
+                if !usage.is_null() {
+                    tail.push_str(&emitter.usage_frame(&usage));
+                }
+                tail.push_str(&emitter.done_frame());
+            }
         }
-        tail.push_str(&emitter.done_frame());
         let _ = tx.send(Ok(Frame::data(Bytes::from(tail)))).await;
         record::record(
             &app.recorder,
             record::Row {
                 model: &ctx.model,
                 stream: true,
-                outcome: if broken { "failed" } else { "completed" },
+                outcome: if broken.is_some() { "failed" } else { "completed" },
                 elapsed_ms: Some(elapsed),
                 ttft_ms: first_ms,
                 gen_ms: first_ms.map(|first| elapsed - first),

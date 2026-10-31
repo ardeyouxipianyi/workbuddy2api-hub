@@ -60,6 +60,20 @@ impl Emitter {
         format!("data: {}\n\n", Value::Object(out))
     }
 
+    /// 流中途失败：状态码已经是 200，只能靠帧说明（specs/streaming-and-errors.md §1.11）。
+    /// 之后**不发** finish/usage/`[DONE]` —— 客户端看到 `[DONE]` 或 finish 帧才算正常结束。
+    pub fn error_frame(&self, message: &str) -> String {
+        format!(
+            "data: {}\n\n",
+            json!({"error": {
+                "message": message,
+                "type": "upstream_error",
+                "param": null,
+                "code": "upstream_stream_error",
+            }})
+        )
+    }
+
     pub fn done_frame(&self) -> String {
         "data: [DONE]\n\n".to_string()
     }
