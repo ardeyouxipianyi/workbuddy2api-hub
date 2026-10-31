@@ -52,7 +52,10 @@ def http(base, path, data=None, token=None, timeout=30):
         with urllib.request.urlopen(request, timeout=timeout) as fh:
             return fh.status, fh.read()
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
+        try:
+            return exc.code, exc.read()
+        finally:
+            exc.close()
 
 
 @unittest.skipUnless(BINARY, "wb-backend 未编译（cargo build --release --target x86_64-unknown-linux-musl）")
@@ -92,7 +95,7 @@ class LauncherSwitch(unittest.TestCase):
             [sys.executable, os.path.join(app, "wb_proxy.py"), "--supervise",
              "--host", "127.0.0.1", "--port", str(port),
              "--accounts-dir", accounts, "--usage-dir", usage,
-             "--panel-password", "pw"],
+             "--panel-password", "pw", "--api-key", "switch-test-key"],
             cwd=app, stdout=log, stderr=log)
         try:
             self.assertEqual(self._wait_backend(base, "python")["backend"], "python")
@@ -105,6 +108,17 @@ class LauncherSwitch(unittest.TestCase):
             self.assertEqual(code, 202, raw)
             self.assertEqual(self._wait_backend(base, "rust")["backend"], "rust")
             self._wait_backend_file(accounts, "rust")
+
+            # 换人之后凭据必须还在：命令行上的 --api-key/--panel-password 由 launcher
+            # 转成 WB_* 环境变量交给 rust 子进程，否则切过去就变成门大开。
+            self.assertEqual(http(base, "/panel/login", {"password": "wrong"})[0], 401)
+            self.assertEqual(http(base, "/settings")[0], 401)
+            self.assertEqual(http(base, "/v1/models")[0], 401)
+            self.assertEqual(http(base, "/v1/models", token="")[0], 401)
+            request = urllib.request.Request(
+                base + "/v1/models", headers={"Authorization": "Bearer switch-test-key"})
+            with urllib.request.urlopen(request, timeout=20) as fh:
+                self.assertEqual(fh.status, 200)
 
             # 端口上换成了 rust：面板仍是那一份，切回的按钮走 Rust 的 /admin/backend。
             token = json.loads(http(base, "/panel/login", {"password": "pw"})[1])["token"]

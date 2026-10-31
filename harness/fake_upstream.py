@@ -196,6 +196,8 @@ def bootstrap(directory):
         json.dump(account, fh, ensure_ascii=False, indent=2)
     settings = {"api_keys": [], "panel_password_default": True,
                 "log_db_enabled": False, "update_check_enabled": False,
+                # Anthropic 兼容面默认是关的；对拍要真走一次翻译，所以这里打开。
+                "enable_anthropic_messages": True,
                 "daily_chat_web": False, "schedule": {"checkin": [23], "travel": [23],
                                                       "keepalive": [23], "cat": [23]}}
     with open(os.path.join(accounts, "settings.json"), "w", encoding="utf-8") as fh:

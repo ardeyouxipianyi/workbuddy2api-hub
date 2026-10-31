@@ -34,29 +34,42 @@ sys.path.insert(0, ROOT)
 import fake_upstream  # noqa: E402
 
 MODEL = "deepseek-v4.1-flash"
-#: 每条 case 是一组请求；加 case 就加一行，覆盖协议形状而不是覆盖业务分支。
+#: 每条 case 是 (名字, 路径, body, 是否属于 M1 最小集)；加 case 就加一行，
+#: 覆盖协议形状而不是覆盖业务分支。
+CHAT = "/v1/chat/completions"
 CASES = [
-    ("chat.plain", {"model": MODEL, "max_tokens": 32,
-                    "messages": [{"role": "user", "content": "hi"}]}, True),
-    ("chat.system", {"model": MODEL, "max_tokens": 32,
-                     "messages": [{"role": "system", "content": "be brief"},
-                                  {"role": "user", "content": "hi"}]}, True),
-    ("chat.stream", {"model": MODEL, "max_tokens": 32, "stream": True,
-                     "messages": [{"role": "user", "content": "hi"}]}, False),
+    ("chat.plain", CHAT, {"model": MODEL, "max_tokens": 32,
+                          "messages": [{"role": "user", "content": "hi"}]}, True),
+    ("chat.system", CHAT, {"model": MODEL, "max_tokens": 32,
+                           "messages": [{"role": "system", "content": "be brief"},
+                                        {"role": "user", "content": "hi"}]}, True),
+    ("chat.stream", CHAT, {"model": MODEL, "max_tokens": 32, "stream": True,
+                           "messages": [{"role": "user", "content": "hi"}]}, False),
     # 上游不报 usage：网关要按字面估一条（写作 usage_missing 的那条路径）。
-    ("chat.nousage", {"model": MODEL, "max_tokens": 32,
-                      "messages": [{"role": "user", "content": "NOUSAGE hi"}]}, True),
+    ("chat.nousage", CHAT, {"model": MODEL, "max_tokens": 32,
+                            "messages": [{"role": "user", "content": "NOUSAGE hi"}]}, True),
     # 上游报了缓存命中：网关要把四个别名补齐，usage 行与响应都用同一份。
-    ("chat.cached", {"model": MODEL, "max_tokens": 32,
-                     "messages": [{"role": "user", "content": "WITHCACHE hi"}]}, True),
-    ("chat.tools", {"model": MODEL, "max_tokens": 32,
-                    "messages": [{"role": "user", "content": "weather?"}],
-                    "tools": [{"type": "function", "function": {
-                        "name": "get_weather", "description": "weather",
-                        "parameters": {"type": "object", "properties": {}}}}]}, True),
+    ("chat.cached", CHAT, {"model": MODEL, "max_tokens": 32,
+                           "messages": [{"role": "user", "content": "WITHCACHE hi"}]}, True),
+    ("chat.tools", CHAT, {"model": MODEL, "max_tokens": 32,
+                          "messages": [{"role": "user", "content": "weather?"}],
+                          "tools": [{"type": "function", "function": {
+                              "name": "get_weather", "description": "weather",
+                              "parameters": {"type": "object", "properties": {}}}}]}, True),
+    # 另外三种协议面：OpenAI completions、Anthropic messages（Claude Code 走这条）、
+    # responses（Codex）。每一种都要有自己的请求/响应信封，缺一个就不是「可选后端」。
+    ("completions.plain", "/v1/completions",
+     {"model": MODEL, "prompt": "hi", "max_tokens": 32}, True),
+    ("messages.plain", "/v1/messages",
+     {"model": MODEL, "max_tokens": 32,
+      "messages": [{"role": "user", "content": "hi"}]}, True),
+    ("messages.count", "/v1/messages/count_tokens",
+     {"model": MODEL, "messages": [{"role": "user", "content": "hi"}]}, True),
+    ("responses.plain", "/v1/responses",
+     {"model": MODEL, "max_tokens": 32, "input": "hi"}, True),
 ]
 #: GET 探测点：只读路由，两个后端都必须给出同一份字节。
-PROBES = ["/health", "/v1/models"]
+PROBES = ["/health", "/v1/models", "/v1/usage", "/v1/balance-summary"]
 
 #: 面板只读路由：面板页面加载时真会调的那些。放在 chat 用例之后抓，
 #: 这样两侧的 /usage* 都刚好看见自己那 6 条请求（各自一个 usage 目录）。
@@ -75,7 +88,7 @@ PANEL_PROBES = [
 VOLATILE_KEYS = {
     "id", "created", "system_fingerprint", "first_chunk_at", "at", "iso",
     "elapsed_ms", "ttft_ms", "gen_ms", "fetched_at", "file_mtime", "pid",
-    "expires_at", "backend", "version",
+    "expires_at", "backend", "version", "created_at",
 }
 
 
@@ -133,7 +146,8 @@ def panel_login(base):
 
 def call(base, case, body, timeout=90):
     # ?realm=cn：夹具账号是 cn，默认区域是 intl，不指定就取不到号。
-    url = base.rstrip("/") + "/v1/chat/completions?realm=cn"
+    sep = "&" if "?" in case else "?"
+    url = base.rstrip("/") + case + sep + "realm=cn"
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
@@ -148,10 +162,10 @@ def capture(base, include_stream=True, skip=(), panel=False):
     for path in PROBES:
         status, raw = probe(base, path)
         out["GET " + path] = {"status": status, "body": parse(raw)}
-    for name, body, m1 in CASES:
+    for name, path, body, m1 in CASES:
         if name in skip or (not include_stream and not m1):
             continue
-        status, raw = call(base, name, body)
+        status, raw = call(base, path, body)
         if raw.lstrip().startswith("data:"):
             frames = [parse(f[len("data:"):].strip()) for f in raw.split("\n\n") if f.strip()]
             out[name] = {"status": status, "frames": frames}

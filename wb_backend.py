@@ -176,10 +176,35 @@ class Supervisor(object):
                 "--host", self.host, "--port", str(self.port),
                 "--accounts-dir", self.accounts_dir, "--usage-dir", self.usage_dir]
 
+    def _env_for(self, backend):
+        """Rust 子进程的凭据：命令行上的 --api-key/--panel-password 改走环境变量。
+
+        Python 后端拿的是原始 argv，这两个参数它自己解释；Rust 后端只认
+        WB_API_KEY / WB_PANEL_PASSWORD。不转过去的话，切到 rust 会把「只靠命令行
+        参数挡着」的部署变成门大开——请求不要 key、面板不要口令。
+        """
+        if backend != "rust":
+            return None
+        env = dict(os.environ)
+        for flag, name in (("--api-key", "WB_API_KEY"), ("--panel-password", "WB_PANEL_PASSWORD")):
+            value = self._flag_value(flag)
+            if value:
+                env[name] = value
+        return env
+
+    def _flag_value(self, flag):
+        argv = self.passthrough
+        for i, item in enumerate(argv):
+            if item == flag and i + 1 < len(argv):
+                return argv[i + 1]
+            if item.startswith(flag + "="):
+                return item.split("=", 1)[1]
+        return ""
+
     def start(self, backend):
         argv = self._argv_for(backend)
         log("starting %s backend: %s" % (backend, " ".join(argv[:3])))
-        self.proc = subprocess.Popen(argv, cwd=self.app_dir)
+        self.proc = subprocess.Popen(argv, cwd=self.app_dir, env=self._env_for(backend))
         self.current = backend
         self.started_at = time.time()
         return self.proc

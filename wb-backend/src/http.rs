@@ -82,7 +82,12 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
     app.state.refresh();
     match (&method, path.as_str()) {
         (&Method::GET, "/health") => health::get(&app).await,
-        (&Method::GET, "/v1/models") | (&Method::GET, "/models") => models::list(&app, &req).await,
+        // 模型目录不是「公开发现」：Python 的 _get_v1_models 也先 _authorized()，
+        // 没 key 就 401。少了这一层，切到 rust 之后整个目录对外裸奔。
+        (&Method::GET, "/v1/models") | (&Method::GET, "/models") => match require_auth(&app, &req) {
+            Ok(_) => models::list(&app, &req).await,
+            Err(resp) => resp,
+        },
         (&Method::POST, "/v1/chat/completions") | (&Method::POST, "/chat/completions") => {
             match require_auth(&app, &req) {
                 Ok(key_id) => crate::chat::completions(&app, req, key_id).await,
