@@ -157,6 +157,7 @@ pub async fn handle(
     key_id: String,
 ) -> crate::http::Resp {
     let started = std::time::Instant::now();
+    let pin = crate::keyref::pinned(&req);
     let realm = crate::http::requested_realm(&req, &app.state.current_realm());
     let session = crate::http::session_key_header(req.headers());
     let body = match crate::http::body_json(req).await {
@@ -172,9 +173,9 @@ pub async fn handle(
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     app.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let result = if stream {
-        stream_response(app, &chat_body, &realm, started, &key_id, session).await
+        stream_response(app, &chat_body, &realm, started, &key_id, session, pin.as_ref()).await
     } else {
-        once(app, &chat_body, &realm, started, &key_id, session).await
+        once(app, &chat_body, &realm, started, &key_id, session, pin.as_ref()).await
     };
     app.inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     result
@@ -187,8 +188,9 @@ async fn once(
     started: std::time::Instant,
     key_id: &str,
     session_key: Option<&str>,
+    pin: Option<&crate::keyref::PinnedAccount>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key).await {
+    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key, pin).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -263,8 +265,9 @@ async fn stream_response(
     started: std::time::Instant,
     key_id: &str,
     session_key: Option<&str>,
+    pin: Option<&crate::keyref::PinnedAccount>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key).await {
+    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key, pin).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };

@@ -13,6 +13,7 @@ mod health;
 mod credits;
 mod identity;
 mod http;
+mod keyref;
 mod launcher;
 mod models;
 mod activity;
@@ -36,6 +37,7 @@ mod pricing_store;
 #[cfg(test)]
 mod pricing_tests;
 mod pricing_view;
+mod proxy_slots;
 mod scheduler;
 mod pool;
 mod quota;

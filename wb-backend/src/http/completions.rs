@@ -62,6 +62,7 @@ pub fn to_chat(body: &Value) -> Result<Value, &'static str> {
 
 pub async fn handle(app: &Arc<App>, req: Request<Incoming>, identity: Identity) -> Resp {
     let started = std::time::Instant::now();
+    let pin = crate::keyref::pinned(&req);
     let realm = protocol::requested_realm(app, &req, &identity);
     let session = crate::http::session_key_header(req.headers());
     let body = match protocol::json_body(req).await {
@@ -94,6 +95,7 @@ pub async fn handle(app: &Arc<App>, req: Request<Incoming>, identity: Identity) 
             started,
             &identity.key_id,
             session.as_deref(),
+            pin.as_ref(),
         )
         .await
     } else {
@@ -104,6 +106,7 @@ pub async fn handle(app: &Arc<App>, req: Request<Incoming>, identity: Identity) 
             started,
             &identity.key_id,
             session.as_deref(),
+            pin.as_ref(),
         )
         .await
     };

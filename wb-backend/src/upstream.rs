@@ -15,7 +15,6 @@ use hyper::StatusCode;
 use serde_json::{json, Map, Value};
 
 use crate::record;
-use crate::state::AccountFile;
 use crate::App;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant.";
@@ -150,6 +149,7 @@ pub(crate) async fn open_upstream(
     body: &Value,
     realm: &str,
     session_key: Option<&str>,
+    pin: Option<&crate::keyref::PinnedAccount>,
 ) -> Result<(crate::pool::Candidate, Ctx, reqwest::Response), crate::http::Resp> {
     let forwarded = build_upstream_body(body);
     let model = forwarded.get("model").and_then(Value::as_str).unwrap_or("").to_string();
@@ -164,11 +164,17 @@ pub(crate) async fn open_upstream(
     let encoded = serde_json::to_vec(&forwarded).unwrap_or_default();
     let mut tried: Vec<String> = Vec::new();
     let mut last = "no usable account".to_string();
-    // 最多换三个号：再多就是上游整体挂了，换也没用。
-    for _ in 0..3 {
-        let cand = match crate::pool::candidates(app, realm, &tried).into_iter().next() {
-            Some(c) => c,
-            None => break,
+    // 固定账号没有换号余地；多给一次只为 401 刷新后的原地重试。
+    let attempts = if pin.is_some() { 2 } else { 3 };
+    for _ in 0..attempts {
+        let cand = if let Some(pin) = pin {
+            crate::keyref::candidate(app, pin, realm, &ctx.model)
+                .map_err(|error| crate::keyref::candidate_error(pin, error))?
+        } else {
+            match crate::pool::candidates(app, realm, &tried).into_iter().next() {
+                Some(c) => c,
+                None => break,
+            }
         };
         tried.push(cand.uid.clone());
         let token = crate::pool::ensure_fresh(app, &cand).await;
@@ -200,6 +206,9 @@ pub(crate) async fn open_upstream(
             Ok(r) => r,
             Err(e) => {
                 last = format!("upstream unreachable: {e}");
+                if pin.is_some() {
+                    break;
+                }
                 continue;
             }
         };
@@ -215,8 +224,9 @@ pub(crate) async fn open_upstream(
             // 每号每请求最多刷一次（Python 的 refreshed 集合语义），刷完下次循环换号或重试。
             if crate::pool::refresh(app, &cand.uid).await.is_some() {
                 tried.pop();
+                continue;
             }
-            continue;
+            break;
         }
         if code == 429 || code >= 500 {
             // 429 带了重置时刻就登记额度窗口（wb_proxy 的同一条路径）：
@@ -227,6 +237,9 @@ pub(crate) async fn open_upstream(
                 }
             }
             crate::pool::cooldown(app, &cand.uid, 60);
+            if pin.is_some() {
+                break;
+            }
             continue;
         }
         break; // 其它 4xx 是请求本身的问题，换号无意义
@@ -242,9 +255,10 @@ pub async fn chat_stream(
     started: std::time::Instant,
     key_id: &str,
     session_key: Option<&str>,
+    pin: Option<&crate::keyref::PinnedAccount>,
 ) -> crate::http::Resp {
     let (cand, ctx, resp) =
-        match open_upstream(app, body, realm, session_key).await {
+        match open_upstream(app, body, realm, session_key, pin).await {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -383,8 +397,9 @@ pub async fn chat_once(
     started: std::time::Instant,
     key_id: &str,
     session_key: Option<&str>,
+    pin: Option<&crate::keyref::PinnedAccount>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match open_upstream(app, body, realm, session_key).await {
+    let (cand, ctx, resp) = match open_upstream(app, body, realm, session_key, pin).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };

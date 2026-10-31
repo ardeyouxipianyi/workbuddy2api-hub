@@ -103,8 +103,30 @@ fn entries(realm: &str) -> Vec<Value> {
 }
 
 pub async fn list(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
-    let realm = crate::http::requested_realm(req, &app.state.current_realm());
-    let data = entries(&realm);
+    let pinned = crate::keyref::pinned(req).and_then(|pin| {
+        app.state
+            .accounts_snapshot()
+            .into_iter()
+            .find(|account| account.uid() == pin.uid)
+    });
+    let realm = pinned
+        .as_ref()
+        .map(crate::state::AccountFile::realm)
+        .unwrap_or_else(|| crate::http::requested_realm(req, &app.state.current_realm()));
+    let mut data = entries(&realm);
+    if let Some(account) = pinned.as_ref() {
+        let disabled = crate::keyref::disabled_models(account);
+        if !disabled.is_empty() {
+            let disabled: std::collections::HashSet<&str> =
+                disabled.iter().map(String::as_str).collect();
+            data.retain(|item| {
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| !disabled.contains(id))
+                    .unwrap_or(true)
+            });
+        }
+    }
     let mut payload = Map::new();
     payload.insert("object".into(), json!("list"));
     payload.insert("data".into(), Value::Array(data));

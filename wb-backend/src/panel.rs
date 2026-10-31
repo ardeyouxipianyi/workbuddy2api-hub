@@ -378,7 +378,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 "ported": false,
             }),
         ),
-        (&Method::GET, "/proxy/slots") => json_resp(StatusCode::OK, &json!({"slots": []})),
+        (&Method::GET, path) | (&Method::POST, path) if path.starts_with("/proxy/") => {
+            crate::proxy_slots::handle(app, req).await
+        }
         (&Method::POST, _) => not_ported(&path),
         _ => json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "not found", "code": 404}})),
     };

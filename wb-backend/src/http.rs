@@ -88,7 +88,10 @@ pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> 
     }
 }
 
-pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
+pub async fn route(app: Arc<App>, mut req: Request<Incoming>) -> Resp {
+    if let Err(resp) = crate::keyref::prepare(&app, &mut req) {
+        return resp;
+    }
     let path = req.uri().path().to_string();
     let method = req.method().clone();
     // 账号与设置按 mtime 重读：面板改 key、切区域、换号都不用重启。
