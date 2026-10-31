@@ -20,6 +20,23 @@ CANDIDATES = [
 ]
 BINARY = next((p for p in CANDIDATES if os.path.exists(p)), None)
 
+#: 明知还没移植的项。列在这里的东西不会让用例红，但**已经对上了就必须删掉**
+#: （用例会报「把它们从 *_TODO 里删掉」），免得这份清单慢慢变成永远为真的假话。
+PROTOCOL_TODO = {
+    "completions.plain", "messages.plain", "messages.count",
+    "GET /v1/balance-summary",
+}
+PANEL_TODO = {
+    "/accounts", "/settings", "/scheduler", "/tasks", "/agents",
+    "/agents/available", "/agents/model-selection", "/pricing", "/updates",
+    "/usage", "/usage/recent", "/usage/perf", "/usage/analytics",
+    "/usage/by-account", "/usage/timeseries", "/usage/remaining",
+}
+
+
+def _name(problem):
+    return problem.split(":", 1)[0].strip()
+
 
 @unittest.skipUnless(BINARY, "wb-backend 未编译（cargo build --manifest-path wb-backend/Cargo.toml）")
 class RustBackendParity(unittest.TestCase):
@@ -27,12 +44,19 @@ class RustBackendParity(unittest.TestCase):
         import compare
         fixture = compare.Fixture(rust_binary=BINARY)
         try:
-            python_side = compare.capture(fixture.base)
-            rust_side = compare.capture(fixture.rust, include_stream=False)
-            problems = compare.diff(python_side, rust_side)
-            problems += compare.diff_usage(fixture.usage_dirs[0], fixture.usage_dirs[1])
+            python_side = compare.capture(fixture.base, panel=True)
+            rust_side = compare.capture(fixture.rust, include_stream=False, panel=True)
+            found = compare.diff(python_side, rust_side)
+            found += compare.diff_usage(fixture.usage_dirs[0], fixture.usage_dirs[1])
+            panel = compare.diff_panel(python_side, rust_side)
         finally:
             fixture.close()
+        total = found + panel
+        todo = PROTOCOL_TODO | PANEL_TODO
+        problems = [p for p in total if _name(p) not in todo]
+        # 清单里写着「还没移植」但其实已经对上的项要删掉，否则这份清单会慢慢失真。
+        fixed = sorted(todo - {_name(p) for p in total})
+        self.assertEqual(fixed, [], "这些已经对上了，把它们从 *_TODO 里删掉：" + "、".join(fixed))
         self.assertEqual(problems, [], "Rust 后端与 Python 后端不一致：\n" + "\n".join(problems))
 
 

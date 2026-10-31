@@ -1,30 +1,30 @@
 {
-  "_comment": "随 Rust 二进制一起发布：哪几组功能已经移植完。launcher 只认这份文件判断「能不能切」，面板的「Rust 后端不可用（缺 X）」也由它生成，不靠人维护清单。v1 六组全部 ported=true 才允许打开开关。",
+  "_comment": "随 Rust 二进制一起发布：哪几组功能已经移植完。launcher 只认这份文件判断「能不能切」，面板的「Rust 后端不可用（缺 X）」也由它生成，不靠人维护清单。一组 ported=true 的含义是「这一组的每一条现在都能用」；还缺什么写在 label 里，面板直接显示。",
   "version": "0.2.0",
   "binary": "wb-backend",
   "groups": {
     "protocols": {
-      "label": "协议面（chat/responses/messages/models 与流式）",
-      "ported": true
+      "label": "协议面（缺 /v1/messages、/v1/completions、/v1/balance-summary、/v1/responses/compact）",
+      "ported": false
     },
     "accounts": {
-      "label": "账号凭证（OAuth/刷新/积分/导入导出）",
-      "ported": true
+      "label": "账号凭证（缺设备流登录、凭证刷新、代理槽读写、桌面凭据导入）",
+      "ported": false
     },
     "pool": {
-      "label": "账号池与限额（轮换/冷却/熔断/并发闸门）",
-      "ported": true
+      "label": "账号池（缺 32 槽并发闸门、熔断、四条限额护栏）",
+      "ported": false
     },
     "panel": {
-      "label": "面板接口与用量聚合（改面板口令除外）",
-      "ported": true
+      "label": "面板接口（19 条只读路由结构对齐中，见 harness/compare.py）",
+      "ported": false
     },
     "tasks": {
-      "label": "自动化任务与调度器（签到/成长/猫猫/活跃/保活）",
+      "label": "自动化任务与调度器（缺国际版活跃的桌面腿、猫猫旅行写面）",
       "ported": false
     },
     "ops": {
-      "label": "运维面（自更新/一键配置/出口代理/本地工具）",
+      "label": "运维面（自更新、一键配置写面、出口代理、价目、改口令 在补）",
       "ported": false
     }
   }
