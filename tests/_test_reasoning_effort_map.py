@@ -125,5 +125,73 @@ class EffortMapTests(unittest.TestCase):
         self.assertEqual(payload["reasoning_effort"], "xhigh")
 
 
+class ExplicitEffortTests(unittest.TestCase):
+    """glm-5.1 is refused (400 / 11150) unless the body carries a level."""
+
+    CATALOG = {"glm-5.1": {"effort": "medium"}, "glm-5.3": {}}
+
+    def setUp(self):
+        self._patch = mock.patch.object(
+            wb_proxy, "model_reasoning_meta",
+            side_effect=lambda m: dict(self.CATALOG.get(m, {})))
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+
+    def ensured(self, body, model="glm-5.1"):
+        return wb_proxy.ensure_explicit_effort(dict(body), model)
+
+    def test_missing_level_gets_the_catalog_level(self):
+        self.assertEqual(self.ensured({})["reasoning_effort"], "medium")
+
+    def test_client_level_is_kept(self):
+        self.assertEqual(self.ensured({"reasoning_effort": "high"})["reasoning_effort"], "high")
+        self.assertEqual(self.ensured({"reasoningEffort": "low"})["reasoningEffort"], "low")
+
+    def test_off_values_and_blank_are_replaced(self):
+        for value in ("none", "off", "disabled", "", "  ", None):
+            self.assertEqual(self.ensured({"reasoning_effort": value})["reasoning_effort"],
+                             "medium", value)
+
+    def test_thinking_disabled_is_dropped(self):
+        out = self.ensured({"thinking": {"type": "disabled"}})
+        self.assertNotIn("thinking", out)
+        self.assertEqual(out["reasoning_effort"], "medium")
+        kept = self.ensured({"thinking": {"type": "enabled"}, "reasoning_effort": "max"})
+        self.assertEqual(kept["thinking"], {"type": "enabled"})
+        self.assertEqual(kept["reasoning_effort"], "max")
+
+    def test_camel_case_key_keeps_its_spelling(self):
+        out = self.ensured({"reasoningEffort": "none"})
+        self.assertEqual(out["reasoningEffort"], "medium")
+        self.assertNotIn("reasoning_effort", out)
+
+    def test_model_name_is_case_insensitive(self):
+        self.assertEqual(self.ensured({}, "GLM-5.1")["reasoning_effort"], "medium")
+
+    def test_catalog_level_wins_and_medium_is_the_last_resort(self):
+        with mock.patch.object(wb_proxy, "model_reasoning_meta",
+                               return_value={"effort": "high"}):
+            self.assertEqual(self.ensured({})["reasoning_effort"], "high")
+        with mock.patch.object(wb_proxy, "model_reasoning_meta", return_value={}):
+            self.assertEqual(self.ensured({})["reasoning_effort"], "medium")
+
+    def test_other_models_are_left_alone(self):
+        for model in ("glm-5.3", "kimi-k2.6", "minimax-m3", "", None):
+            self.assertEqual(self.ensured({"model": model}, model), {"model": model})
+
+    def test_build_upstream_body_fills_only_glm51(self):
+        msgs = [{"role": "user", "content": "hi"}]
+        body = wb_proxy.build_upstream_body({"model": "glm-5.1", "messages": msgs})
+        self.assertEqual(body["reasoning_effort"], "medium")
+        body = wb_proxy.build_upstream_body(
+            {"model": "glm-5.1", "messages": msgs, "thinking": {"type": "disabled"}})
+        self.assertEqual(body["reasoning_effort"], "medium")
+        self.assertNotIn("thinking", body)
+        other = wb_proxy.build_upstream_body({"model": "glm-5.3", "messages": msgs})
+        self.assertNotIn("reasoning_effort", other)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -13526,6 +13526,8 @@ def build_upstream_body(payload):
                         chosen = "high"
                     if chosen:
                         body["reasoning_effort"] = chosen
+    # 显式档位模型（glm-5.1）：不带档位上游直接 400 / 11150，补上目录档位。
+    ensure_explicit_effort(body, model)
     body["stream"] = True
     if "stream_options" not in body:
         body["stream_options"] = {"include_usage": True}
@@ -13717,6 +13719,43 @@ def model_fixed_effort(model):
         return None
     effort = reasoning.get("effort")
     return effort.strip() if isinstance(effort, str) and effort.strip() else None
+
+
+# 上游要求显式推理档位的模型。实测（2026-11-01，CN 号池）：glm-5.1 出站 body
+# 不带 reasoning_effort、带 "none"、或 thinking.type=disabled，一律回 400 /
+# code 11150「the reasoning effort value is not supported by the current
+# model」；low / minimal / medium / high / xhigh / max 任一档都 200。同一轮把
+# 目录里其余模型都不带档位打了一遍，全部照常 200 —— 所以只对名单内的模型补档，
+# 名单外的出站字节不变。
+EXPLICIT_EFFORT_MODELS = frozenset({"glm-5.1"})
+
+
+def ensure_explicit_effort(body, model):
+    """Fill in an effort level for models the upstream refuses to run without one.
+
+    The client's own level always wins. A missing value, an "off"-style value or
+    thinking.type=disabled is replaced with the catalog's pinned / default level
+    (else "medium"): these models only run with reasoning, so the opt-out cannot
+    be honoured and passing it through only turns the request into a 400.
+    """
+    if not isinstance(body, dict) or not model:
+        return body
+    if str(model).strip().lower() not in EXPLICIT_EFFORT_MODELS:
+        return body
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and \
+            str(thinking.get("type") or "").strip().lower() == "disabled":
+        body.pop("thinking", None)
+    key = "reasoning_effort"
+    if "reasoning_effort" not in body and "reasoningEffort" in body:
+        key = "reasoningEffort"
+    current = body.get(key)
+    if isinstance(current, str) and current.strip() \
+            and not _thinking_off_value(current):
+        return body
+    body[key] = (model_fixed_effort(model) or model_default_effort(model)
+                 or "medium")
+    return body
 
 
 def prompt_cache_key_enabled():
