@@ -58,6 +58,19 @@ def http(base, path, data=None, token=None, timeout=30):
             exc.close()
 
 
+class LegacyHealthIdentity(unittest.TestCase):
+    """老发布的 python 的 /health 没有 backend 字段，身份判定不能因此拒绝它。"""
+
+    def test_missing_backend_field_means_python(self):
+        sys.path.insert(0, REPO)
+        import wb_backend
+        is_backend = wb_backend.Supervisor._is_backend
+        self.assertTrue(is_backend({"ok": True}, "python"))
+        self.assertFalse(is_backend({"ok": True}, "rust"))
+        self.assertTrue(is_backend({"ok": True, "backend": "rust"}, "rust"))
+        self.assertFalse(is_backend({"ok": True, "backend": "rust"}, "python"))
+
+
 @unittest.skipUnless(BINARY, "wb-backend 未编译（cargo build --release --target x86_64-unknown-linux-musl）")
 class LauncherSwitch(unittest.TestCase):
     def test_switch_there_and_back(self):

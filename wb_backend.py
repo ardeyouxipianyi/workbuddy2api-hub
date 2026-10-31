@@ -170,7 +170,9 @@ class Supervisor(object):
     # ---- 子进程 ----------------------------------------------------------
     def _argv_for(self, backend):
         if backend == "python":
-            return [sys.executable, os.path.join(self.app_dir, "wb_proxy.py"), "--serve"] + self.passthrough
+            # 不传 --serve：它只是让人从 ps 上看清意图的标记，而旧版已发布的
+            # wb_proxy.py 还不认识这个参数，会直接 argparse 报错退出（CT412 实测）。
+            return [sys.executable, os.path.join(self.app_dir, "wb_proxy.py")] + self.passthrough
         caps = capabilities(self.app_dir)
         return [caps["binary"]["path"],
                 "--host", self.host, "--port", str(self.port),
@@ -221,10 +223,23 @@ class Supervisor(object):
             if self.proc is not None and self.proc.poll() is not None:
                 return None
             payload = probe(self.host, self.port)
-            if payload and payload.get("backend") == backend and payload.get("ok"):
+            if payload and payload.get("ok") and self._is_backend(payload, backend):
                 return payload
             time.sleep(0.2)
         return None
+
+    @staticmethod
+    def _is_backend(payload, backend):
+        """这份 /health 是不是 `backend` 给的。
+
+        老发布的 wb_proxy.py 的 /health 没有 backend 字段（那是在做切换时才加的），
+        严格要求身份相等会让「切回 python」永远失败并回滚到 rust。缺字段时只可能是
+        python：rust 一直带着这个字段。
+        """
+        reported = payload.get("backend")
+        if reported is None:
+            return backend == "python"
+        return reported == backend
 
     def stop_child(self):
         proc, self.proc = self.proc, None
