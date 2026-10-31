@@ -5,7 +5,9 @@
 //! 契约来源是 Python 版（wb_proxy.py），逐字节对齐由 harness/compare.py 判定。
 
 mod auth;
+mod catalog_refresh;
 mod chat;
+mod egress;
 mod fingerprint;
 mod health;
 mod credits;
@@ -17,6 +19,7 @@ mod activity;
 mod agents;
 mod panel;
 mod panel_defaults;
+mod panel_password;
 mod panel_read;
 mod panel_settings;
 mod panel_usage;
