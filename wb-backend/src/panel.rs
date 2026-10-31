@@ -154,7 +154,24 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
                 "ported": false,
             }),
         ),
-        (&Method::GET, "/logs") => json_resp(StatusCode::OK, &json!({"total": 0, "logs": []})),
+        (&Method::GET, "/logs") => {
+            let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
+            json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
+        }
+        (&Method::GET, "/settings/reveal") => {
+            let id = req.uri().query().unwrap_or("").split('&')
+                .find_map(|p| p.strip_prefix("id=")).unwrap_or("");
+            let settings = app.state.settings_snapshot();
+            let key = settings.get("api_keys").and_then(Value::as_array).and_then(|list| {
+                list.iter()
+                    .find(|k| k.get("id").and_then(Value::as_str) == Some(id))
+                    .and_then(|k| k.get("key").and_then(Value::as_str))
+            });
+            match key {
+                Some(key) => json_resp(StatusCode::OK, &json!({"key": key})),
+                None => json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "no such key", "code": 404}})),
+            }
+        }
         (&Method::POST, "/accounts/set") => accounts_set(app, req).await,
         (&Method::POST, "/accounts/set-all") => accounts_set_all(app, req).await,
         (&Method::POST, "/accounts/delete") => accounts_delete(app, req).await,
@@ -787,7 +804,10 @@ async fn accounts_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp
         });
     }
     match updated {
-        Some(account) => json_resp(StatusCode::OK, &json!({"account": account})),
+        Some(account) => {
+            app.log("accounts", "INFO", &format!("账号 {} 已更新 {}", &uid[..uid.len().min(8)], body));
+            json_resp(StatusCode::OK, &json!({"account": account}))
+        }
         None => json_resp(
             StatusCode::BAD_REQUEST,
             &json!({"error": {"message": "nothing to update: pass 'enabled', 'tasksEnabled', 'proxy', 'proxySlot', 'weight' or 'note'", "code": 400}}),
@@ -831,6 +851,7 @@ async fn accounts_delete(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
         return json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "no such account", "code": 404}}));
     };
     let removed = std::fs::remove_file(&account.path).is_ok();
+    app.log("accounts", "WARN", &format!("账号 {} 已删除", &uid[..uid.len().min(8)]));
     app.state.reload();
     let now = crate::state::now_epoch();
     let list: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
@@ -912,6 +933,7 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
     match crate::state::write_json_atomic(&path, &value) {
         Ok(()) => {
             app.state.reload();
+            app.log("settings", "INFO", &format!("设置已保存: {}", applied.join(", ")));
             json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
         }
         Err(e) => json_resp(
@@ -992,6 +1014,7 @@ async fn accounts_credits_fetch(app: &std::sync::Arc<App>, req: Request<Incoming
     let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
     let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
     let out = crate::credits::sweep(app, uid, realm).await;
+    app.log("credits", "INFO", &format!("刷新积分 uid={uid} realm={realm}"));
     let ok = out
         .get("results")
         .and_then(Value::as_array)
@@ -1010,7 +1033,9 @@ async fn tasks_run(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let body = crate::http::body_json(req).await.unwrap_or(json!({}));
     let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
     let claim = body.get("claim").and_then(Value::as_bool).unwrap_or(true);
-    json_resp(StatusCode::OK, &crate::tasks::run(app, uid, claim).await)
+    let out = crate::tasks::run(app, uid, claim).await;
+    app.log("tasks", "INFO", &format!("成长任务执行完毕，新增 +{} 积分", out.get("credit_added").and_then(Value::as_i64).unwrap_or(0)));
+    json_resp(StatusCode::OK, &out)
 }
 
 /// `POST /tasks/claim`：单独领一个任务的奖励。
@@ -1032,5 +1057,10 @@ async fn tasks_claim(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp 
 async fn checkin(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let body = crate::http::body_json(req).await.unwrap_or(json!({}));
     let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
-    json_resp(StatusCode::OK, &crate::credits::checkin_all(app, uid).await)
+    let out = crate::credits::checkin_all(app, uid).await;
+    let ok = out.get("results").and_then(Value::as_array)
+        .map(|r| r.iter().filter(|x| x.get("ok").and_then(Value::as_bool).unwrap_or(false)).count())
+        .unwrap_or(0);
+    app.log("tasks", "INFO", &format!("签到完成 {ok} 个账号"));
+    json_resp(StatusCode::OK, &out)
 }

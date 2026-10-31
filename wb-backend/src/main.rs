@@ -50,9 +50,30 @@ pub struct App {
     /// 面板会话（X-Panel-Token）与口令。
     pub panel: panel::Panel,
     pub scheduler: scheduler::Scheduler,
+    /// 最近 500 条面板/后端事件，`GET /logs` 直接读它（面板「运行日志」页）。
+    pub logs: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
 }
 
 impl App {
+    /// 记一条运行日志（面板「运行日志」页用；同一条也给 stderr）。
+    pub fn log(&self, tag: &str, level: &str, msg: &str) {
+        eprintln!("[{tag}] {msg}");
+        let entry = serde_json::json!({
+            "id": crate::sse::hex_token(8),
+            "ts": crate::state::now_epoch(),
+            "time": crate::state::local_stamp(),
+            "level": level,
+            "tag": tag,
+            "msg": msg,
+        });
+        if let Ok(mut ring) = self.logs.lock() {
+            ring.push_back(entry);
+            while ring.len() > 500 {
+                ring.pop_front();
+            }
+        }
+    }
+
     pub fn recorder_path(&self) -> std::path::PathBuf {
         self.recorder.path()
     }
@@ -112,6 +133,7 @@ async fn main() -> std::io::Result<()> {
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
         scheduler: scheduler::Scheduler::default(),
+        logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
     });
 
     scheduler::spawn(app.clone());
