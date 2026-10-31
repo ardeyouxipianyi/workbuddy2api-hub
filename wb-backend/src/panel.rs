@@ -1068,18 +1068,27 @@ async fn checkin(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
 
 /// `POST /accounts/import`：导入导出文档 / 裸数组 / 单个账号对象。
 ///
-/// shortcut: 只认本地账号形状（accessToken 必需），桌面客户端凭据扫描与
-/// at-rest 解密没移植；已存在的 uid 直接跳过而不是覆盖。
+/// 选项与 Python 版一致：`data`（把文档包一层，好跟选项分开放）、`dryRun`（只报
+/// 结果不写盘）、`overwrite`（uid 已存在就替换）、`realm`（强制区域）。
+///
+/// shortcut: 桌面客户端凭据扫描与 at-rest 解密没移植。
 async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
     let body = match crate::http::body_json(req).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let rows: Vec<Value> = match &body {
+    let doc = body.get("data").unwrap_or(&body);
+    let dry_run = body.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    let overwrite = body.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+    let forced = body.get("realm").and_then(Value::as_str).unwrap_or("").to_lowercase();
+    if !forced.is_empty() && forced != "cn" && forced != "intl" {
+        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "realm must be intl or cn", "code": 400}}));
+    }
+    let rows: Vec<Value> = match doc {
         Value::Array(list) => list.clone(),
         Value::Object(obj) => match obj.get("accounts").and_then(Value::as_array) {
             Some(list) => list.clone(),
-            None if obj.contains_key("accessToken") || obj.contains_key("access_token") => vec![body.clone()],
+            None if obj.contains_key("accessToken") || obj.contains_key("access_token") => vec![doc.clone()],
             None => {
                 return json_resp(
                     StatusCode::BAD_REQUEST,
@@ -1090,12 +1099,13 @@ async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
         _ => {
             return json_resp(
                 StatusCode::BAD_REQUEST,
-                &json!({"error": {"message": "expected an object or a list of accounts", "code": 400}}),
+                &json!({"error": {"message": "the document must be a JSON object or array", "code": 400}}),
             )
         }
     };
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
+    let mut overwritten = Vec::new();
     let mut failed = Vec::new();
     for row in rows {
         let Some(obj) = row.as_object() else {
@@ -1123,26 +1133,61 @@ async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
             continue;
         }
         let path = app.state.accounts_dir.join(format!("{uid}.json"));
-        if path.exists() {
+        let exists = path.exists();
+        if exists && !overwrite {
             skipped.push(json!(uid));
+            continue;
+        }
+        if dry_run {
+            if exists {
+                overwritten.push(json!(uid));
+            } else {
+                imported.push(json!(uid));
+            }
             continue;
         }
         let mut data = obj.clone();
         data.insert("uid".into(), json!(uid));
         data.insert("accessToken".into(), json!(token));
+        if !forced.is_empty() {
+            data.insert("realm".into(), json!(forced));
+        }
         data.entry("enabled").or_insert(json!(true));
         data.entry("tasksEnabled").or_insert(json!(true));
         match crate::state::write_json_atomic(&path, &Value::Object(data)) {
-            Ok(()) => imported.push(json!(uid)),
+            Ok(()) => {
+                if exists {
+                    overwritten.push(json!(uid));
+                } else {
+                    imported.push(json!(uid));
+                }
+            }
             Err(e) => failed.push(json!({"uid": uid, "error": e.to_string()})),
         }
+    }
+    if dry_run {
+        let now = crate::state::now_epoch();
+        let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+        return json_resp(
+            StatusCode::OK,
+            &json!({"dryRun": true, "imported": imported, "overwritten": overwritten,
+                    "skipped": skipped, "failed": failed, "accounts": accounts}),
+        );
     }
     app.state.reload();
     let now = crate::state::now_epoch();
     let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
-    app.log("accounts", "INFO", &format!("导入完成: 新增 {} 跳过 {} 失败 {}", imported.len(), skipped.len(), failed.len()));
+    app.log(
+        "accounts",
+        "INFO",
+        &format!(
+            "导入完成: 新增 {} 覆盖 {} 跳过 {} 失败 {}",
+            imported.len(), overwritten.len(), skipped.len(), failed.len()
+        ),
+    );
     json_resp(
         StatusCode::OK,
-        &json!({"imported": imported, "skipped": skipped, "failed": failed, "accounts": accounts}),
+        &json!({"imported": imported, "overwritten": overwritten, "skipped": skipped,
+                "failed": failed, "accounts": accounts}),
     )
 }
