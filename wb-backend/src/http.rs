@@ -104,6 +104,35 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
 }
 
 /// `?realm=` > `X-Realm` 头 > 当前区域（wb_proxy.py:19224 同一优先级）。
+/// 会话键（specs/identity-upstream.md §1.6）：头优先，再 body 三个位置。
+/// 都没有就返回 None，由 identity 层每请求新生成（上游按它做会话亲和）。
+pub fn session_key_header(headers: &hyper::HeaderMap) -> Option<String> {
+    for name in ["x-conversation-id", "conversation-id", "x-session-id", "session-id"] {
+        if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {
+            if !v.trim().is_empty() {
+                return Some(v.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn session_key_body(body: &Value) -> Option<String> {
+    let candidates = [
+        body.get("conversation_id"),
+        body.get("session_id"),
+        body.get("metadata").and_then(|m| m.get("conversation_id")),
+    ];
+    for value in candidates.into_iter().flatten() {
+        if let Some(s) = value.as_str() {
+            if !s.trim().is_empty() {
+                return Some(s.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn requested_realm(req: &Request<Incoming>, current: &str) -> String {
     if let Some(q) = req.uri().query() {
         for pair in q.split('&') {

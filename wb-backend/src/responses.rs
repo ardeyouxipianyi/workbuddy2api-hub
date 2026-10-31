@@ -73,7 +73,9 @@ pub fn to_chat(body: &Value) -> Result<Value, String> {
                         "parameters": tool.get("parameters").cloned().unwrap_or(json!({"type": "object"})),
                     }
                 })),
-                Some(other) => return Err(format!("unsupported tool type: {other}")),
+                // Codex 0.164 会发 `namespace`/`custom`/`web_search` 这些非函数工具；
+                // 上游 chat 协议里没有对应物，直接丢（Python 版同样不转发）。
+                Some(_) => {}
                 None => {}
             }
         }
@@ -156,6 +158,7 @@ pub async fn handle(
 ) -> crate::http::Resp {
     let started = std::time::Instant::now();
     let realm = crate::http::requested_realm(&req, &app.state.current_realm());
+    let session = crate::http::session_key_header(req.headers());
     let body = match crate::http::body_json(req).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -164,12 +167,14 @@ pub async fn handle(
         Ok(v) => v,
         Err(message) => return crate::http::error_resp(StatusCode::BAD_REQUEST, &message),
     };
+    let session = session.or_else(|| crate::http::session_key_body(&body));
+    let session = session.as_deref();
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     app.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let result = if stream {
-        stream_response(app, &chat_body, &realm, started, &key_id).await
+        stream_response(app, &chat_body, &realm, started, &key_id, session).await
     } else {
-        once(app, &chat_body, &realm, started, &key_id).await
+        once(app, &chat_body, &realm, started, &key_id, session).await
     };
     app.inflight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     result
@@ -181,8 +186,9 @@ async fn once(
     realm: &str,
     started: std::time::Instant,
     key_id: &str,
+    session_key: Option<&str>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm).await {
+    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -256,8 +262,9 @@ async fn stream_response(
     realm: &str,
     started: std::time::Instant,
     key_id: &str,
+    session_key: Option<&str>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm).await {
+    let (cand, ctx, resp) = match upstream::open_upstream(app, chat_body, realm, session_key).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };

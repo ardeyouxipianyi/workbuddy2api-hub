@@ -7,6 +7,7 @@ mod auth;
 mod chat;
 mod fingerprint;
 mod health;
+mod identity;
 mod http;
 mod models;
 mod pool;

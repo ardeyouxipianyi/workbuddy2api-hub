@@ -149,6 +149,7 @@ pub(crate) async fn open_upstream(
     app: &Arc<App>,
     body: &Value,
     realm: &str,
+    session_key: Option<&str>,
 ) -> Result<(crate::pool::Candidate, Ctx, reqwest::Response), crate::http::Resp> {
     let forwarded = build_upstream_body(body);
     let model = forwarded.get("model").and_then(Value::as_str).unwrap_or("").to_string();
@@ -176,15 +177,24 @@ pub(crate) async fn open_upstream(
             chat_upstream_base(&cand.realm, &cand.product),
             crate::CHAT_PATH
         );
-        let sent = app
-            .upstream
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .body(encoded.clone())
-            .send()
-            .await;
+        // 身份头族：上游按它判渠道合法性，缺了会被 11-128 拦（大 payload 才触发）。
+        let headers = crate::identity::chat_headers(&crate::identity::Ctx {
+            realm: &cand.realm,
+            uid: &cand.uid,
+            token: &token,
+            enterprise_id: None,
+            department: None,
+            session_key,
+        });
+        // 调试用：WB_DUMP_BODY=/path 时把最后一次上游请求原样落盘（默认关）。
+        if let Ok(path) = std::env::var("WB_DUMP_BODY") {
+            let _ = std::fs::write(&path, &encoded);
+        }
+        let mut builder = app.upstream.post(&url);
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let sent = builder.body(encoded.clone()).send().await;
         let resp = match sent {
             Ok(r) => r,
             Err(e) => {
@@ -223,9 +233,10 @@ pub async fn chat_stream(
     realm: &str,
     started: std::time::Instant,
     key_id: &str,
+    session_key: Option<&str>,
 ) -> crate::http::Resp {
     let (cand, ctx, resp) =
-        match open_upstream(app, body, realm).await {
+        match open_upstream(app, body, realm, session_key).await {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -363,8 +374,9 @@ pub async fn chat_once(
     realm: &str,
     started: std::time::Instant,
     key_id: &str,
+    session_key: Option<&str>,
 ) -> crate::http::Resp {
-    let (cand, ctx, resp) = match open_upstream(app, body, realm).await {
+    let (cand, ctx, resp) = match open_upstream(app, body, realm, session_key).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
