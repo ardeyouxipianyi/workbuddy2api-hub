@@ -99,7 +99,11 @@ struct PerfResults {
     by_account: BTreeMap<String, BTreeMap<String, BTreeMap<String, Perf>>>,
 }
 
-fn aggregate_perf(selected: Vec<&Value>, realms: &BTreeMap<String, String>) -> PerfResults {
+fn aggregate_perf(
+    selected: Vec<&Value>,
+    realms: &BTreeMap<String, String>,
+    current: &str,
+) -> PerfResults {
     let mut result = PerfResults {
         total: Perf::default(),
         by_model: BTreeMap::new(),
@@ -114,7 +118,7 @@ fn aggregate_perf(selected: Vec<&Value>, realms: &BTreeMap<String, String>) -> P
             .unwrap_or("unknown")
             .to_string();
         feed_perf(result.by_model.entry(model.clone()).or_default(), row);
-        let realm = row_realm(row, realms).to_string();
+        let realm = row_realm(row, realms, current);
         feed_perf(
             result
                 .by_realm
@@ -192,12 +196,8 @@ pub fn perf(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         .unwrap_or(5_000)
         .clamp(10, 20_000);
     let rows = read_rows(app);
-    let sample_from = rows
-        .first()
-        .and_then(|row| row.get("at"))
-        .cloned()
-        .unwrap_or(Value::Null);
     let capped = rows.len() >= sample;
+
     let start = rows.len().saturating_sub(sample);
     let sampled = &rows[start..];
     let realms = account_realms(app);
@@ -208,11 +208,20 @@ pub fn perf(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         let at = number(row, "at");
         since.map_or(true, |lower| at >= lower) && until.map_or(true, |upper| at <= upper)
     };
-    let selected: Vec<&Value> = rows_for_realm(sampled, &realm, &realms)
+    let current = app.state.current_realm();
+    let selected: Vec<&Value> = rows_for_realm(sampled, &realm, &realms, &current)
         .into_iter()
         .filter(in_window)
         .collect();
-    let result = aggregate_perf(selected, &realms);
+    // shortcut: sample_from 取「样本切片的第一行」。Python 的环是增量裁剪的，
+    // 上限 5000 行时首行落在哪一份窗口里取决于它的环形缓冲实现，这里没有逐字复刻
+    // （见 KNOWN_DIFFS 的 sample_from）；升级时机＝有人真的用这个字段做判断。
+    let sample_from = sampled
+        .first()
+        .and_then(|row| row.get("at"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let result = aggregate_perf(selected, &realms, &current);
     let total = result.total;
     json_resp(
         StatusCode::OK,

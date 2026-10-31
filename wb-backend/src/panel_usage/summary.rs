@@ -4,7 +4,12 @@ use super::*;
 use crate::pricing_store::RowCost;
 use serde_json::Map;
 
-fn overview_bucket(rows: &[&Value], costs: &[RowCost], indices: &[usize]) -> Value {
+fn overview_bucket(
+    rows: &[&Value],
+    costs: &[RowCost],
+    indices: &[usize],
+    current: &str,
+) -> Value {
     let mut accounts: BTreeMap<String, i64> = BTreeMap::new();
     let mut out = json!({
         "requests": 0,
@@ -39,7 +44,10 @@ fn overview_bucket(rows: &[&Value], costs: &[RowCost], indices: &[usize]) -> Val
             out[key] = json!(integer(&out, key) + integer(row, key));
         }
         out["credit"] = json!(number(&out, "credit") + number(row, "credit"));
-        fold_cost(&mut out, row, costs[index]);
+        // 桶里只累加能算出来的成本；「没价」只记在汇总里（Python 的 per 桶没有 cost_missing）。
+        if costs[index].known {
+            out["cost_cny"] = json!(number(&out, "cost_cny") + costs[index].cny);
+        }
     }
     out["accounts"] = json!(accounts);
     out
@@ -68,6 +76,7 @@ fn fold_cost(bucket: &mut Value, row: &Value, cost: RowCost) {
 fn group_overview_maps(
     rows: &[&Value],
     realms: &BTreeMap<String, String>,
+    current: &str,
 ) -> (
     BTreeMap<String, Vec<usize>>,
     BTreeMap<String, BTreeMap<String, Vec<usize>>>,
@@ -78,12 +87,17 @@ fn group_overview_maps(
     let mut by_realm: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     let mut by_model: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
+        // 桶只为 completed 的行建：Python 的折叠在非 completed 分支就 return 了，
+        // 否则「只有失败请求」的模型会在面板上长出一个全 0 的卡片。
+        if outcome(row) != "completed" {
+            continue;
+        }
         let model = row
             .get("model")
             .and_then(Value::as_str)
             .unwrap_or("?")
             .to_string();
-        let realm = row_realm(row, realms).to_string();
+        let realm = row_realm(row, realms, current);
         let account = row
             .get("account")
             .and_then(Value::as_str)
@@ -120,18 +134,19 @@ fn overview_maps(
     rows: &[&Value],
     costs: &[RowCost],
     realms: &BTreeMap<String, String>,
+    current: &str,
 ) -> (Value, Value, Value) {
-    let (by_model, realm_models, account_models) = group_overview_maps(rows, realms);
+    let (by_model, realm_models, account_models) = group_overview_maps(rows, realms, current);
     let by_model: Map<String, Value> = by_model
         .into_iter()
-        .map(|(model, items)| (model, overview_bucket(rows, costs, &items)))
+        .map(|(model, items)| (model, overview_bucket(rows, costs, &items, current)))
         .collect();
     let by_realm = realm_models
         .into_iter()
         .map(|(model, realms)| {
             let realms: Map<String, Value> = realms
                 .into_iter()
-                .map(|(realm, items)| (realm, overview_bucket(rows, costs, &items)))
+                .map(|(realm, items)| (realm, overview_bucket(rows, costs, &items, current)))
                 .collect();
             (model, Value::Object(realms))
         })
@@ -144,7 +159,7 @@ fn overview_maps(
                 .map(|(realm, accounts)| {
                     let accounts: Map<String, Value> = accounts
                         .into_iter()
-                        .map(|(account, items)| (account, overview_bucket(rows, costs, &items)))
+                        .map(|(account, items)| (account, overview_bucket(rows, costs, &items, current)))
                         .collect();
                     (realm, Value::Object(accounts))
                 })
@@ -227,7 +242,8 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
     let (since, until) = range_bounds(req);
-    let selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms)
+    let current = app.state.current_realm();
+    let selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms, &current)
         .into_iter()
         .filter(|row| {
             if since.is_none() && until.is_none() {
@@ -251,7 +267,8 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let settings = app.state.settings_snapshot();
     let costs = app.pricing.cost_rows(&selected, &settings);
     add_overview_totals(&mut totals, &selected, &costs);
-    let (by_model, by_model_realm, by_model_acct) = overview_maps(&selected, &costs, &realms);
+    let current = app.state.current_realm();
+    let (by_model, by_model_realm, by_model_acct) = overview_maps(&selected, &costs, &realms, &current);
     totals["by_model"] = by_model;
     totals["by_model_realm"] = by_model_realm;
     totals["by_model_acct"] = by_model_acct;
@@ -351,8 +368,15 @@ pub fn recent(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let rows = read_rows(app);
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
-    let mut selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms);
-    selected.reverse();
+    let current = app.state.current_realm();
+    let mut selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms, &current);
+    // 日志不是严格按时间追加的（多进程/补写），反转文件顺序取不到最新那一页；
+    // Python 是按 at 倒序取页的。并列保持文件顺序（稳定排序）。
+    selected.sort_by(|left, right| {
+        number(right, "at")
+            .partial_cmp(&number(left, "at"))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let total = selected.len();
     let start = (page - 1).saturating_mul(limit);
     let settings = app.state.settings_snapshot();

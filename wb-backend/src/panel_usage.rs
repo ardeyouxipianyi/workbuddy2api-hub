@@ -169,16 +169,49 @@ fn row_at(row: &Value) -> Option<f64> {
     })
 }
 
-fn row_realm<'a>(row: &'a Value, account_realms: &'a BTreeMap<String, String>) -> &'a str {
-    row.get("realm")
+/// 行的 realm：字段 → 账号 → 模型归属，推不出来时归到当前 realm。
+/// 与 Python 的 row_realm 同序（它最后还会按模型的前缀表猜一次，见 detect_model_realm）。
+fn row_realm(row: &Value, account_realms: &BTreeMap<String, String>, current: &str) -> String {
+    if let Some(value) = row
+        .get("realm")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            row.get("account")
-                .and_then(Value::as_str)
-                .and_then(|uid| account_realms.get(uid).map(String::as_str))
-        })
-        .unwrap_or("")
+    {
+        return value.to_string();
+    }
+    if let Some(realm) = row
+        .get("account")
+        .and_then(Value::as_str)
+        .and_then(|uid| account_realms.get(uid))
+    {
+        return realm.clone();
+    }
+    match row.get("model").and_then(Value::as_str) {
+        Some(model) if !model.is_empty() => detect_model_realm(model, current),
+        _ => current.to_string(),
+    }
+}
+
+/// Python 的 detect_model_realm：只有明确属于某个 exit 的模型才被判定，
+/// 其余一律算当前 realm（否则老行会因为推不出归属而整条消失）。
+fn detect_model_realm(model: &str, current: &str) -> String {
+    let m = model.to_lowercase();
+    const INTL_ONLY: [&str; 9] = [
+        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+        "gpt-5.4", "gpt-5.3-codex", "gemini-3.5-flash", "grok-4.7",
+    ];
+    if INTL_ONLY.contains(&m.as_str()) || m.starts_with("gpt-") || m.starts_with("gemini-") {
+        return "intl".into();
+    }
+    const CN_ONLY: [&str; 13] = [
+        "deepseek-v4-pro", "minimax-m3", "minimax-m2.7", "minimax-m2.5", "glm-5.1",
+        "glm-5.0-turbo", "glm-4.6v", "kimi-k3-1", "kimi-k2.7", "kimi-k2-thinking",
+        "hy3-x", "hy4-preview-dev", "hy4-preview-x",
+    ];
+    if CN_ONLY.contains(&m.as_str()) || m.starts_with("minimax-") || m.starts_with("deepseek-v4-pro") {
+        return "cn".into();
+    }
+    current.to_string()
 }
 
 fn account_realms(app: &App) -> BTreeMap<String, String> {
@@ -192,10 +225,11 @@ fn account_realms(app: &App) -> BTreeMap<String, String> {
 fn rows_for_realm<'a>(
     rows: &'a [Value],
     realm: &str,
-    realms: &'a BTreeMap<String, String>,
+    realms: &BTreeMap<String, String>,
+    current: &str,
 ) -> Vec<&'a Value> {
     rows.iter()
-        .filter(|row| realm == "all" || row_realm(row, realms) == realm)
+        .filter(|row| realm == "all" || row_realm(row, realms, current) == realm)
         .collect()
 }
 
@@ -242,7 +276,8 @@ pub use timeseries::timeseries;
 
 #[cfg(test)]
 mod tests {
-    use super::{load_rows, python_weekday, range_bounds_query};
+    use super::{detect_model_realm, load_rows, python_weekday, range_bounds_query, row_realm};
+    use serde_json::json;
     use std::sync::Arc;
 
     #[test]
@@ -262,6 +297,23 @@ mod tests {
         assert_eq!(refreshed.len(), 2);
         assert!(!Arc::ptr_eq(&first, &refreshed));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn row_realm_falls_back_to_model_then_current_realm() {
+        // 老行没有 realm 字段：先看账号，再看模型前缀表，最后归到当前 realm。
+        // 最后一步是关键：推不出归属就返回空串会让这些行在按 realm 过滤时整条消失。
+        let mut realms = std::collections::BTreeMap::new();
+        realms.insert("acct-1".to_string(), "intl".to_string());
+        let with_account = json!({"account": "acct-1", "model": "hy3"});
+        assert_eq!(row_realm(&with_account, &realms, "cn"), "intl");
+        let cn_model = json!({"model": "minimax-m3"});
+        assert_eq!(row_realm(&cn_model, &realms, "intl"), "cn");
+        let intl_model = json!({"model": "gpt-5.5"});
+        assert_eq!(row_realm(&intl_model, &realms, "cn"), "intl");
+        let unknown = json!({"model": "some-new-model"});
+        assert_eq!(row_realm(&unknown, &realms, "cn"), "cn");
+        assert_eq!(detect_model_realm("", "intl"), "intl");
     }
 
     #[test]

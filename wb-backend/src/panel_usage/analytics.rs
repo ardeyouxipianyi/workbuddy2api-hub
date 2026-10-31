@@ -125,6 +125,9 @@ struct Half {
     accts: BTreeMap<String, Entry>,
     models: BTreeMap<String, Stat>,
     keys: BTreeMap<String, Entry>,
+    /// 首次出现顺序：Python 的排序是稳定排序，并列项按这个顺序出（不是按 id）。
+    acct_order: Vec<String>,
+    model_order: Vec<String>,
 }
 
 fn model_of(row: &Value) -> String {
@@ -158,6 +161,7 @@ impl Half {
         cost: f64,
         realms: &BTreeMap<String, String>,
         known_keys: &[String],
+        current: &str,
     ) {
         if outcome(row) == "client_aborted" {
             return;
@@ -165,6 +169,11 @@ impl Half {
         let is_err = outcome(row) != "completed";
         self.summary.feed(row, is_err, cost);
         let model = model_of(row);
+        // 顶层的模型列表收所有行（含失败，python 的 tgt["models"] 就是这么折的）；
+        // 账号/key 下的模型细分才只数成功请求。
+        if !self.models.contains_key(&model) {
+            self.model_order.push(model.clone());
+        }
         self.models
             .entry(model.clone())
             .or_default()
@@ -175,24 +184,37 @@ impl Half {
             .and_then(Value::as_str)
             .unwrap_or("(unattributed)")
             .to_string();
-        let realm = row_realm(row, realms).to_string();
+        let realm = row_realm(row, realms, current);
+        if !self.accts.contains_key(&account) {
+            self.acct_order.push(account.clone());
+        }
         let entry = self.accts.entry(account).or_default();
         if entry.realm.is_empty() {
-            entry.realm = realm.clone();
+            // python 记的是**行里的 realm 字段**（可能为空），池子里的账号随后按
+            // 账号自己的 realm 覆盖；这里不能填推算出来的 realm。
+            entry.realm = row.get("realm").and_then(Value::as_str).unwrap_or("").to_string();
         }
         entry.stat.feed(row, is_err, cost);
-        entry
-            .models
-            .entry(model.clone())
-            .or_default()
-            .feed(row, is_err, cost);
-        *entry.realms.entry(realm.clone()).or_default() += 1;
+        if !is_err {
+            entry
+                .models
+                .entry(model.clone())
+                .or_default()
+                .feed(row, is_err, cost);
+        }
+        // realms 的键同样是行里的原值（空串也是键），cross_realm 靠它数「跨了几个出口」。
+        let raw_realm = row.get("realm").and_then(Value::as_str).unwrap_or("").to_string();
+        *entry.realms.entry(raw_realm.clone()).or_default() += 1;
         entry.last_at = entry.last_at.max(number(row, "at"));
 
         let key = key_id(row, known_keys);
         let key_entry = self.keys.entry(key).or_default();
         key_entry.stat.feed(row, is_err, cost);
-        key_entry.models.entry(model).or_default().feed(row, is_err, cost);
+        if !is_err {
+            key_entry.models.entry(model).or_default().feed(row, is_err, cost);
+        }
+        // key 的 realms 用**推算出来的** realm（python 的 k_realm = row_realm(row) or ""），
+        // cross_realm 就是靠它数「这把 key 跨了几个出口」。
         *key_entry.realms.entry(realm).or_default() += 1;
         key_entry.last_at = key_entry.last_at.max(number(row, "at"));
     }
@@ -323,11 +345,17 @@ fn accounts_json(
             out
         })
         .collect();
-    // 账号按「窗口 tokens 降序、全时段 tokens 降序」排（Python 的 accts_list）。
+    // 账号按「窗口 tokens 降序、全时段 tokens 降序」排，并列按首次出现顺序
+    //（Python 的 accts_list 是稳定排序）。
+    let position = |row: &Value| {
+        let uid = row.get("uid").and_then(Value::as_str).unwrap_or("");
+        all.acct_order.iter().position(|entry| entry == uid).unwrap_or(usize::MAX)
+    };
     let sort_key = |row: &Value| {
         (
             -integer(row.get("window").unwrap_or(&Value::Null), "total_tokens"),
             -integer(row.get("all_time").unwrap_or(&Value::Null), "total_tokens"),
+            position(row),
         )
     };
     list.sort_by(|left, right| sort_key(left).cmp(&sort_key(right)));
@@ -443,6 +471,13 @@ fn keys_json(all: &Half, window: &Half, settings: &Map<String, Value>) -> Vec<Va
             row["models"] = json!(models);
             row["models_other"] = models_other;
         }
+        // 跨出口标记：合并后的 realms 才完整（配置里的 key 一开始是空的）。
+        let multi = row
+            .get("realms")
+            .and_then(Value::as_object)
+            .map(|realms| realms.keys().filter(|realm| !realm.is_empty()).count() > 1)
+            .unwrap_or(false);
+        row["cross_realm"] = json!(multi);
         let idle_disabled = row.get("source").and_then(Value::as_str) == Some("panel")
             && row.get("enabled").and_then(Value::as_bool) == Some(false)
             && integer(row.get("window").unwrap_or(&Value::Null), "requests") == 0
@@ -472,7 +507,8 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let all = read_rows(app);
     let realms = account_realms(app);
     let realm = query(req, "realm");
-    let all_rows: Vec<&Value> = rows_for_realm(&all, realm.unwrap_or("all"), &realms);
+    let current = app.state.current_realm();
+    let all_rows: Vec<&Value> = rows_for_realm(&all, realm.unwrap_or("all"), &realms, &current);
     // 面板发的是 range=today|week|month（区间按钮），只有自定义区间才带 since/until。
     let (range_since, range_until) = range_bounds(req);
     let since = query(req, "since")
@@ -497,12 +533,12 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     for (index, row) in all_rows.iter().enumerate() {
         let cost = costs[index];
         let cost_value = if cost.known { cost.cny } else { 0.0 };
-        all_half.feed(row, cost_value, &realms, &known_keys);
+        all_half.feed(row, cost_value, &realms, &known_keys, &current);
         let at = number(row, "at");
         let in_window = since.map_or(true, |lower| at >= lower)
             && until.map_or(true, |upper| at <= upper);
         if in_window {
-            window_half.feed(row, cost_value, &realms, &known_keys);
+            window_half.feed(row, cost_value, &realms, &known_keys, &current);
         }
     }
 
@@ -518,10 +554,15 @@ pub fn analytics(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
             })
         })
         .collect();
+    let position = |row: &Value| {
+        let model = row.get("model").and_then(Value::as_str).unwrap_or("");
+        all_half.model_order.iter().position(|entry| entry == model).unwrap_or(usize::MAX)
+    };
     let sort_key = |row: &Value| {
         (
             -integer(row.get("window").unwrap_or(&Value::Null), "total_tokens"),
             -integer(row.get("all_time").unwrap_or(&Value::Null), "total_tokens"),
+            position(row),
         )
     };
     models.sort_by(|left, right| sort_key(left).cmp(&sort_key(right)));

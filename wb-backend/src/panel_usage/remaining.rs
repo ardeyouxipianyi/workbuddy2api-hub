@@ -10,6 +10,7 @@ fn collect_pairs(
     accounts: &[crate::state::AccountFile],
     realms: &BTreeMap<String, String>,
     floor: f64,
+    current: &str,
 ) -> BTreeMap<PairKey, PairValue> {
     let mut pairs: BTreeMap<(String, String, String), (i64, String)> = BTreeMap::new();
     for row in rows {
@@ -21,7 +22,7 @@ fn collect_pairs(
             .and_then(Value::as_str)
             .unwrap_or("(unattributed)")
             .to_string();
-        let realm = row_realm(row, &realms).to_string();
+        let realm = row_realm(row, &realms, current);
         let model = row
             .get("model")
             .and_then(Value::as_str)
@@ -124,7 +125,8 @@ pub fn remaining(app: &Arc<App>) -> Resp {
     // shortcut: 这里按 usage 活动取 (账号, 模型) 对；Python 还要用它自己的 cap 来源
     // （limit-events.jsonl + 凭证档 model_caps）过滤，那套子系统尚未移植 —— 有 cap
     // 的部署上两边行集合会不同，属已知缺口（PANEL_TODO 里登记）。
-    let pairs = collect_pairs(&rows, &accounts, &realms, floor);
+    let current = app.state.current_realm();
+    let pairs = collect_pairs(&rows, &accounts, &realms, floor, &current);
     let (models, output_rows) = model_totals(pairs, floor);
     json_resp(
         StatusCode::OK,

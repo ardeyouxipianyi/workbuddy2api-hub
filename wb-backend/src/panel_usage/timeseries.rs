@@ -12,7 +12,8 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let rows = read_rows(app);
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
-    let selected = rows_for_realm(&rows, &realm, &realms);
+    let current = app.state.current_realm();
+    let selected = rows_for_realm(&rows, &realm, &realms, &current);
     // 同 analytics：range=today|week|month 是面板的区间按钮，必须换算成边界。
     let (range_since, range_until) = range_bounds(req);
     let until = query(req, "until")

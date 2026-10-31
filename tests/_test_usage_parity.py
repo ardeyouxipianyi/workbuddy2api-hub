@@ -69,6 +69,9 @@ KNOWN_DIFFS = {
     # rows/models 需要 Python 的 cap 来源（limit-events + model_caps），尚未移植；
     # floor 与 iso 已对齐。见 _test_rust_backend.py 的 PANEL_TODO。
     "/usage/remaining": {"rows", "models", "budgets"},
+    # 样本起点的时刻取决于 Python 增量环形缓冲的裁剪方式，没逐字复刻。
+    "/usage/perf?realm=all&range=today": {"sample_from"},
+    "/usage/perf?realm=all&range=month": {"sample_from"},
 }
 
 
@@ -281,7 +284,9 @@ class UsageParity(unittest.TestCase):
         for label in ("py", "rust"):
             os.makedirs(os.path.join(self.tmp, label, "usage"))
             os.makedirs(os.path.join(self.tmp, label, "accounts"))
-            rows = usage_rows(now)
+            # 真实日志是「按时间追加」的：Python 的 recent 走文件倒序取页，
+            # 语料乱序写进去会让这条规则测出假差异。
+            rows = sorted(usage_rows(now), key=lambda item: item["at"])
             with open(os.path.join(self.tmp, label, "usage", "usage.jsonl"), "w") as fh:
                 for row in rows:
                     fh.write(json.dumps(row) + "\n")
