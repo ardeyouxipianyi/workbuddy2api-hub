@@ -4992,6 +4992,23 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
+            <h2 style="margin:0">后端实现 <em id="setBackendState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px" id="setBackendDetail"></div>
+            <div style="font-size:12px;color:var(--warn);margin-top:4px" id="setBackendMissing"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+              <input id="setBackendRust" type="checkbox" style="width:16px;height:16px">
+              使用 Rust 后端
+            </label>
+            <button onclick="saveBackend(this)" id="setBackendBtn">切换后端</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
             <h2 style="margin:0">思考等级挡位映射 <em id="setReasoningEffortMapState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               客户端传入的思考等级不在模型支持列表时，自动改写为该模型的默认档位，避免上游直接拒绝整个请求。档位来自上游模型目录；模型不允许关闭思考时，「关闭思考」也会改为默认档位。默认开启。
@@ -11595,6 +11612,8 @@ async function saveWinMaxHeight(btn){
 async function loadSettings(showToast){
   try {
     const data = await getJSON('/settings');
+    // 后端开关不属于 settings.json（只有 launcher 写 backend.json），所以单独取。
+    loadBackendState();
     const pwdState = document.getElementById('setPwdState');
     if(pwdState){
       pwdState.textContent = data.panel_password_is_default ? '(当前为默认密码)' : '(已自定义)';
@@ -12422,6 +12441,77 @@ async function refreshPricingNow(btn){
   } finally {
     if(btn) btn.disabled = false;
   }
+}
+
+let BACKEND_STATE = null;
+
+async function loadBackendState(){
+  const stateEl = document.getElementById('setBackendState');
+  if(!stateEl) return;
+  const detailEl = document.getElementById('setBackendDetail');
+  const missingEl = document.getElementById('setBackendMissing');
+  const box = document.getElementById('setBackendRust');
+  const btn = document.getElementById('setBackendBtn');
+  let data = null;
+  try { data = await getJSON('/admin/backend/status'); } catch(e) { data = null; }
+  BACKEND_STATE = data;
+  if(!data){
+    stateEl.textContent = '(状态未知)';
+    stateEl.style.color = 'var(--warn)';
+    detailEl.textContent = '读不到后端状态。';
+    missingEl.textContent = '';
+    if(box){ box.disabled = true; box.checked = false; }
+    if(btn) btn.disabled = true;
+    return;
+  }
+  const rust = data.rust || {};
+  const current = data.backend || 'python';
+  const switchable = data.supervised !== false;
+  stateEl.textContent = current === 'rust' ? '(已启用 Rust 后端)' : '(当前 Python 后端)';
+  stateEl.style.color = current === 'rust' ? 'var(--accent2)' : 'var(--dim)';
+  const bits = [];
+  if(!switchable) bits.push('没有 launcher 监督：本进程自己占着端口，无法切换');
+  if(typeof data.inflight === 'number') bits.push('在飞请求 ' + data.inflight);
+  if(rust.binary && rust.binary.version) bits.push('Rust 二进制 ' + rust.binary.version);
+  detailEl.textContent = bits.join(' · ');
+  // 单向否定：不可用才写原因，可用时不宣称「可用」。
+  if(rust.available){
+    missingEl.textContent = '';
+  } else {
+    const missing = (rust.missing || []).join('、');
+    missingEl.textContent = missing
+      ? ('Rust 后端不可用（尚未移植：' + missing + '）')
+      : 'Rust 后端不可用（二进制未随包发布）';
+  }
+  if(box){
+    box.disabled = !rust.available || !switchable;
+    box.checked = current === 'rust';
+  }
+  if(btn) btn.disabled = !rust.available || !switchable;
+}
+
+async function saveBackend(btn){
+  const box = document.getElementById('setBackendRust');
+  const target = (box && box.checked) ? 'rust' : 'python';
+  if(btn) btn.disabled = true;
+  // 切换会把正在服务这个请求的进程停掉，响应可能收不到，所以「成功」只按
+  // 轮询到的最终状态判定，不按这次 POST 的返回。
+  try { await postJSON('/admin/backend', {backend: target}); } catch(e) { /* 进程正在易手 */ }
+  let settled = false;
+  for(let i = 0; i < 60; i++){
+    await new Promise(function(r){ setTimeout(r, 500); });
+    try {
+      const st = await getJSON('/admin/backend/status');
+      if(st && st.backend === target && st.healthy){ settled = true; break; }
+      if(st && st.last_switch && st.last_switch.ok === false){ break; }
+    } catch(e) { /* 端口短暂无人监听 */ }
+  }
+  await loadBackendState();
+  toast(settled
+        ? (target === 'rust' ? '已切换到 Rust 后端' : '已切回 Python 后端')
+        : '切换未完成，后端状态见上方',
+        settled ? 'ok' : 'bad');
+  if(btn) btn.disabled = false;
 }
 
 async function saveAnthropicMessages(btn){

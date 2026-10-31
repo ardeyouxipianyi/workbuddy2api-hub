@@ -541,6 +541,11 @@ USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "reasoning_tokens",
 # "admin"), independent of the /v1 API key. Sessions live in memory only, so a
 # restart forces browsers to log in again.
 PANEL = wb_settings.PanelSessions()
+
+#: /health 里的在飞请求数。launcher 靠它决定什么时候可以停掉本进程完成切换，
+#: 所以计数必须覆盖每条连接上的每个请求，且只在这里读写。
+_INFLIGHT = {"n": 0}
+_INFLIGHT_LOCK = threading.Lock()
 API_KEY_FILE_SET = False
 def configured_keys():
     """Panel-managed API keys, always read fresh so panel edits apply at once."""
@@ -18325,6 +18330,18 @@ class Handler(BaseHTTPRequestHandler):
     # the normal JSON error shape so an over-long URL is diagnosable.
     max_request_line = 1024 * 1024
     def handle_one_request(self):
+        # 在飞请求计数：切换后端前 launcher 要据此判断能不能安全停掉本进程
+        # （/health 的 inflight）。包一层而不是在每个 return 前面手动加减，
+        # 这个方法里提前返回的分支太多，漏一个就会让切换永远等不到归零。
+        with _INFLIGHT_LOCK:
+            _INFLIGHT["n"] += 1
+        try:
+            self._handle_one_request()
+        finally:
+            with _INFLIGHT_LOCK:
+                _INFLIGHT["n"] -= 1
+
+    def _handle_one_request(self):
         # Reset per-request auth state. HTTP/1.1 keeps the connection alive, so
         # one Handler instance serves many requests; a request that authenticates
         # via the panel token never reassigns key_entry, and without this reset
@@ -18976,6 +18993,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_console_state()
         if path == "/health":
             return self._get_health()
+        if path == "/admin/backend/status":
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            return self._route_backend_status()
         if path == "/realm":
             return self._get_realm()
         if path == "/v1/balance-summary":
@@ -19103,6 +19124,15 @@ class Handler(BaseHTTPRequestHandler):
             # literal "intl" and drifted from the panel switch.
             "realm": CURRENT_REALM,
             "crypto_ok": crypto_ok,
+            # 哪个实现在服务这个端口、在飞几个请求：launcher 用前者确认「新后端
+            # 真的起来了」（不认身份的话，正在停止的旧进程答一个 200 也会被当成
+            # 成功），用后者决定什么时候可以停。
+            "backend": "python",
+            "version": running_version(),
+            # 这一条 /health 自己也在计数里，减掉它才是「别人有多少请求在飞」；
+            # 不减的话 launcher 的 drain 永远等不到 0（观测者把自己算进去了）。
+            "inflight": max(0, _INFLIGHT["n"] - 1),
+            "pid": os.getpid(),
         }
         if not crypto_ok:
             info["crypto_error"] = crypto_reason
@@ -20841,6 +20871,72 @@ class Handler(BaseHTTPRequestHandler):
             "selected_models": selection,
         })
 
+    def _launcher_call(self, payload, timeout=10.0):
+        """把控制命令转给 launcher（`accounts/launcher.sock`），失败返回 None。
+
+        没有 launcher 是合法状态：单进程起法（开发、旧启动脚本）本来就没有可
+        切换的对象，面板据此显示「不可用」，而不是报一个听起来像故障的 500。
+        """
+        import wb_backend
+        path = os.path.join(ACCOUNTS_DIR, wb_backend.SOCK_FILE)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(path)
+            sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            raw = sock.makefile("rb").readline(1 << 20)
+        except (OSError, ValueError):
+            return None
+        finally:
+            sock.close()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except ValueError:
+            return None
+
+    def _backend_caps(self):
+        import wb_backend
+        return wb_backend.capabilities(os.path.dirname(os.path.abspath(__file__)))
+
+    def _route_backend_status(self):
+        state = self._launcher_call({"cmd": "status"})
+        if state is not None:
+            return self._json(200, state)
+        caps = self._backend_caps()
+        return self._json(200, {
+            "supervised": False,
+            "backend": "python",
+            "healthy": True,
+            "inflight": _INFLIGHT["n"],
+            "python": {"available": True},
+            "rust": {"available": caps["ported"], "missing": caps["missing"],
+                     "binary": caps["binary"]},
+            "detail": "没有 launcher：本进程自己占着端口，无法切换",
+        })
+
+    def _route_backend_switch(self):
+        payload = self._payload_or_error()
+        if payload is None:
+            return
+        target = str(payload.get("backend") or payload.get("to") or "").strip()
+        if target not in ("python", "rust"):
+            return self._error(400, "backend must be python or rust", "invalid_request_error")
+        if target == "rust" and not self._backend_caps()["ported"]:
+            caps = self._backend_caps()
+            return self._error(409, "rust backend not ready: %s"
+                               % (", ".join(caps["missing"]) or "binary missing"),
+                               "invalid_request_error")
+        if self._launcher_call({"cmd": "status"}) is None:
+            return self._error(503, "no launcher is supervising this process; "
+                                    "start it with --supervise to switch backends")
+        threading.Thread(target=self._launcher_call,
+                         args=({"cmd": "switch", "to": target}, 180.0),
+                         daemon=True).start()
+        return self._json(202, {"ok": True, "switching_to": target,
+                                "poll": "/admin/backend/status"})
+
     def _handle_panel(self, path):
         """Panel login, logout and the settings screen (password + API key)."""
         payload = self._payload_or_error()
@@ -22387,6 +22483,13 @@ class Handler(BaseHTTPRequestHandler):
             # 根本不发 body，排空会一直等一个永远不会到的载荷。
             self._handle_expect_continue()
             self._discard_body()
+        if path == "/admin/backend":
+            # 切换后端会杀掉正在服务这个请求的进程，所以只能异步：先回 202，
+            # 由后台线程把命令交给 launcher，launcher 再按 /health 的 inflight
+            # 等在飞请求归零。同步等结果会把自己也算进在飞数里，永远等不到 0。
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            return self._route_backend_switch()
         if path == "/console/toggle":
             # Panel-only management write: 收起/唤出本进程自己的控制台窗口，
             # 与设置、定价那几个写入同一个门。按钮带 `{}` body，
@@ -22996,6 +23099,13 @@ def running_version():
 
 def main():
     args = _parse_cli_args()
+    if args.supervise:
+        # 监督者模式：本进程不服务，只决定谁绑定端口（见 wb_backend.py）。
+        # argv 原样传下去（去掉 --supervise），这样子进程拿到的 --host/--port/
+        # --lan/--api-key 与今天完全一致。
+        import wb_backend
+        rest = [a for a in sys.argv[1:] if a != "--supervise"]
+        return wb_backend.main(rest, app_dir=os.path.dirname(os.path.abspath(__file__)))
     _apply_cli_overrides(args)
     if args.probe_only:
         # 启动脚本先在本机窗口里跑一次这个检查再拉起了。静默模式下服务进程是
@@ -23039,6 +23149,12 @@ def _parse_cli_args():
                     help="only check whether a proxy already listens on the port and "
                          "print what the launcher should say, then exit "
                          "(0 = one is running, 3 = the port is free)")
+    ap.add_argument("--supervise", action="store_true",
+                    help="own the port but run the selected backend (wb_backend.py) as a "
+                         "child process, so the panel can switch between them")
+    ap.add_argument("--serve", action="store_true",
+                    help="serve in this process (the default; the launcher passes it "
+                         "explicitly so the intent is visible in ps)")
     args = ap.parse_args()
     return args
 

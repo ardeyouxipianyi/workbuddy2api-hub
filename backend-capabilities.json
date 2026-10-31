@@ -1,0 +1,31 @@
+{
+  "_comment": "随 Rust 二进制一起发布：哪几组功能已经移植完。launcher 只认这份文件判断「能不能切」，面板的「Rust 后端不可用（缺 X）」也由它生成，不靠人维护清单。v1 六组全部 ported=true 才允许打开开关。",
+  "version": "0.0.0",
+  "binary": "wb-backend",
+  "groups": {
+    "protocols": {
+      "label": "协议面（chat/responses/messages/models 与流式）",
+      "ported": false
+    },
+    "accounts": {
+      "label": "账号凭证（OAuth/刷新/积分/导入导出）",
+      "ported": false
+    },
+    "pool": {
+      "label": "账号池与限额（轮换/冷却/熔断/并发闸门）",
+      "ported": false
+    },
+    "panel": {
+      "label": "面板接口与用量聚合",
+      "ported": false
+    },
+    "tasks": {
+      "label": "自动化任务与调度器（签到/成长/猫猫/活跃/保活）",
+      "ported": false
+    },
+    "ops": {
+      "label": "运维面（自更新/一键配置/出口代理/本地工具）",
+      "ported": false
+    }
+  }
+}
