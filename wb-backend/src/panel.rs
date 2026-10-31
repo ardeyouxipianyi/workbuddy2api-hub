@@ -718,6 +718,7 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
             || matches!(
                 key.as_str(),
                 "api_keys" | "deleted_api_key_ids" | "panel_password" | "active_realm"
+                    | "update_check_enabled"
             );
         if !known {
             continue;

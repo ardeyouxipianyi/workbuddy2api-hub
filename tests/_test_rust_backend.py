@@ -25,7 +25,7 @@ BINARY = next((p for p in CANDIDATES if os.path.exists(p)), None)
 # 协议面已经全绿；这张表留着给下一批缺口用，空着就说明一条都不欠。
 PROTOCOL_TODO = set()
 PANEL_TODO = {
-    "/pricing", "/updates",
+    "/pricing",
 }
 
 
