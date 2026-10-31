@@ -320,6 +320,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
             json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
         }
+        (&Method::GET, "/logs/export") => crate::misc_routes::logs_export(app),
         (&Method::POST, "/shutdown") => {
             // 先回 200，再让进程退：面板点「停止服务」期待立刻看到结果。
             tokio::spawn(async {
@@ -374,15 +375,27 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/accounts/daily-chat") => daily_chat(app, req).await,
         (&Method::POST, "/tasks/travel") => tasks_travel(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
+        (&Method::POST, "/tasks/streak-bonus") => crate::streak_bonus::handle(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
-        (&Method::GET, "/pricing") | (&Method::POST, "/pricing/refresh") => {
+        (&Method::GET, "/pricing")
+        | (&Method::POST, "/pricing/refresh")
+        | (&Method::POST, "/pricing/mapping") => {
             match crate::pricing_panel::handle(app, req).await {
                 Some(resp) => resp,
                 None => not_ported("/pricing"),
             }
         }
         (&Method::GET, "/tasks") => crate::panel_read::tasks(app, &req).await,
+        (&Method::GET, "/activity") => {
+            match crate::misc_routes::activity(app, req.uri().query().unwrap_or("")) {
+                Ok(payload) => json_resp(StatusCode::OK, &payload),
+                Err(message) => json_resp(
+                    StatusCode::BAD_REQUEST,
+                    &json!({"error": {"message": message, "type": "invalid_request_error", "code": 400}}),
+                ),
+            }
+        }
         (&Method::GET, "/activity/history") => {
             let q = req.uri().query().unwrap_or("");
             let get = |name: &str| {

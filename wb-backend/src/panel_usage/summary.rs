@@ -192,7 +192,19 @@ pub fn overview(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let rows = read_rows(app);
     let realms = account_realms(app);
     let realm = requested_realm(req, app);
-    let selected = rows_for_realm(&rows, &realm, &realms);
+    let (since, until) = range_bounds(req);
+    let selected: Vec<&Value> = rows_for_realm(&rows, &realm, &realms)
+        .into_iter()
+        .filter(|row| {
+            if since.is_none() && until.is_none() {
+                return true;
+            }
+            row_at(row).is_some_and(|at| {
+                since.map(|lower| at >= lower).unwrap_or(true)
+                    && until.map(|upper| at <= upper).unwrap_or(true)
+            })
+        })
+        .collect();
     let mut totals = json!({
         "requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,

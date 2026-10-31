@@ -82,7 +82,12 @@ fn headers(account: &AccountFile) -> reqwest::header::HeaderMap {
     map
 }
 
-async fn post(app: &Arc<App>, account: &AccountFile, path: &str, body: &Value) -> Result<Value, String> {
+pub(crate) async fn post(
+    app: &Arc<App>,
+    account: &AccountFile,
+    path: &str,
+    body: &Value,
+) -> Result<Value, String> {
     let url = format!("{}{}", billing_base(&account.realm()), path);
     let resp = app
         .upstream

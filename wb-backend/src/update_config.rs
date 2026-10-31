@@ -33,6 +33,7 @@ pub(crate) struct Config {
     pub(crate) install_enabled: bool,
     pub(crate) binary_path: PathBuf,
     pub(crate) staging_dir: PathBuf,
+    pub(crate) backups_dir: PathBuf,
     pub(crate) backup_path: PathBuf,
     pub(crate) status_path: PathBuf,
     pub(crate) helper_path: PathBuf,
@@ -86,6 +87,12 @@ impl Config {
             install_enabled: env_string("WB_UPDATE_INSTALL_ENABLED", "") == "1",
             staging_dir: env_path("WB_UPDATE_STAGING_DIR")
                 .unwrap_or_else(|| binary.parent().unwrap_or(Path::new(".")).to_path_buf()),
+            backups_dir: env_path("WB_UPDATE_BACKUPS_DIR").unwrap_or_else(|| {
+                binary
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join("updates")
+            }),
             backup_path: env_path("WB_UPDATE_BACKUP_PATH").unwrap_or_else(|| sidecar("previous")),
             status_path: env_path("WB_UPDATE_STATUS_PATH")
                 .unwrap_or_else(|| sidecar("update-status.json")),
@@ -150,6 +157,7 @@ impl Config {
             status_max_bytes: 8192,
             install_enabled: false,
             staging_dir: root.clone(),
+            backups_dir: root.join("updates"),
             backup_path: binary.with_extension("previous"),
             status_path: binary.with_extension("update-status.json"),
             helper_path: binary.clone(),

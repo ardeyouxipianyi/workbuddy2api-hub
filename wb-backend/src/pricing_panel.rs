@@ -16,7 +16,9 @@ pub async fn handle(app: &Arc<App>, req: Request<Incoming>) -> Option<Resp> {
     let path = req.uri().path();
     if !matches!(
         (&method, path),
-        (&Method::GET, "/pricing") | (&Method::POST, "/pricing/refresh")
+        (&Method::GET, "/pricing")
+            | (&Method::POST, "/pricing/refresh")
+            | (&Method::POST, "/pricing/mapping")
     ) {
         return None;
     }
@@ -36,7 +38,99 @@ pub async fn handle(app: &Arc<App>, req: Request<Incoming>) -> Option<Resp> {
             &app.pricing.status(&app.state.settings_snapshot()),
         ));
     }
+    if path == "/pricing/mapping" {
+        return Some(mapping(app, req).await);
+    }
     Some(refresh_response(app))
+}
+
+fn valid_openrouter_id(value: &str) -> bool {
+    let Some((vendor, model)) = value.split_once('/') else {
+        return false;
+    };
+    !vendor.is_empty()
+        && !model.is_empty()
+        && vendor
+            .bytes()
+            .chain(model.bytes())
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+}
+
+async fn mapping(app: &Arc<App>, req: Request<Incoming>) -> Resp {
+    let settings = app.state.settings_snapshot();
+    if !app.pricing.settings(&settings).enabled {
+        return json_resp(
+            StatusCode::OK,
+            &json!({"ok": false, "msg": "价估算已关闭，请先启用"}),
+        );
+    }
+    let body = match crate::http::body_json(req).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("").trim();
+    let or_id = body.get("or_id").and_then(Value::as_str).unwrap_or("").trim();
+    if model.is_empty() {
+        return crate::http::error_resp(StatusCode::BAD_REQUEST, "model is required");
+    }
+    if !or_id.is_empty() && !valid_openrouter_id(or_id) {
+        return crate::http::error_resp(
+            StatusCode::BAD_REQUEST,
+            "or_id must look like 'vendor/model'",
+        );
+    }
+    let known = !or_id.is_empty()
+        && app
+            .pricing
+            .store
+            .live_models()
+            .is_some_and(|models| models.contains_key(or_id));
+    if let Err(error) = app.pricing.store.save_runtime_override(model, or_id) {
+        return crate::http::error_resp(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("cannot save pricing mapping: {error}"),
+        );
+    }
+    let task_app = app.clone();
+    tokio::spawn(async move {
+        task_app.pricing.run_refresh_staged(task_app.clone()).await;
+    });
+    let msg = if or_id.is_empty() {
+        format!("已删除 {model} 的手填映射，下次取价起按自动匹配")
+    } else if known {
+        format!("已记录 {model} → {or_id}，正在重新取价")
+    } else {
+        format!("已记录 {model} → {or_id}；本次快照里还没看到该条目，取价后仍可能显示未定价")
+    };
+    app.log(
+        "pricing",
+        "INFO",
+        &format!(
+            "面板手填映射：{model} → {}{}",
+            if or_id.is_empty() { "(清除)" } else { or_id },
+            if known || or_id.is_empty() {
+                ""
+            } else {
+                "（快照暂无此条目）"
+            }
+        ),
+    );
+    json_resp(
+        StatusCode::OK,
+        &json!({"ok": true, "model": model, "or_id": or_id, "known": known, "msg": msg}),
+    )
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::valid_openrouter_id;
+
+    #[test]
+    fn validates_python_openrouter_shape() {
+        assert!(valid_openrouter_id("vendor/model-1.2:free"));
+        assert!(!valid_openrouter_id("model-without-vendor"));
+        assert!(!valid_openrouter_id("vendor/model with space"));
+    }
 }
 
 fn refresh_response(app: &Arc<App>) -> Resp {

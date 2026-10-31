@@ -7,6 +7,7 @@
 //! - cadence: `WB_UPDATE_INTERVAL_SECONDS=86400`, `WB_UPDATE_POLL_SECONDS=300`
 //! - bounds: `WB_UPDATE_REQUEST_TIMEOUT_SECONDS=10`, `WB_UPDATE_MAX_BODY_BYTES=2097152`
 //! - install: `WB_UPDATE_INSTALL_ENABLED=1`, `WB_UPDATE_BINARY_PATH=/opt/wb/wb-backend`
+//! - backups: `WB_UPDATE_BACKUPS_DIR=updates`, `WB_UPDATE_REQUEST_DIR=/run/workbuddy2api-hub-updater`
 //! - manifest: `WB_UPDATE_MANIFEST_URL=https://host/{repo}/{tag}/{target}.json`
 //! - health: `WB_UPDATE_HEALTH_URL=http://127.0.0.1:{port}/health`
 
@@ -73,6 +74,45 @@ pub async fn install(app: &Arc<App>, req: &Request<Incoming>, port: u16) -> Resp
             &json!({"ok": false, "msg": message}),
         ),
         Err(message) => json_resp(StatusCode::CONFLICT, &json!({"ok": false, "msg": message})),
+    }
+}
+
+pub async fn backups(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
+    if !authorized(app, req) {
+        return unauthorized();
+    }
+    json_resp(StatusCode::OK, &crate::update_backups::view(app))
+}
+
+pub async fn rollback(app: &Arc<App>, req: Request<Incoming>, port: u16) -> Resp {
+    if !authorized(app, &req) {
+        return unauthorized();
+    }
+    let body = match crate::http::body_json(req).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let version = body
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if version.is_empty() {
+        return json_resp(
+            StatusCode::CONFLICT,
+            &json!({"ok": false, "msg": "请选择要回退的版本"}),
+        );
+    }
+    match crate::update_backups::start_rollback(app, &version, port) {
+        Ok(mut queued) => {
+            queued["ok"] = json!(true);
+            json_resp(StatusCode::ACCEPTED, &queued)
+        }
+        Err(message) => json_resp(
+            StatusCode::CONFLICT,
+            &json!({"ok": false, "msg": message}),
+        ),
     }
 }
 

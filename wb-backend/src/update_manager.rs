@@ -43,7 +43,7 @@ pub struct Manager {
     client: reqwest::Client,
     runtime: Mutex<Runtime>,
     checking: AtomicBool,
-    install_reserved: AtomicBool,
+    pub(crate) install_reserved: AtomicBool,
 }
 
 impl Manager {
@@ -277,11 +277,34 @@ impl Manager {
         .await?;
         crate::update_download::make_executable(&staged)?;
         stored::write_installation(&self.config, "stopping", version, "正在停止网关");
+        let backup_dir = self
+            .config
+            .backups_dir
+            .join(format!("backup-{version}"));
+        let binary_name = self
+            .config
+            .binary_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("wb-backend");
+        std::fs::create_dir_all(&backup_dir)
+            .map_err(|error| format!("无法创建回退备份目录: {error}"))?;
+        crate::state::write_json_atomic(
+            &backup_dir.join("backup.json"),
+            &json!({
+                "version": VERSION,
+                "files": [binary_name],
+                "saved": [binary_name],
+                "absent": [],
+            }),
+        )
+        .map_err(|error| format!("无法写入回退备份清单: {error}"))?;
+        let backup = backup_dir.join(binary_name);
         crate::update_apply::spawn_helper(crate::update_apply::HelperSpec {
             helper: self.config.helper_path.clone(),
             binary: self.config.binary_path.clone(),
             staged,
-            backup: self.config.backup_path.clone(),
+            backup,
             status: self.config.status_path.clone(),
             version: version.to_string(),
             health_url: self.config.health_for(port),
@@ -297,6 +320,7 @@ impl Manager {
         });
         Ok(())
     }
+
 }
 
 fn unix_now() -> f64 {
