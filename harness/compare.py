@@ -275,9 +275,17 @@ def diff_usage(left_dir, right_dir):
         return ["usage 没有可比对的条目（左 %d 行 / 右 %d 行，msgs_sha 可能算错）"
                 % (len(left), len(right))]
     problems = []
+    # cost_policy 是计价引用：Python 侧价表在内存里就盖章，Rust 侧计价整组没移植
+    # （backend-capabilities.json 的 pricing 仍 ported:false），所以这一列恒为 null。
+    # 拿它比对只会暴露「Rust 不做计价」这件已知的事，与请求语义无关。
+    known_gaps = {"cost_policy"}
     for key in sorted(shared, key=str):
         lrow, rrow = left[key], right[key]
         if lrow == rrow:
+            continue
+        skip = {k: (lrow.get(k), rrow.get(k)) for k in known_gaps if lrow.get(k) != rrow.get(k)}
+        if skip and {k: v for k, v in lrow.items() if k not in known_gaps} == \
+                {k: v for k, v in rrow.items() if k not in known_gaps}:
             continue
         missing = {k: lrow[k] for k in lrow if k not in rrow}
         extra = {k: rrow[k] for k in rrow if k not in lrow}
