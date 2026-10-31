@@ -1,0 +1,208 @@
+//! 账号与设置：只读加载。
+//!
+//! 账号档用 `serde_json::Map` 原样保留——Python 版是 dict 读写，Rust 这边必须
+//! 能原样写回（M3 起要保存 token/状态），任何「只认识的字段」struct 都会静默
+//! 丢掉未知字段，那是数据损坏，不是省事。
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+use serde_json::{Map, Value};
+
+/// 与 wb_accounts.py:4100 同一份清单：和凭证同目录但不是账号的文件。
+const NON_ACCOUNT_FILES: &[&str] = &[
+    "settings.json",
+    "active_realm.json",
+    "model_windows.json",
+    "quota_scan.json",
+];
+
+pub struct AccountFile {
+    pub path: PathBuf,
+    pub name: String,
+    pub data: Map<String, Value>,
+}
+
+impl AccountFile {
+    pub fn str(&self, key: &str) -> &str {
+        self.data.get(key).and_then(Value::as_str).unwrap_or("")
+    }
+
+    pub fn uid(&self) -> String {
+        self.str("uid").to_string()
+    }
+
+    /// 静态 API Key 只在国内出口有效（wb_accounts.py:899），其余看落盘字段。
+    pub fn realm(&self) -> String {
+        if self.is_api_key() {
+            return "cn".into();
+        }
+        match self.str("realm") {
+            "" => "intl".into(),
+            other => other.to_string(),
+        }
+    }
+
+    pub fn is_api_key(&self) -> bool {
+        self.str("accessToken").starts_with("ck_")
+    }
+
+    pub fn expires_at(&self) -> i64 {
+        self.data.get("expiresAt").and_then(Value::as_i64).unwrap_or(0)
+    }
+
+    /// ready() 的判定只用 M1 需要的三条：启用、有 token、没过期。
+    /// 冷却/熔断/限额属于账号池（M3），不在这里。
+    pub fn ready(&self, now: i64) -> bool {
+        if !self.data.get("enabled").map(|v| v.as_bool().unwrap_or(true)).unwrap_or(true) {
+            return false;
+        }
+        if self.str("accessToken").is_empty() {
+            return false;
+        }
+        let expires = self.data.get("expiresAt").and_then(Value::as_i64).unwrap_or(0);
+        // expiresAt=0 是静态 API Key 的「永不按时间淘汰」，不是「1970 过期」。
+        expires == 0 || expires > now
+    }
+}
+
+pub struct State {
+    pub accounts_dir: PathBuf,
+    pub usage_dir: PathBuf,
+    accounts: RwLock<Vec<AccountFile>>,
+    pub settings: RwLock<Map<String, Value>>,
+    /// 启动时刻读完的账号快照，用于 M1 的「读」语义；写入留给 M3。
+    pub model_catalog: RwLock<Value>,
+}
+
+impl State {
+    pub fn load(accounts_dir: &str, usage_dir: &str) -> State {
+        let accounts_dir = PathBuf::from(accounts_dir);
+        let settings = read_settings(&accounts_dir);
+        let state = State {
+            accounts_dir: accounts_dir.clone(),
+            usage_dir: PathBuf::from(usage_dir),
+            accounts: RwLock::new(load_accounts(&accounts_dir)),
+            settings: RwLock::new(settings),
+            model_catalog: RwLock::new(read_json(accounts_dir.join("model.json"))
+                .unwrap_or(Value::Null)),
+        };
+        state
+    }
+
+    pub fn accounts(&self) -> std::sync::RwLockReadGuard<'_, Vec<AccountFile>> {
+        self.accounts.read().unwrap()
+    }
+
+    pub fn reload(&self) {
+        let fresh = load_accounts(&self.accounts_dir);
+        *self.accounts.write().unwrap() = fresh;
+    }
+
+    pub fn ready_count(&self) -> usize {
+        let now = now_epoch();
+        self.accounts().iter().filter(|a| a.ready(now)).count()
+    }
+
+    /// 区域开关：`accounts/active_realm.json` 的 `{"realm": "cn"}`，缺省 intl
+    /// （wb_proxy.py:6069 load_persisted_realm）。每次现读，面板切区域立刻生效。
+    pub fn current_realm(&self) -> String {
+        match read_json(self.accounts_dir.join("active_realm.json")) {
+            Some(Value::Object(m)) => match m.get("realm").and_then(Value::as_str) {
+                Some("cn") => "cn".into(),
+                Some("intl") => "intl".into(),
+                _ => "intl".into(),
+            },
+            _ => "intl".into(),
+        }
+    }
+
+    /// 面板里配了 Key 就意味着要鉴权；LAN 免鉴权等细则随 M2 的鉴权一起接。
+    pub fn api_key_required(&self) -> bool {
+        self.settings
+            .read()
+            .unwrap()
+            .get("api_keys")
+            .and_then(Value::as_array)
+            .map(|keys| keys.iter().any(|k| {
+                k.get("key").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false)
+            }))
+            .unwrap_or(false)
+    }
+
+    pub fn setting_str(&self, key: &str) -> String {
+        self.settings
+            .read()
+            .unwrap()
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub fn setting_bool(&self, key: &str, default: bool) -> bool {
+        self.settings
+            .read()
+            .unwrap()
+            .get(key)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    }
+}
+
+pub fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn read_json(path: impl AsRef<Path>) -> Option<Value> {
+    let text = std::fs::read_to_string(path.as_ref()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn read_settings(accounts_dir: &Path) -> Map<String, Value> {
+    match read_json(accounts_dir.join("settings.json")) {
+        Some(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
+}
+
+fn load_accounts(accounts_dir: &Path) -> Vec<AccountFile> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(accounts_dir) {
+        Ok(entries) => entries,
+        Err(_) => return out,
+    };
+    // sorted(os.listdir(...))：顺序影响 /v1/models 与选号的确定性，别换成 dir 顺序。
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".json") && !NON_ACCOUNT_FILES.contains(&n.as_str()))
+        .collect();
+    names.sort();
+    for name in names {
+        let path = accounts_dir.join(&name);
+        match read_json(&path) {
+            Some(Value::Object(data)) => {
+                // uid 缺失时 Python 会从 token 里解；M1 不做 JWT 解析（M3 的 OAuth 一起做），
+                // 用文件名兜底，保证不会把空 uid 当键用。
+                let mut data = data;
+                if data.get("uid").and_then(Value::as_str).unwrap_or("").is_empty() {
+                    let stem = name.trim_end_matches(".json").to_string();
+                    data.insert("uid".into(), Value::String(stem));
+                }
+                out.push(AccountFile { path, name, data });
+            }
+            _ => eprintln!("wb-backend: skip account file that is not a JSON object: {name}"),
+        }
+    }
+    out
+}
+
+/// 面板与 usage 里按 uid 索引的地方都用这个（BTreeMap 保证输出顺序稳定）。
+pub fn by_uid(accounts: &[AccountFile]) -> BTreeMap<String, &AccountFile> {
+    accounts.iter().map(|a| (a.uid(), a)).collect()
+}

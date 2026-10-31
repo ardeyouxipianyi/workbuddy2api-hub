@@ -57,3 +57,6 @@ desktop.ini
 
 # Local Docker Compose override
 docker-compose.override.yml
+
+# Rust 后端构建产物（二进制随 release 下发，不进仓库）
+wb-backend/target/

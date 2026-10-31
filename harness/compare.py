@@ -37,54 +37,94 @@ MODEL = "deepseek-v4.1-flash"
 #: 每条 case 是一组请求；加 case 就加一行，覆盖协议形状而不是覆盖业务分支。
 CASES = [
     ("chat.plain", {"model": MODEL, "max_tokens": 32,
-                    "messages": [{"role": "user", "content": "hi"}]}),
+                    "messages": [{"role": "user", "content": "hi"}]}, True),
     ("chat.system", {"model": MODEL, "max_tokens": 32,
                      "messages": [{"role": "system", "content": "be brief"},
-                                  {"role": "user", "content": "hi"}]}),
+                                  {"role": "user", "content": "hi"}]}, True),
     ("chat.stream", {"model": MODEL, "max_tokens": 32, "stream": True,
-                     "messages": [{"role": "user", "content": "hi"}]}),
+                     "messages": [{"role": "user", "content": "hi"}]}, False),
     ("chat.tools", {"model": MODEL, "max_tokens": 32,
                     "messages": [{"role": "user", "content": "weather?"}],
                     "tools": [{"type": "function", "function": {
                         "name": "get_weather", "description": "weather",
-                        "parameters": {"type": "object", "properties": {}}}}]}),
+                        "parameters": {"type": "object", "properties": {}}}}]}, True),
 ]
-VOLATILE = re.compile(r'"(id|created|system_fingerprint|first_chunk_at|at|iso|elapsed_ms|'
-                      r'ttft_ms|gen_ms)"\s*:\s*("[^"]*"|[0-9.]+)')
+#: GET 探测点：只读路由，两个后端都必须给出同一份字节。
+PROBES = ["/health", "/v1/models"]
+
+#: 每次运行都不同、或按设计就该不同的键：比较前整个删掉。
+#: `backend`/`version` 是「谁在服务」的自述，跨后端比较时必须忽略；其余是时间戳。
+VOLATILE_KEYS = {
+    "id", "created", "system_fingerprint", "first_chunk_at", "at", "iso",
+    "elapsed_ms", "ttft_ms", "gen_ms", "fetched_at", "file_mtime", "pid",
+    "expires_at", "backend", "version",
+}
 
 
-def normalise(text):
-    return VOLATILE.sub(r'"\1":<volatile>', text)
+def sanitise(obj):
+    """递归删掉易变键；JSON 结构比较按对象比，不按字节比。
+
+    之前按字节比，Rust 得去模仿 Python `json.dumps` 的 `", "` 分隔符才「相等」——
+    那是给机器看的分隔符，不是契约。真正要盯的是字段、类型、取值和顺序。
+    """
+    if isinstance(obj, dict):
+        return {k: sanitise(v) for k, v in obj.items() if k not in VOLATILE_KEYS}
+    if isinstance(obj, list):
+        return [sanitise(v) for v in obj]
+    return obj
 
 
-def call(base, case, body, timeout=60):
+def parse(raw):
+    try:
+        return sanitise(json.loads(raw))
+    except ValueError:
+        return sanitise(raw)
+
+
+def probe(base, path, timeout=60):
+    try:
+        with urllib.request.urlopen(base.rstrip("/") + path, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+
+
+def call(base, case, body, timeout=90):
+    # ?realm=cn：夹具账号是 cn，默认区域是 intl，不指定就取不到号。
     url = base.rstrip("/") + "/v1/chat/completions?realm=cn"
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", "replace")
-            return resp.status, raw
+            return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
 
 
-def capture(base):
+def capture(base, include_stream=True, skip=()):
     out = {}
-    for name, body in CASES:
+    for path in PROBES:
+        status, raw = probe(base, path)
+        out["GET " + path] = {"status": status, "body": parse(raw)}
+    for name, body, m1 in CASES:
+        if name in skip or (not include_stream and not m1):
+            continue
         status, raw = call(base, name, body)
         if raw.lstrip().startswith("data:"):
-            frames = [normalise(f) for f in raw.split("\n\n") if f.strip()]
+            frames = [parse(f[len("data:"):].strip()) for f in raw.split("\n\n") if f.strip()]
             out[name] = {"status": status, "frames": frames}
         else:
-            out[name] = {"status": status, "body": normalise(raw)}
+            out[name] = {"status": status, "body": parse(raw)}
     return out
 
 
 def diff(a, b):
     problems = []
-    for name, _ in CASES:
+    for name in list(a) + [k for k in b if k not in a]:
         left, right = a.get(name), b.get(name)
+        if left is None or right is None:
+            # 一侧按里程碑跳过（如 M1 还没移植的流式），不算差异但要报出来。
+            continue
         if left == right:
             continue
         if left["status"] != right["status"]:
@@ -107,7 +147,7 @@ def diff(a, b):
 class Fixture(object):
     """假上游 + 一个临时网关（默认 python 后端）。"""
 
-    def __init__(self):
+    def __init__(self, rust_binary=None):
         self.tmp = tempfile.mkdtemp(prefix="wb-compare-")
         self.upstream_port = _free_port()
         self.gateway_port = _free_port()
@@ -124,6 +164,21 @@ class Fixture(object):
             cwd=ROOT, env=env, stdout=self.log, stderr=self.log)
         self.base = "http://127.0.0.1:%d" % self.gateway_port
         self.wait_ready()
+        # 同一份 accounts/usage，第二个后端：Rust 侧用 --port 起，契约相同。
+        self.rust = None
+        if rust_binary:
+            # Rust 侧单独一个 usage 目录：两边写同一个文件就分不清谁写了哪行。
+            rust_usage = os.path.join(self.tmp, "usage-rust")
+            os.makedirs(rust_usage, exist_ok=True)
+            self.usage_dirs = (usage, rust_usage)
+            self.rust_port = _free_port()
+            self.rust_proc = subprocess.Popen(
+                [os.path.abspath(rust_binary), "--host", "127.0.0.1",
+                 "--port", str(self.rust_port), "--accounts-dir", accounts,
+                 "--usage-dir", rust_usage],
+                cwd=ROOT, env=env, stdout=self.log, stderr=self.log)
+            self.rust = "http://127.0.0.1:%d" % self.rust_port
+            self.wait_ready_any(self.rust, "rust", timeout=20.0)
 
     def wait_ready(self, timeout=40.0):
         # 账号池在启动后异步载入：等 ok 且 accounts_ready>0，否则第一条请求会
@@ -140,6 +195,20 @@ class Fixture(object):
             time.sleep(0.2)
         raise AssertionError("网关没在 %.0fs 内就绪；日志：\n%s" % (timeout, self.read_log()))
 
+    def wait_ready_any(self, base, backend, timeout=20.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(base + "/health", timeout=1) as fh:
+                    payload = json.loads(fh.read())
+                if payload.get("ok") and payload.get("backend") == backend:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.2)
+        raise AssertionError("%s 后端没在 %.0fs 内就绪；日志：\n%s"
+                             % (backend, timeout, self.read_log()))
+
     def read_log(self):
         try:
             with open(os.path.join(self.tmp, "gateway.log"), encoding="utf-8",
@@ -154,8 +223,60 @@ class Fixture(object):
             self.proc.wait(timeout=15)
         except Exception:
             self.proc.kill()
+        if getattr(self, "rust", None):
+            try:
+                self.rust_proc.terminate()
+                self.rust_proc.wait(timeout=10)
+            except Exception:
+                self.rust_proc.kill()
         self.httpd.shutdown()
         self.log.close()
+
+
+def read_usage(path):
+    file = os.path.join(path, "usage.jsonl")
+    if not os.path.exists(file):
+        return []
+    rows = []
+    with open(file, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(sanitise(json.loads(line)))
+    return rows
+
+
+def diff_usage(left_dir, right_dir):
+    """usage.jsonl 按请求配对后逐字段比。
+
+    不按行号配对：一侧跳过的用例（M1 还没移植流式）会让行号错位。`msgs_sha`
+    是请求内容的指纹，同一请求在两个后端应当算出一模一样的值 —— 它同时也是
+    这里最该被验证的东西：算错了就配不上对，会直接暴露成「没有可比对的条目」。
+    """
+    def index(rows):
+        # stream 必须进键：`chat.plain` 和 `chat.stream` 的 messages 相同、msgs_sha 相同，
+        # 只用 sha 配对会把流式行和非流式行错配。
+        return {(row.get("msgs_sha"), row.get("model"), row.get("stream")): row for row in rows}
+
+    left, right = index(read_usage(left_dir)), index(read_usage(right_dir))
+    shared = set(left) & set(right)
+    if not shared:
+        return ["usage 没有可比对的条目（左 %d 行 / 右 %d 行，msgs_sha 可能算错）"
+                % (len(left), len(right))]
+    problems = []
+    for key in sorted(shared, key=str):
+        lrow, rrow = left[key], right[key]
+        if lrow == rrow:
+            continue
+        missing = {k: lrow[k] for k in lrow if k not in rrow}
+        extra = {k: rrow[k] for k in rrow if k not in lrow}
+        changed = {k: (lrow[k], rrow[k]) for k in lrow if k in rrow and lrow[k] != rrow[k]}
+        problems.append("usage(%s stream=%s) 不同：缺 %s / 多 %s / 变 %s"
+                        % (key[1], key[2], list(missing), list(extra), changed))
+    if len(problems) == 0:
+        print("[ok] usage 行 %d 条逐字段一致（另有 %d 条只在一侧，按里程碑跳过）"
+              % (len(shared), len(set(left) ^ set(right))))
+    return problems
 
 
 def _free_port():
@@ -213,10 +334,30 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="diff gateway backends on identical requests")
     ap.add_argument("--base", action="append", default=[], help="base URL; pass twice to compare")
     ap.add_argument("--self-check", action="store_true")
+    ap.add_argument("--with-rust", metavar="BINARY",
+                    help="同时起 Rust 后端并与其比对（同一份 accounts/usage）")
     args = ap.parse_args(argv)
     if args.self_check:
         self_check()
         return 0
+    if args.with_rust:
+        fixture = Fixture(rust_binary=args.with_rust)
+        try:
+            a = capture(fixture.base)
+            b = capture(fixture.rust, include_stream=False)
+            response_problems = diff(a, b)
+            usage_problems = diff_usage(fixture.usage_dirs[0], fixture.usage_dirs[1])
+            for line in response_problems + usage_problems:
+                print("[diff] " + line[:2000])
+            skipped = len(a) - len(b)
+            print("%d/%d 响应项一致（python vs rust）%s；usage %s"
+                  % (len(b) - len(response_problems), len(b),
+                     "；跳过 %d 项未移植流式（M2）" % skipped if skipped else "",
+                     "一致" if not usage_problems else "%d 处不同" % len(usage_problems)))
+            problems = response_problems + usage_problems
+            return 1 if problems else 0
+        finally:
+            fixture.close()
     if len(args.base) < 2:
         ap.error("give --base twice (A and B), or use --self-check")
     a, b = capture(args.base[0]), capture(args.base[1])

@@ -1,0 +1,1126 @@
+[
+ {
+  "id": "hy4-preview-f",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Hy4 preview",
+  "description": "Hunyuan's thinking model with enhanced reasoning capabilities",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 64000,
+  "max_completion_tokens": 64000,
+  "context_windows": [
+   300000,
+   1000000
+  ],
+  "reasoning_efforts": [
+   "high"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": false,
+  "always_reasoning": true,
+  "credits": "x0.00",
+  "vendor": "j",
+  "temperature": 0.9,
+  "top_p": 1
+ },
+ {
+  "id": "hy3",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Hy3",
+  "description": "Hunyuan's thinking model with enhanced reasoning capabilities",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 192000,
+  "max_input_tokens": 192000,
+  "max_output_tokens": 64000,
+  "max_completion_tokens": 64000,
+  "reasoning_efforts": [
+   "low",
+   "high"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": false,
+  "always_reasoning": true,
+  "credits": "x0.00",
+  "vendor": "j",
+  "temperature": 0.9,
+  "top_p": 1,
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "deepseek-v4.1-flash",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Deepseek-V4.1-Flash",
+  "description": "DeepSeek flagship model, supporting 1M context window, native multimodal model",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "context_windows": [
+   300000,
+   1000000
+  ],
+  "reasoning_efforts": [
+   "low",
+   "high",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "always_reasoning": true,
+  "credits": "x0.00",
+  "vendor": "f",
+  "temperature": 1
+ },
+ {
+  "id": "gpt-6-astra",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-6-Astra",
+  "description": "OpenAI's flagship model for complex reasoning and long-horizon task",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "context_windows": [
+   400000,
+   1000000
+  ],
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": true,
+  "credits": "x6.67",
+  "vendor": "e"
+ },
+ {
+  "id": "gpt-5.6-sol",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-5.6-Sol",
+  "description": "OpenAI's flagship model for complex reasoning and long-horizon task",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": false,
+  "credits": "x3.47",
+  "vendor": "e"
+ },
+ {
+  "id": "gpt-5.6-terra",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-5.6-Terra",
+  "description": "OpenAI's balanced model for capability, speed, and cost",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": false,
+  "credits": "x1.39",
+  "vendor": "e"
+ },
+ {
+  "id": "gpt-5.6-luna",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-5.6-Luna",
+  "description": "OpenAI's lightweight model for fast responses and everyday tasks",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": false,
+  "credits": "x0.14",
+  "vendor": "e"
+ },
+ {
+  "id": "gpt-5.5",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-5.5",
+  "description": "OpenAI's flagship model, excelling at long-horizon tasks",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": false,
+  "always_reasoning": true,
+  "credits": "x3.31",
+  "vendor": "e"
+ },
+ {
+  "id": "gpt-5.4",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GPT-5.4",
+  "description": "OpenAI's flagship model, excelling at long-horizon tasks",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 272000,
+  "max_input_tokens": 272000,
+  "max_output_tokens": 72000,
+  "max_completion_tokens": 72000,
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": false,
+  "always_reasoning": true,
+  "credits": "x1.65",
+  "vendor": "e",
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "grok-4.7",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Grok-4.7",
+  "description": "SpaceXAI's frontier model built for coding, agentic tasks, and knowledge work.",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 500000,
+  "max_input_tokens": 500000,
+  "max_output_tokens": 128000,
+  "max_completion_tokens": 128000,
+  "context_windows": [
+   200000,
+   500000
+  ],
+  "reasoning_efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": false,
+  "always_reasoning": true,
+  "credits": "x1.90",
+  "vendor": "f",
+  "temperature": 1
+ },
+ {
+  "id": "gemini-3.5-flash",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Gemini-3.5-Flash",
+  "description": "Well-rounded model for everyday use",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 65536,
+  "max_completion_tokens": 65536,
+  "reasoning_fixed_effort": "medium",
+  "always_reasoning": true,
+  "credits": "x0.99",
+  "vendor": "e",
+  "temperature": 1
+ },
+ {
+  "id": "glm-5.3-flash",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GLM-5.3-Flash",
+  "description": "Native multimodal model, excelling at visual understanding and professional tasks",
+  "vision_note": "上游宣告多模态但实际通道不支持读图，已修正为纯文本",
+  "capabilities": {
+   "vision": false,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": false,
+  "supports_images": false,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": false,
+  "multimodal": false,
+  "abilities": {
+   "vision": false,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 32000,
+  "max_completion_tokens": 32000,
+  "reasoning_efforts": [
+   "low",
+   "high",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": true,
+  "credits": "x0.06",
+  "vendor": "f",
+  "temperature": 1,
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "glm-5.3",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GLM-5.3",
+  "description": "Great for daily use",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 48000,
+  "max_completion_tokens": 48000,
+  "reasoning_efforts": [
+   "low",
+   "high",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": true,
+  "credits": "x0.79",
+  "vendor": "e",
+  "temperature": 1,
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "glm-5.2",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "GLM-5.2",
+  "description": "1M context, built for long-horizon tasks.",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 48000,
+  "max_completion_tokens": 48000,
+  "reasoning_efforts": [
+   "high",
+   "xhigh"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": false,
+  "credits": "x0.79",
+  "vendor": "e",
+  "temperature": 1,
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "kimi-k3",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Kimi-K3",
+  "description": "Excels at complex, long-horizon autonomous tasks, with standout front-end skills and strong knowledge work and scientific reasoning",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 32000,
+  "max_completion_tokens": 32000,
+  "reasoning_fixed_effort": "medium",
+  "always_reasoning": true,
+  "credits": "x1.62",
+  "vendor": "f",
+  "temperature": 1
+ },
+ {
+  "id": "kimi-k2.6",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Kimi-K2.6",
+  "description": "A multimodal model, good for daily use.",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 32000,
+  "max_completion_tokens": 32000,
+  "reasoning_fixed_effort": "medium",
+  "always_reasoning": true,
+  "credits": "x0.52",
+  "vendor": "f",
+  "temperature": 1,
+  "tags": [
+   "craft"
+  ]
+ },
+ {
+  "id": "kimi-k2.8-preview",
+  "object": "model",
+  "owned_by": "workbuddy",
+  "name": "Kimi-K2.8-Preview",
+  "description": "Excels at complex, long-horizon autonomous tasks, with standout front-end skills and strong knowledge work and scientific reasoning",
+  "capabilities": {
+   "vision": true,
+   "tool_calls": true,
+   "reasoning": true
+  },
+  "supports_vision": true,
+  "supports_images": true,
+  "supports_tool_calls": true,
+  "supports_reasoning": true,
+  "vision": true,
+  "multimodal": true,
+  "abilities": {
+   "vision": true,
+   "functionCall": true,
+   "function_call": true,
+   "reasoning": true
+  },
+  "input_modalities": [
+   "text",
+   "image"
+  ],
+  "output_modalities": [
+   "text"
+  ],
+  "modalities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ]
+  },
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image"
+   ],
+   "output_modalities": [
+    "text"
+   ],
+   "modality": "text+image->text"
+  },
+  "context_length": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 32000,
+  "max_completion_tokens": 32000,
+  "reasoning_efforts": [
+   "low",
+   "high",
+   "max"
+  ],
+  "reasoning_default_effort": "high",
+  "reasoning_can_disable": true,
+  "always_reasoning": true,
+  "credits": "x0.77",
+  "vendor": "f",
+  "temperature": 1,
+  "tags": [
+   "craft"
+  ]
+ }
+]

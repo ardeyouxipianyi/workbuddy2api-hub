@@ -1,0 +1,29 @@
+[package]
+name = "wb-backend"
+version = "0.1.0"
+edition = "2021"
+description = "Optional Rust backend for workbuddy2api-hub (same HTTP contract as wb_proxy.py)"
+license = "MIT"
+
+[[bin]]
+name = "wb-backend"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+# 只为了拿本地时区偏移（usage 行的 iso 字段是本地时间），不用它做别的。
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
