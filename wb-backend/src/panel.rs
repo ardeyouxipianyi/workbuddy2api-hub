@@ -158,6 +158,12 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
             json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
         }
+        (&Method::POST, "/logs/clear") => {
+            if let Ok(mut ring) = app.logs.lock() {
+                ring.clear();
+            }
+            json_resp(StatusCode::OK, &json!({"ok": true}))
+        }
         (&Method::GET, "/settings/reveal") => {
             let id = req.uri().query().unwrap_or("").split('&')
                 .find_map(|p| p.strip_prefix("id=")).unwrap_or("");
@@ -194,6 +200,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             json_resp(StatusCode::OK, &json!({"ok": true, "msg": "已触发巡检保活", "result": out}))
         }
         (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
+        (&Method::POST, "/tasks/travel") => tasks_travel(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
         (&Method::POST, "/realm") => realm_set(app, req).await,
@@ -1281,4 +1288,13 @@ async fn add_api_key(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp 
         StatusCode::OK,
         &json!({"ok": true, "uid": uid, "nickname": nickname, "updated": existed, "probe": probe, "account": view}),
     )
+}
+
+/// `POST /tasks/travel`：猫猫旅行（到站领奖 / 在家派出）。
+async fn tasks_travel(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = crate::http::body_json(req).await.unwrap_or(json!({}));
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    let out = crate::tasks::travel(app, uid).await;
+    app.log("tasks", "INFO", &format!("猫猫旅行: {}", out.get("msg").and_then(Value::as_str).unwrap_or("")));
+    json_resp(StatusCode::OK, &out)
 }

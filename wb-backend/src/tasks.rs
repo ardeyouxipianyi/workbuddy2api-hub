@@ -540,6 +540,105 @@ pub async fn run(app: &Arc<App>, uid: &str, claim: bool) -> Value {
     json!({"ok": true, "logs": all_logs, "credit_added": total})
 }
 
+async fn get_json(app: &Arc<App>, account: &AccountFile, path: &str) -> Result<Value, String> {
+    let resp = app
+        .upstream
+        .get(format!("{CN_CHAT}{path}"))
+        .headers(headers(account))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}
+
+/// 猫猫旅行：到了就领奖，在家就派出；「no active buddy」时先补 first_buddy。
+async fn cat_travel_one(app: &Arc<App>, account: &AccountFile) -> Value {
+    let status = match get_json(app, account, "/activity/growth/buddy/travel/status").await {
+        Ok(d) => d.get("data").cloned().unwrap_or(json!({})),
+        Err(e) => return json!({"ok": false, "action": null, "msg": format!("查询旅行状态失败: {e}")}),
+    };
+    match status.get("state").and_then(Value::as_str).unwrap_or("") {
+        "arrived" => match post(app, account, "/activity/growth/buddy/travel/claim", json!({})).await {
+            Ok(res) => {
+                let credit = res.pointer("/data/reward_credit").and_then(Value::as_i64).unwrap_or(0);
+                crate::credits::fetch_one(app, account).await;
+                json!({"ok": true, "action": "claim", "credit": credit,
+                       "msg": format!("旅行归来领奖成功！获得 {credit} 积分")})
+            }
+            Err(e) => json!({"ok": false, "action": null, "msg": format!("领奖失败: {e}")}),
+        },
+        "idle" => {
+            if status.get("daily_limit_reached").and_then(Value::as_bool).unwrap_or(false) {
+                return json!({"ok": true, "action": "idle", "msg": "猫猫今日已完成旅行，明日 00:00 刷新"});
+            }
+            // 空 body 会被上游拒 400，必须带 location_id。
+            let lid = match get_json(app, account, "/activity/growth/buddy/travel/config").await {
+                Ok(cfg) => cfg
+                    .pointer("/data/locations")
+                    .and_then(Value::as_array)
+                    .and_then(|locs| locs.first())
+                    .and_then(|loc| loc.get("id").cloned())
+                    .unwrap_or(json!(1)),
+                Err(_) => json!(1),
+            };
+            let mut res = post(app, account, "/activity/growth/buddy/travel/depart", json!({"location_id": lid})).await;
+            if let Err(e) = &res {
+                // 状态里的 buddy_id 恒为 0，只能靠 depart 的报错判断有没有 Buddy。
+                if e.to_lowercase().contains("no active buddy") {
+                    let tasks = growth_tasks(app, account).await;
+                    if let Some(fb) = tasks.iter().find(|t| t.get("task_code").and_then(Value::as_str) == Some("first_buddy")) {
+                        let mut logs = Vec::new();
+                        progress_one(app, account, fb, &mut logs, 800, true).await;
+                        res = post(app, account, "/activity/growth/buddy/travel/depart", json!({"location_id": lid})).await;
+                    }
+                }
+            }
+            match res {
+                Ok(_) => json!({"ok": true, "action": "depart", "msg": "猫猫已出发旅行"}),
+                Err(e) => json!({"ok": false, "action": null, "msg": format!("派出失败: {e}")}),
+            }
+        }
+        "travelling" => json!({"ok": true, "action": "travelling", "msg": "猫猫正在旅行途中，请稍后再来查看！"}),
+        _ => json!({"ok": true, "action": "unknown", "msg": "旅行状态未知"}),
+    }
+}
+
+/// `POST /tasks/travel`：面板「猫猫旅行」按钮（uid 省略/`all` 表示全部参与任务的国内版账号）。
+pub async fn travel(app: &Arc<App>, uid: &str) -> Value {
+    let targets: Vec<AccountFile> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        .filter(|a| a.realm() == "cn" && !a.is_api_key() && a.enabled())
+        .filter(|a| uid.is_empty() || uid == "all" || a.uid() == uid)
+        .collect();
+    if targets.is_empty() {
+        return json!({"ok": false, "msg": "未找到参与任务的国内版账号", "results": []});
+    }
+    let mut results = Vec::new();
+    for (i, account) in targets.iter().enumerate() {
+        let res = cat_travel_one(app, account).await;
+        results.push(json!({
+            "uid": account.uid(),
+            "nickname": account.str("nickname"),
+            "action": res.get("action").cloned().unwrap_or(Value::Null),
+            "msg": res.get("msg").and_then(Value::as_str).unwrap_or(""),
+            "reward_credit": res.get("credit").and_then(Value::as_i64).unwrap_or(0),
+        }));
+        if i + 1 < targets.len() {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
+    }
+    let summary = results
+        .iter()
+        .map(|r| format!("{}: {}", r.get("nickname").and_then(Value::as_str).unwrap_or(""),
+                         r.get("msg").and_then(Value::as_str).unwrap_or("")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    json!({"ok": true, "results": results, "msg": summary, "accounts_count": targets.len()})
+}
+
 /// 单独领一个任务（面板行内「领取」按钮）。
 pub async fn claim_one(app: &Arc<App>, account: &AccountFile, code: &str) -> Value {
     let (ok, credit, msg) = claim_task(app, account, code).await;
