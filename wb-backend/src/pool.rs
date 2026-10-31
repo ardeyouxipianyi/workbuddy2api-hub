@@ -29,6 +29,12 @@ pub struct Candidate {
 pub struct Pool {
     /// uid -> explicit cooldown deadline (epoch seconds).
     cooldown: Mutex<HashMap<String, f64>>,
+    /// uid -> 账号级软限流连击（撞线时刻 + 次数）。窗口外就重新从 1 数起。
+    soft: Mutex<HashMap<String, Streak>>,
+    /// (uid, model) -> 未定域软限流连击。
+    unscoped: Mutex<HashMap<(String, String), Streak>>,
+    /// (uid, model) -> 这个模型在这个账号上的冷却截止时刻。
+    model_cooldown: Mutex<HashMap<(String, String), f64>>,
     breakers: Breakers,
     guards: Guards,
     /// Refresh tokens rotate upstream, so requests for one account must run
@@ -36,10 +42,23 @@ pub struct Pool {
     refreshes: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
+/// 软限流的连击计数：Python 的 `_decay_soft_streak` 要求窗口内才算连续。
+#[derive(Default, Clone, Copy)]
+struct Streak {
+    count: i64,
+    last_at: f64,
+}
+
+/// 两次软限流间隔超过它，连击归零（`WB_FAIL_WINDOW` 的默认值）。
+const SOFT_WINDOW: f64 = 600.0;
+
 impl Pool {
     pub fn new() -> Pool {
         Pool {
             cooldown: Mutex::new(HashMap::new()),
+            soft: Mutex::new(HashMap::new()),
+            unscoped: Mutex::new(HashMap::new()),
+            model_cooldown: Mutex::new(HashMap::new()),
             breakers: Breakers::default(),
             guards: Guards::default(),
             refreshes: Mutex::new(HashMap::new()),
@@ -60,7 +79,63 @@ impl Pool {
 
     pub fn clear(&self, uid: &str) {
         self.cooldown.lock().unwrap().remove(uid);
+        // 一次真的被上游服务的请求，说明软限流也过去了（Python 的 note_success）。
+        self.soft.lock().unwrap().remove(uid);
+        self.unscoped.lock().unwrap().retain(|(owner, _), _| owner != uid);
+        self.model_cooldown.lock().unwrap().retain(|(owner, _), _| owner != uid);
         self.breakers.success(uid);
+    }
+
+    /// 账号级软限流：600s 起，连击翻倍，2h 封顶。返回这次要冷却多久。
+    pub fn note_soft_rate(&self, uid: &str) -> f64 {
+        let wait = {
+            let now = now_epoch() as f64;
+            let mut map = self.soft.lock().unwrap();
+            let streak = map.entry(uid.to_string()).or_default();
+            if streak.last_at > 0.0 && now - streak.last_at > SOFT_WINDOW {
+                streak.count = 0;
+            }
+            streak.count += 1;
+            streak.last_at = now;
+            crate::rate_limit::soft_backoff(streak.count)
+        };
+        self.cooldown(uid, wait as i64);
+        wait
+    }
+
+    /// 未定域的软限流：只关这个账号的这个模型，60s 起翻倍，10min 封顶。
+    pub fn note_unscoped_rate(&self, uid: &str, model: &str) -> f64 {
+        let wait = {
+            let now = now_epoch() as f64;
+            let mut map = self.unscoped.lock().unwrap();
+            let streak = map.entry((uid.to_string(), model.to_string())).or_default();
+            if streak.last_at > 0.0 && now - streak.last_at > SOFT_WINDOW {
+                streak.count = 0;
+            }
+            streak.count += 1;
+            streak.last_at = now;
+            crate::rate_limit::unscoped_backoff(streak.count)
+        };
+        self.cool_model(uid, model, wait);
+        wait
+    }
+
+    pub fn cool_model(&self, uid: &str, model: &str, secs: f64) {
+        self.model_cooldown
+            .lock()
+            .unwrap()
+            .insert((uid.to_string(), model.to_string()), now_epoch() as f64 + secs);
+    }
+
+    pub fn model_cooling(&self, uid: &str, model: &str) -> bool {
+        let until = self
+            .model_cooldown
+            .lock()
+            .unwrap()
+            .get(&(uid.to_string(), model.to_string()))
+            .copied()
+            .unwrap_or(0.0);
+        until > now_epoch() as f64
     }
 
     pub fn hard_failure(&self, uid: &str) {
@@ -151,6 +226,8 @@ pub fn candidates(
                 // 上游风控窗口（`wb_accounts.py:989` 的 restrictedUntil）：
                 // 窗口期内的号选了也是 403，直接跳过。
                 || account.restricted_until() > now as f64
+                // 只被「某模型」限流的号：别的模型还能用，整条拔掉是旧的过度冷却。
+                || model.is_some_and(|name| app.pool.model_cooling(&uid, name))
                 || !account.enabled()
                 || account.str("accessToken").is_empty()
                 || (account.expires_at() != 0 && account.expires_at() <= now - 3600)
@@ -370,4 +447,32 @@ fn b64url_decode(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soft_rate_ladder_escalates_and_success_clears() {
+        // 账号级软限流 600s 起翻倍（Python 的 soft_backoff），一次成功就归零。
+        let pool = Pool::new();
+        assert_eq!(pool.note_soft_rate("u1"), 600.0);
+        assert_eq!(pool.note_soft_rate("u1"), 1200.0);
+        assert!(pool.cooling("u1"));
+        pool.clear("u1");
+        assert!(!pool.cooling("u1"));
+        assert_eq!(pool.note_soft_rate("u1"), 600.0);
+    }
+
+    #[test]
+    fn unscoped_rate_parks_only_that_model() {
+        // 没定域的 429 只关这个账号的这个模型，账号本身还能跑别的模型。
+        let pool = Pool::new();
+        assert_eq!(pool.note_unscoped_rate("u1", "glm-5.1"), 60.0);
+        assert_eq!(pool.note_unscoped_rate("u1", "glm-5.1"), 120.0);
+        assert!(pool.model_cooling("u1", "glm-5.1"));
+        assert!(!pool.model_cooling("u1", "deepseek-v4-pro"));
+        assert!(!pool.cooling("u1"));
+    }
 }

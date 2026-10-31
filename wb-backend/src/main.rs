@@ -39,6 +39,7 @@ mod pricing_panel;
 mod pricing_policy;
 mod pricing_settings;
 mod pricing_store;
+mod rate_limit;
 #[cfg(test)]
 mod pricing_tests;
 mod pricing_view;

@@ -230,21 +230,39 @@ pub(crate) async fn open_upstream(
             break;
         }
         if code == 429 || code >= 500 {
-            // 429 带了重置时刻就登记额度窗口（wb_proxy 的同一条路径）：
-            // 重启不丢，探针到点抢回新一轮计时。
             if code == 429 {
-                if let Some(reset) = crate::quota::parse_reset(&text) {
-                    crate::quota::schedule(app, &cand.uid, &ctx.model, reset);
+                // 与 Python 同一套分类：带时钟/6004 的记额度窗口；点名账号级措辞的走
+                // 600s→2h 阶梯；其余只关这个账号的这个模型（60s→10min）。
+                let reset = crate::quota::parse_reset(&text);
+                if let Some(at) = reset {
+                    crate::quota::schedule(app, &cand.uid, &ctx.model, at);
                 }
+                if crate::rate_limit::is_account_level(&text, reset) {
+                    app.pool.note_soft_rate(&cand.uid);
+                    if pin.is_some() {
+                        break;
+                    }
+                    continue;
+                }
+                let wait = match reset {
+                    Some(at) => (at - crate::state::now_epoch() as f64).max(1.0),
+                    None if crate::rate_limit::is_soft_shape(&text) => {
+                        app.pool.note_unscoped_rate(&cand.uid, &ctx.model)
+                    }
+                    None => 60.0,
+                };
+                app.pool.cool_model(&cand.uid, &ctx.model, wait);
+                if pin.is_some() {
+                    break;
+                }
+                continue;
             }
             if pin.is_some() {
                 // 固定账号没得换，冷却完也只能报错回去。
-                crate::pool::cooldown(app, &cand.uid, 60);
+                app.pool.cool_model(&cand.uid, &ctx.model, 60.0);
                 break;
-            } else if code >= 500 {
-                app.pool.hard_failure(&cand.uid);
             } else {
-                crate::pool::cooldown(app, &cand.uid, 60);
+                app.pool.hard_failure(&cand.uid);
             }
             continue;
         }
