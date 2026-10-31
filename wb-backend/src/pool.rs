@@ -27,11 +27,17 @@ pub struct Candidate {
 pub struct Pool {
     /// uid -> 冷却到什么时候（epoch 秒）。
     cooldown: Mutex<HashMap<String, i64>>,
+    /// Refresh tokens rotate upstream, so requests for one account must run
+    /// serially and re-read the file after the preceding rotation.
+    refreshes: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Pool {
     pub fn new() -> Pool {
-        Pool { cooldown: Mutex::new(HashMap::new()) }
+        Pool {
+            cooldown: Mutex::new(HashMap::new()),
+            refreshes: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn cooling(&self, uid: &str) -> bool {
@@ -45,6 +51,14 @@ impl Pool {
 
     pub fn clear(&self, uid: &str) {
         self.cooldown.lock().unwrap().remove(uid);
+    }
+
+    fn refresh_lock(&self, uid: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.refreshes.lock().unwrap();
+        locks
+            .entry(uid.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 }
 
@@ -99,23 +113,26 @@ pub async fn ensure_fresh(app: &Arc<App>, cand: &Candidate) -> String {
 fn realm_base(realm: &str) -> (String, String, String, String, String) {
     // (chat_upstream, origin, domain, chat_ua, billing_ua) —— REALM_CONFIGS 的 Rust 版。
     if realm == "cn" {
+        let base = std::env::var("WB_CN_CHAT_UPSTREAM")
+            .ok()
+            .filter(|v| {
+                (v.starts_with("http://") || v.starts_with("https://")) && !v.trim().is_empty()
+            })
+            .unwrap_or_else(|| "https://copilot.tencent.com".into());
         (
-            std::env::var("WB_CN_CHAT_UPSTREAM")
-                .ok()
-                .filter(|v| {
-                    (v.starts_with("http://") || v.starts_with("https://")) && !v.trim().is_empty()
-                })
-                .unwrap_or_else(|| "https://copilot.tencent.com".into()),
-            "https://www.codebuddy.cn".into(),
-            "copilot.tencent.com".into(),
+            base,
+            std::env::var("WB_CN_ORIGIN")
+                .unwrap_or_else(|_| "https://www.codebuddy.cn".into()),
+            std::env::var("WB_CN_DOMAIN").unwrap_or_else(|_| "copilot.tencent.com".into()),
             "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0".into(),
             "WorkBuddy/5.8.3".into(),
         )
     } else {
         (
-            "https://www.workbuddy.ai".into(),
-            "https://www.workbuddy.ai".into(),
-            "www.workbuddy.ai".into(),
+            crate::upstream::chat_upstream_base("intl", "workbuddy"),
+            std::env::var("WB_INTL_ORIGIN")
+                .unwrap_or_else(|_| "https://www.workbuddy.ai".into()),
+            std::env::var("WB_INTL_DOMAIN").unwrap_or_else(|_| "www.workbuddy.ai".into()),
             "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0".into(),
             "WorkBuddy/5.8.4".into(),
         )
@@ -125,6 +142,8 @@ fn realm_base(realm: &str) -> (String, String, String, String, String) {
 /// 刷新令牌：`POST {chat_upstream}/v2/plugin/auth/token/refresh`（wb_accounts.py:2019-2081）。
 /// 成功返回新 accessToken，失败返回 None（错误留在账号文件的 lastError 里）。
 pub async fn refresh(app: &Arc<App>, uid: &str) -> Option<String> {
+    let refresh_lock = app.pool.refresh_lock(uid);
+    let _guard = refresh_lock.lock().await;
     let account = {
         let accounts = app.state.accounts();
         accounts.iter().find(|a| a.uid() == uid).cloned()?
@@ -156,7 +175,7 @@ pub async fn refresh(app: &Arc<App>, uid: &str) -> Option<String> {
         .header("X-CodeBuddy-Request", "1")
         .header("Accept-Language", if realm == "intl" { "en-US" } else { "zh-CN" })
         .body("{}")
-        .timeout(Duration::from_secs(30));
+        .timeout(refresh_timeout());
     let enterprise = account.str("enterpriseId").to_string();
     if !enterprise.is_empty() {
         req = req.header("X-Enterprise-Id", enterprise);
@@ -198,6 +217,15 @@ pub async fn refresh(app: &Arc<App>, uid: &str) -> Option<String> {
     }
     app.state.refresh();
     Some(token)
+}
+
+fn refresh_timeout() -> Duration {
+    let seconds = std::env::var("WB_REFRESH_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30)
+        .max(1);
+    Duration::from_secs(seconds)
 }
 
 /// 只改凭证四个键，其余原样保留（账号文件里还有 quota/权重等一堆字段）。

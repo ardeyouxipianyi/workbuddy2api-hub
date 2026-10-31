@@ -306,6 +306,7 @@ fn usage_record_stamps_current_policy() {
         recorder: usage::Recorder::new(usage_dir.clone()),
         pool: pool::Pool::new(),
         panel: panel::Panel::default(),
+        accounts_ops: crate::accounts_ops::AccountsOps::new(),
         pricing,
         scheduler: scheduler::Scheduler::default(),
         logs: Default::default(),

@@ -232,7 +232,18 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         return Some(unauth());
     }
 
+    // Account operations live in their own module. Existing account handlers
+    // below remain in this dispatcher because they predate accounts_ops.
+    if crate::accounts_ops::handles(&method, &path) {
+        return Some(
+            crate::accounts_ops::route(app, req, &method, &path)
+                .await
+                .unwrap_or_else(|| crate::accounts_ops::unknown_endpoint(&method)),
+        );
+    }
+
     let out = match (&method, path.as_str()) {
+        (_, p) if p.starts_with("/accounts/") => crate::accounts_ops::unknown_endpoint(&method),
         (&Method::GET, "/realm") => json_resp(
             StatusCode::OK,
             &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
