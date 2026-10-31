@@ -1,0 +1,663 @@
+//! 面板：原版 `dashboard.html` + 它调用的那批 JSON 接口。
+//!
+//! 面板鉴权不是 cookie，而是 `POST /panel/login` 换一个 `X-Panel-Token` 头
+//! （`dashboard.html` 的 `authHeaders()` 就是这么发的）。
+//!
+//! shortcut: 目前只做到「能登录、能看到账号/用量/设置」。写入面（/settings/save、
+//! /accounts/set、导入导出、登录流程）、任务/调度、自更新还没移植，命中时返回
+//! `{"ok":false,"error":"not ported yet"}` 而不是假装成功。
+
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+use hyper::body::Incoming;
+use hyper::{Method, Request, StatusCode};
+use serde_json::{json, Map, Value};
+
+use crate::http::{json_resp, Resp};
+use crate::App;
+
+const DASHBOARD: &str = include_str!("../../dashboard.html");
+
+#[derive(Default)]
+pub struct Panel {
+    tokens: Mutex<HashSet<String>>,
+    password: Mutex<Option<String>>,
+}
+
+impl Panel {
+    pub fn token_ok(&self, token: Option<&str>) -> bool {
+        match token {
+            Some(t) => self.tokens.lock().map(|s| s.contains(t)).unwrap_or(false),
+            None => false,
+        }
+    }
+
+    fn password(&self) -> String {
+        if let Some(p) = self.password.lock().ok().and_then(|g| g.clone()) {
+            return p;
+        }
+        std::env::var("WB_PANEL_PASSWORD").unwrap_or_default()
+    }
+
+    fn password_required(&self) -> bool {
+        !self.password().is_empty()
+    }
+}
+
+fn token_of(req: &Request<Incoming>) -> Option<String> {
+    req.headers()
+        .get("x-panel-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+fn unauth() -> Resp {
+    json_resp(
+        StatusCode::UNAUTHORIZED,
+        &json!({"error": {"message": "unauthorized", "type": "invalid_request_error", "code": 401}}),
+    )
+}
+
+fn not_ported(what: &str) -> Resp {
+    json_resp(
+        StatusCode::NOT_IMPLEMENTED,
+        &json!({"ok": false, "error": format!("{what} 还没移植到 Rust 后端")}),
+    )
+}
+
+/// 面板路由统一入口；不是面板路由返回 None。
+pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option<Resp> {
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+
+    // 静态：原版 dashboard.html（内嵌，保持单文件交付）。
+    if (&method, path.as_str()) == (&Method::GET, "/") || (&method, path.as_str()) == (&Method::GET, "/dashboard") {
+        let mut resp = crate::http::text_resp(StatusCode::OK, DASHBOARD);
+        resp.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        return Some(resp);
+    }
+
+    // 登录/状态：不需要 token。
+    if (&method, path.as_str()) == (&Method::POST, "/panel/login") {
+        let body = crate::http::body_json(req).await.ok()?;
+        let given = body.get("password").and_then(Value::as_str).unwrap_or("");
+        if !app.panel.password_required() || given == app.panel.password() {
+            let token = crate::sse::hex_token(32);
+            if let Ok(mut set) = app.panel.tokens.lock() {
+                set.insert(token.clone());
+            }
+            return Some(json_resp(
+                StatusCode::OK,
+                &json!({"ok": true, "token": token, "using_default_password": false}),
+            ));
+        }
+        return Some(json_resp(
+            StatusCode::UNAUTHORIZED,
+            &json!({"error": {"message": "invalid panel password", "type": "invalid_request_error", "code": 401}}),
+        ));
+    }
+    if (&method, path.as_str()) == (&Method::GET, "/panel/status") {
+        return Some(json_resp(
+            StatusCode::OK,
+            &json!({
+                "panel_password_required": app.panel.password_required(),
+                "panel_password_is_default": false,
+                "authenticated": app.panel.token_ok(token_of(&req).as_deref()),
+                "crypto_ok": true,
+                "api_key_set": false,
+            }),
+        ));
+    }
+    if (&method, path.as_str()) == (&Method::POST, "/panel/logout") {
+        if let Some(t) = token_of(&req) {
+            if let Ok(mut set) = app.panel.tokens.lock() {
+                set.remove(&t);
+            }
+        }
+        return Some(json_resp(StatusCode::OK, &json!({"ok": true})));
+    }
+
+    // 其余都要 token。
+    if !app.panel.token_ok(token_of(&req).as_deref()) {
+        return Some(unauth());
+    }
+
+    let out = match (&method, path.as_str()) {
+        (&Method::GET, "/realm") => json_resp(
+            StatusCode::OK,
+            &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
+        ),
+        (&Method::GET, "/accounts") => accounts(app),
+        (&Method::GET, "/settings") => settings(app),
+        (&Method::GET, "/usage") => usage(app),
+        (&Method::GET, "/usage/timeseries") => usage_timeseries(app, &req),
+        (&Method::GET, "/usage/perf") => usage_perf(app),
+        (&Method::GET, "/usage/remaining") => json_resp(
+            StatusCode::OK,
+            &json!({"window_seconds": 86400, "budgets": [], "models": [], "rows": []}),
+        ),
+        (&Method::GET, "/usage/by-account") => usage_by_account(app),
+        (&Method::GET, "/usage/recent") => usage_recent(app, &req),
+        (&Method::GET, "/usage/analytics") => usage_analytics(app, &req),
+        (&Method::GET, "/accounts/credits") => accounts_credits(app, &req),
+        (&Method::GET, "/logs") => json_resp(StatusCode::OK, &json!({"total": 0, "logs": []})),
+        (&Method::GET, "/pricing") => not_ported("/pricing"),
+        (&Method::GET, "/tasks") => not_ported("/tasks"),
+        (&Method::GET, "/scheduler") => not_ported("/scheduler"),
+        (&Method::GET, "/updates") => not_ported("/updates"),
+        (&Method::GET, "/proxy/slots") => json_resp(StatusCode::OK, &json!({"slots": []})),
+        (&Method::GET, "/agents") | (&Method::GET, "/agents/available") => not_ported("/agents"),
+        (&Method::POST, _) => not_ported(&path),
+        _ => json_resp(StatusCode::NOT_FOUND, &json!({"error": {"message": "not found", "code": 404}})),
+    };
+    Some(out)
+}
+
+/// `/accounts`：把账号档拍平成面板要的 58 个字段（`wb_accounts.py:1229 public()`）。
+fn accounts(app: &std::sync::Arc<App>) -> Resp {
+    let now = crate::state::now_epoch();
+    let mut list = Vec::new();
+    for account in app.state.accounts_snapshot() {
+        list.push(account_view(&account, now));
+    }
+    let usable = list
+        .iter()
+        .filter(|a| a.get("enabled").and_then(Value::as_bool).unwrap_or(false)
+            && !a.get("tokenExpired").and_then(Value::as_bool).unwrap_or(true))
+        .count();
+    json_resp(
+        StatusCode::OK,
+        &json!({"accounts": list, "storage": app.state.accounts_dir_name(), "usable": usable}),
+    )
+}
+
+fn account_view(account: &crate::state::AccountFile, now: i64) -> Value {
+    let raw = &account.data;
+    let uid = account.uid();
+    let exp = match account.expires_at() {
+        0 => crate::state::jwt_exp(&account.access_token()),
+        v => Some(v),
+    };
+    let token_expired = exp.map(|e| e <= now).unwrap_or(true) || account.access_token().is_empty();
+    let enabled = account.enabled();
+    json!({
+        "uid": uid,
+        "nickname": raw.get("nickname").and_then(Value::as_str).filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uid.chars().take(8).collect()),
+        "domain": account.domain(),
+        "realm": account.realm(),
+        "platform": raw.get("platform").and_then(Value::as_str).unwrap_or(""),
+        "product": account.product(),
+        "enterpriseId": raw.get("enterpriseId").and_then(Value::as_str).unwrap_or(""),
+        "enabled": enabled,
+        "tasksEnabled": raw.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(true),
+        "weight": raw.get("weight").and_then(Value::as_i64).unwrap_or(1),
+        "note": raw.get("note").and_then(Value::as_str).unwrap_or(""),
+        "disabledModels": raw.get("disabledModels").cloned().unwrap_or(json!([])),
+        "source": raw.get("source").and_then(Value::as_str).unwrap_or("oauth"),
+        "apiKey": account.is_api_key(),
+        "credentialMask": "",
+        "proxySlot": raw.get("proxySlot").and_then(Value::as_str).unwrap_or(""),
+        "proxy": raw.get("proxy").and_then(Value::as_str).unwrap_or(""),
+        "expiresAt": exp,
+        "expiresIn": if token_expired { json!("expired") } else { json!(human_delta(exp.unwrap_or(0) - now)) },
+        "tokenExpired": token_expired,
+        "needRelogin": token_expired,
+        "hasRefreshToken": !account.refresh_token().is_empty(),
+        "lastError": Value::Null,
+        "lastErrorDetail": Value::Null,
+        "inCooldown": false,
+        "cooldownFor": Value::Null,
+        "restrictedFor": Value::Null,
+        "modelCooldowns": [],
+        "softStreak": 0,
+        "unscopedStreak": 0,
+        "breakerFor": Value::Null,
+        "degradeFor": Value::Null,
+        "fails": 0,
+        "failWindow": 1800,
+        "lastFailFor": Value::Null,
+        "addedAt": raw.get("addedAt").cloned().unwrap_or(Value::Null),
+        "file": account.file_name(),
+        "credits": raw.get("credits").cloned().unwrap_or(Value::Null),
+        "tier": raw.get("tier").cloned().unwrap_or(Value::Null),
+        "reserveCredits": raw.get("reserveCredits").and_then(Value::as_i64).unwrap_or(0),
+        "reserveBlocked": false,
+        "dailyTokenLimit": raw.get("dailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
+        "dailyTokensToday": Value::Null,
+        "dailyLimitBlocked": false,
+        "dailyCreditLimit": raw.get("dailyCreditLimit").and_then(Value::as_i64).unwrap_or(0),
+        "dailyCreditsToday": Value::Null,
+        "creditLimitReached": false,
+        "modelDailyTokenLimit": raw.get("modelDailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
+        "modelDailyTokens": Value::Null,
+        "lastCheckin": raw.get("lastCheckin").cloned().unwrap_or(Value::Null),
+        "lastDailyChat": raw.get("lastDailyChat").cloned().unwrap_or(Value::Null),
+        "lastActivityReport": raw.get("lastActivityReport").cloned().unwrap_or(Value::Null),
+        "canCheckin": account.realm() == "cn",
+        "canDailyChat": account.realm() == "intl",
+        "canReportActivity": account.realm() == "cn" || account.realm() == "intl",
+        "machineId": crate::state::derive_id(&uid, "machine"),
+        "sessionId": crate::state::derive_id(&uid, "session"),
+    })
+}
+
+fn human_delta(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "expired".into();
+    }
+    let days = seconds as f64 / 86400.0;
+    if days >= 1.0 {
+        return format!("{days:.0} days");
+    }
+    let hours = seconds as f64 / 3600.0;
+    if hours >= 1.0 {
+        return format!("{hours:.1} hours");
+    }
+    format!("{} min", seconds / 60)
+}
+
+/// `/settings`：settings.json 原样 + 面板要的几个派生键。
+fn settings(app: &std::sync::Arc<App>) -> Resp {
+    let state = app.state.settings_snapshot();
+    let mut out = state;
+    let keys = out.get("api_keys").and_then(Value::as_array).cloned().unwrap_or_default();
+    let live: Vec<Value> = keys
+        .iter()
+        .filter(|k| k.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+        .cloned()
+        .collect();
+    out.insert("api_key_set".into(), json!(!live.is_empty()));
+    out.insert("api_key_set_by_panel".into(), json!(!live.is_empty()));
+    out.insert("api_key_masked".into(), json!(""));
+    out.insert("auth_required".into(), json!(!live.is_empty()));
+    out.insert("panel_password_is_default".into(), json!(false));
+    out.insert("realm".into(), json!(app.state.current_realm()));
+    out.insert("usd_cny".into(), json!(7.1));
+    json_resp(StatusCode::OK, &Value::Object(out))
+}
+
+fn read_usage(path: &std::path::Path) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect()
+}
+
+fn usage_rows(app: &std::sync::Arc<App>) -> Vec<Value> {
+    read_usage(&app.recorder_path())
+}
+
+/// `/usage`：面板顶部的总量卡片（26 个键，见 golden/panel/usage.json）。
+fn usage(app: &std::sync::Arc<App>) -> Resp {
+    let rows = usage_rows(app);
+    let mut totals = json!({
+        "requests": 0, "errors": 0, "prompt_tokens": 0, "completion_tokens": 0,
+        "reasoning_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
+        "credit": 0.0, "cost_cny": 0.0, "cost_missing": {},
+        "started": crate::state::now_epoch(),
+        "by_model": {}, "by_model_realm": {}, "by_model_acct": {},
+        "ttft_ms_sum": 0, "ttft_samples": 0, "gen_ms_sum": 0, "gen_samples": 0,
+        "wall_ms_sum": 0, "wall_samples": 0,
+    });
+    let mut accounts_map = Map::new();
+    for row in &rows {
+        let n = |k: &str| row.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+        for key in ["prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens", "total_tokens"] {
+            let v = totals[key].as_i64().unwrap_or(0) + n(key);
+            totals[key] = json!(v);
+        }
+        totals["requests"] = json!(totals["requests"].as_i64().unwrap_or(0) + 1);
+        if row.get("outcome").and_then(Value::as_str) != Some("completed") {
+            totals["errors"] = json!(totals["errors"].as_i64().unwrap_or(0) + 1);
+        }
+        if let Some(t) = row.get("ttft_ms").and_then(|v| v.as_i64()) {
+            totals["ttft_ms_sum"] = json!(totals["ttft_ms_sum"].as_i64().unwrap_or(0) + t);
+            totals["ttft_samples"] = json!(totals["ttft_samples"].as_i64().unwrap_or(0) + 1);
+        }
+        if let Some(t) = row.get("gen_ms").and_then(|v| v.as_i64()) {
+            totals["gen_ms_sum"] = json!(totals["gen_ms_sum"].as_i64().unwrap_or(0) + t);
+            totals["gen_samples"] = json!(totals["gen_samples"].as_i64().unwrap_or(0) + 1);
+        }
+        if let Some(t) = row.get("elapsed_ms").and_then(|v| v.as_i64()) {
+            totals["wall_ms_sum"] = json!(totals["wall_ms_sum"].as_i64().unwrap_or(0) + t);
+            totals["wall_samples"] = json!(totals["wall_samples"].as_i64().unwrap_or(0) + 1);
+        }
+        if let Some(account) = row.get("account").and_then(Value::as_str) {
+            let realm = row.get("realm").and_then(Value::as_str).unwrap_or("");
+            accounts_map.insert(account.to_string(), json!({"nickname": account, "realm": realm}));
+        }
+    }
+    totals["since"] = json!(rows
+        .first()
+        .and_then(|r| r.get("iso").and_then(Value::as_str))
+        .unwrap_or(""));
+    totals["log_file"] = json!(app.recorder_path().display().to_string());
+    totals["realm"] = json!(app.state.current_realm());
+    totals["usd_cny"] = json!(7.1);
+    totals["accounts_map"] = Value::Object(accounts_map);
+    json_resp(StatusCode::OK, &totals)
+}
+
+/// `/usage/timeseries`：按小时桶聚合（形状见 golden/panel/usage-timeseries.json）。
+fn usage_timeseries(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
+    let query = req.uri().query().unwrap_or("");
+    let mut bucket: i64 = 3600;
+    for pair in query.split('&') {
+        if let Some(v) = pair.strip_prefix("bucket=") {
+            bucket = v.parse().unwrap_or(3600).max(60);
+        }
+    }
+    let rows = usage_rows(app);
+    let until = crate::state::now_epoch();
+    let since = until as f64 - 24.0 * 3600.0;
+    let mut buckets: std::collections::BTreeMap<i64, (i64, i64)> = Default::default();
+    for row in &rows {
+        let at = row.get("at").and_then(Value::as_f64).unwrap_or(0.0);
+        if at < since {
+            continue;
+        }
+        let slot = ((at / bucket as f64).floor() as i64) * bucket;
+        let entry = buckets.entry(slot).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += row.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
+    }
+    let series: Vec<Value> = buckets
+        .into_iter()
+        .map(|(at, (requests, tokens))| json!({"at": at, "requests": requests, "total_tokens": tokens}))
+        .collect();
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "ok": true,
+            "realm": app.state.current_realm(),
+            "bucket_seconds": bucket,
+            "since": since,
+            "until": until,
+            "series": series,
+            "credits": [],
+        }),
+    )
+}
+
+/// `/usage/perf`：延迟/成功率（15 个键）。
+fn usage_perf(app: &std::sync::Arc<App>) -> Resp {
+    let rows = usage_rows(app);
+    let sampled = rows.len() as i64;
+    let mut success = 0;
+    let mut errors = 0;
+    let mut aborted = 0;
+    let mut ttft = Vec::new();
+    let mut gen = Vec::new();
+    let mut wall = Vec::new();
+    for row in &rows {
+        match row.get("outcome").and_then(Value::as_str) {
+            Some("completed") => success += 1,
+            Some("client_aborted") => aborted += 1,
+            _ => errors += 1,
+        }
+        for (key, bucket) in [("ttft_ms", &mut ttft), ("gen_ms", &mut gen), ("elapsed_ms", &mut wall)] {
+            if let Some(v) = row.get(key).and_then(|v| v.as_i64()) {
+                bucket.push(v as f64);
+            }
+        }
+    }
+    let avg = |v: &Vec<f64>| {
+        if v.is_empty() {
+            Value::Null
+        } else {
+            json!((v.iter().sum::<f64>() / v.len() as f64).round())
+        }
+    };
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "sampled": sampled,
+            "sample_from": rows.first().and_then(|r| r.get("iso").cloned()).unwrap_or(Value::Null),
+            "sample_capped": false,
+            "success": success,
+            "errors": errors,
+            "client_aborted": aborted,
+            "success_rate_pct": if sampled > 0 { json!((success as f64 * 100.0 / sampled as f64).round()) } else { Value::Null },
+            "ttft_ms": avg(&ttft),
+            "generation_ms": avg(&gen),
+            "wall_ms": avg(&wall),
+            "tokens_per_sec": Value::Null,
+            "cache_hit_pct": Value::Null,
+            "by_model": {},
+            "by_model_realm": {},
+            "by_model_acct": {},
+        }),
+    )
+}
+
+fn usage_by_account(app: &std::sync::Arc<App>) -> Resp {
+    let rows = usage_rows(app);
+    let mut map: std::collections::BTreeMap<String, Value> = Default::default();
+    for row in &rows {
+        let Some(account) = row.get("account").and_then(Value::as_str) else { continue };
+        let entry = map.entry(account.to_string()).or_insert_with(|| json!({
+            "requests": 0, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
+        }));
+        if let Some(obj) = entry.as_object_mut() {
+            for key in ["requests", "total_tokens", "prompt_tokens", "completion_tokens"] {
+                let add = if key == "requests" {
+                    1
+                } else {
+                    row.get(key).and_then(Value::as_i64).unwrap_or(0)
+                };
+                let current = obj.get(key).and_then(Value::as_i64).unwrap_or(0);
+                obj.insert(key.into(), json!(current + add));
+            }
+        }
+    }
+    // 面板要的是**数组**（`(byAcct.accounts||[]).forEach(a => USAGE_BY_ACCOUNT[a.account]=a)`），
+    // 返回 map 会在前端抛 TypeError，而那行被 try/catch 包着，表现就是「账号列表 0/0」。
+    let accounts: Vec<Value> = map
+        .into_iter()
+        .map(|(account, stats)| {
+            let mut obj = match stats {
+                Value::Object(o) => o,
+                _ => Map::new(),
+            };
+            obj.insert("account".into(), json!(account));
+            Value::Object(obj)
+        })
+        .collect();
+    json_resp(StatusCode::OK, &json!({"accounts": accounts}))
+}
+
+/// `/usage/recent`：最近请求表（`{total,page,limit,total_pages,usd_cny,rows}`）。
+fn usage_recent(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
+    let query = req.uri().query().unwrap_or("");
+    let mut limit = 20usize;
+    let mut page = 1usize;
+    for pair in query.split('&') {
+        if let Some(v) = pair.strip_prefix("limit=") {
+            limit = v.parse().unwrap_or(20).clamp(1, 500);
+        }
+        if let Some(v) = pair.strip_prefix("page=") {
+            page = v.parse().unwrap_or(1).max(1);
+        }
+    }
+    let mut rows = usage_rows(app);
+    rows.reverse();
+    let total = rows.len();
+    let start = (page - 1) * limit;
+    let slice: Vec<Value> = rows.into_iter().skip(start).take(limit).collect();
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": if total == 0 { 1 } else { (total + limit - 1) / limit },
+            "usd_cny": 7.1,
+            "rows": slice,
+        }),
+    )
+}
+
+/// 一段时间的汇总（`/usage/analytics` 的 summary.window 与 all_time 用同一套键）。
+fn bucket_of(rows: &[&Value]) -> Value {
+    let sum = |key: &str| -> i64 { rows.iter().map(|r| r.get(key).and_then(|v| v.as_i64()).unwrap_or(0)).sum() };
+    let requests = rows.len() as i64;
+    let errors = rows.iter().filter(|r| r.get("outcome").and_then(Value::as_str) != Some("completed")).count() as i64;
+    let prompt = sum("prompt_tokens");
+    let completion = sum("completion_tokens");
+    let total = sum("total_tokens");
+    let cached = sum("cached_tokens");
+    let ttft_n = rows.iter().filter(|r| r.get("ttft_ms").is_some()).count() as i64;
+    let ttft_sum: i64 = rows.iter().filter_map(|r| r.get("ttft_ms").and_then(|v| v.as_i64())).sum();
+    let elapsed_n = rows.iter().filter(|r| r.get("elapsed_ms").is_some()).count() as i64;
+    let elapsed_sum: i64 = rows.iter().filter_map(|r| r.get("elapsed_ms").and_then(|v| v.as_i64())).sum();
+    let speed_n = rows.iter().filter(|r| r.get("tokens_per_sec").is_some()).count() as i64;
+    let speed_sum: f64 = rows.iter().filter_map(|r| r.get("tokens_per_sec").and_then(|v| v.as_f64())).sum();
+    json!({
+        "requests": requests,
+        "errors": errors,
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "reasoning_tokens": sum("reasoning_tokens"),
+        "cached_tokens": cached,
+        "total_tokens": total,
+        "credit": 0.0,
+        "cost_cny": 0.0,
+        "ttft_sum": ttft_sum as f64,
+        "ttft_n": ttft_n,
+        "speed_sum": speed_sum,
+        "speed_n": speed_n,
+        "elapsed_sum": elapsed_sum as f64,
+        "elapsed_n": elapsed_n,
+        "cache_hit_pct": if total > 0 { (cached as f64 * 100.0 / total as f64 * 10.0).round() / 10.0 } else { 0.0 },
+        "reasoning_ratio": 0.0,
+        "ttft_ms_avg": if ttft_n > 0 { ttft_sum / ttft_n } else { 0 },
+        "speed_avg": if speed_n > 0 { (speed_sum / speed_n as f64 * 10.0).round() / 10.0 } else { 0.0 },
+        "elapsed_ms_avg": if elapsed_n > 0 { elapsed_sum / elapsed_n } else { 0 },
+    })
+}
+
+/// `/usage/analytics`：summary + 按账号/模型/Key 拆分。
+fn usage_analytics(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
+    let query = req.uri().query().unwrap_or("");
+    let realm_filter: Option<&str> = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("realm="))
+        .filter(|v| !v.is_empty());
+    let all = usage_rows(app);
+    let until = crate::state::now_epoch() as f64;
+    let since = until - 24.0 * 3600.0;
+    let pick = |rows: &[Value], from: f64| -> Vec<Value> {
+        rows.iter()
+            .filter(|r| r.get("at").and_then(|v| v.as_f64()).unwrap_or(0.0) >= from)
+            .filter(|r| match realm_filter {
+                Some(want) => r.get("realm").and_then(Value::as_str) == Some(want),
+                None => true,
+            })
+            .cloned()
+            .collect()
+    };
+    let window_rows = pick(&all, since);
+    let all_rows = pick(&all, 0.0);
+    let win_refs: Vec<&Value> = window_rows.iter().collect();
+    let all_refs: Vec<&Value> = all_rows.iter().collect();
+
+    let accounts_meta = app.state.accounts_snapshot();
+    let mut accounts_out = Vec::new();
+    for account in &accounts_meta {
+        let uid = account.uid();
+        let mine: Vec<&Value> = win_refs
+            .iter()
+            .copied()
+            .filter(|r| r.get("account").and_then(Value::as_str) == Some(uid.as_str()))
+            .collect();
+        let mine_all: Vec<&Value> = all_refs
+            .iter()
+            .copied()
+            .filter(|r| r.get("account").and_then(Value::as_str) == Some(uid.as_str()))
+            .collect();
+        accounts_out.push(json!({
+            "uid": uid,
+            "nickname": account.data.get("nickname").cloned().unwrap_or(Value::Null),
+            "realm": account.realm(),
+            "domain": account.domain(),
+            "credits": account.data.get("credits").cloned().unwrap_or(Value::Null),
+            "window": bucket_of(&mine),
+            "all_time": bucket_of(&mine_all),
+            "window_models": [],
+            "all_models": [],
+        }));
+    }
+
+    let settings = app.state.settings_snapshot();
+    let mut keys_out = Vec::new();
+    if let Some(keys) = settings.get("api_keys").and_then(Value::as_array) {
+        for key in keys {
+            let id = key.get("id").and_then(Value::as_str).unwrap_or("");
+            let short: String = id.chars().take(12).collect();
+            let mine: Vec<&Value> = win_refs
+                .iter()
+                .copied()
+                .filter(|r| r.get("key").and_then(Value::as_str) == Some(id))
+                .collect();
+            let mine_all: Vec<&Value> = all_refs
+                .iter()
+                .copied()
+                .filter(|r| r.get("key").and_then(Value::as_str) == Some(id))
+                .collect();
+            keys_out.push(json!({
+                "key": short,
+                "name": key.get("name").cloned().unwrap_or(Value::Null),
+                "realm": key.get("realm").and_then(Value::as_str).unwrap_or(""),
+                "enabled": key.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                "source": key.get("source").and_then(Value::as_str).unwrap_or("panel"),
+                "window": bucket_of(&mine),
+                "all_time": bucket_of(&mine_all),
+            }));
+        }
+    }
+
+    json_resp(
+        StatusCode::OK,
+        &json!({
+            "window": {"since": since, "until": until},
+            "realm": realm_filter.unwrap_or(""),
+            "usd_cny": 7.1,
+            "summary": {"window": bucket_of(&win_refs), "all_time": bucket_of(&all_refs)},
+            "accounts": accounts_out,
+            "models": [],
+            "keys": keys_out,
+        }),
+    )
+}
+
+/// `/accounts/credits`：账号档 + `credits`（积分形状与 panel 一致，值来自账号文件）。
+fn accounts_credits(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp {
+    let query = req.uri().query().unwrap_or("");
+    let realm_filter: Option<&str> = query.split('&').find_map(|p| p.strip_prefix("realm="));
+    let now = crate::state::now_epoch();
+    let mut list = Vec::new();
+    for account in app.state.accounts_snapshot() {
+        let realm = account.realm();
+        if let Some(want) = realm_filter {
+            if !want.is_empty() && want != realm {
+                continue;
+            }
+        }
+        let mut view = account_view(&account, now);
+        let credits = account.data.get("credits").cloned().unwrap_or(Value::Null);
+        if let Some(obj) = view.as_object_mut() {
+            obj.insert("credits".into(), credits);
+        }
+        list.push(view);
+    }
+    json_resp(StatusCode::OK, &json!({"accounts": list, "busy": false}))
+}

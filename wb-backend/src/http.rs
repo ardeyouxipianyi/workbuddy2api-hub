@@ -31,7 +31,7 @@ pub fn json_resp(code: StatusCode, payload: &Value) -> Resp {
     resp
 }
 
-fn text_resp(code: StatusCode, text: &str) -> Resp {
+pub fn text_resp(code: StatusCode, text: &str) -> Resp {
     let mut resp = Response::new(full(Bytes::from(text.to_string())));
     *resp.status_mut() = code;
     resp
@@ -99,7 +99,10 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
         (_, "/health") | (_, "/v1/models") | (_, "/v1/chat/completions") | (_, "/v1/responses") => {
             error_resp(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
-        _ => error_resp(StatusCode::NOT_FOUND, "not found"),
+        _ => match crate::panel::handle(&app, req).await {
+            Some(resp) => resp,
+            None => error_resp(StatusCode::NOT_FOUND, "not found"),
+        },
     }
 }
 

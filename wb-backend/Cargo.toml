@@ -20,6 +20,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
+# machineId/sessionId 是 md5(uid) 派生的（wb_fingerprint.py），必须同算法才能对上。
+md-5 = "0.10"
 # 只为了拿本地时区偏移（usage 行的 iso 字段是本地时间），不用它做别的。
 libc = "0.2"
 

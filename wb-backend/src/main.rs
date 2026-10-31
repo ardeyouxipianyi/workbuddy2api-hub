@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! wb-backend —— workbuddy2api-hub 的可选 Rust 后端。
 //!
 //! M1 只做：`/health`、`/v1/models`、非流式 chat、账号/settings 读、usage 追加。
@@ -10,6 +11,7 @@ mod health;
 mod identity;
 mod http;
 mod models;
+mod panel;
 mod pool;
 mod record;
 mod responses;
@@ -42,6 +44,14 @@ pub struct App {
     pub recorder: usage::Recorder,
     /// 账号冷却表（内存态，重启清空）。
     pub pool: pool::Pool,
+    /// 面板会话（X-Panel-Token）与口令。
+    pub panel: panel::Panel,
+}
+
+impl App {
+    pub fn recorder_path(&self) -> std::path::PathBuf {
+        self.recorder.path()
+    }
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -96,6 +106,7 @@ async fn main() -> std::io::Result<()> {
         inflight: std::sync::atomic::AtomicUsize::new(0),
         recorder: usage::Recorder::new(args.usage_dir.clone()),
         pool: pool::Pool::new(),
+        panel: panel::Panel::default(),
     });
 
     let listener = TcpListener::bind((args.host.as_str(), args.port)).await?;

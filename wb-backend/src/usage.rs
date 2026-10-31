@@ -22,6 +22,10 @@ impl Recorder {
         Recorder { dir: dir.into(), lock: Mutex::new(()) }
     }
 
+    pub fn path(&self) -> PathBuf {
+        self.dir.join("usage.jsonl")
+    }
+
     /// 追加一行到 `usage/usage.jsonl`；失败只记日志，绝不影响请求本身。
     pub fn append(&self, line: &Value) {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());

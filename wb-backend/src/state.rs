@@ -62,6 +62,18 @@ impl AccountFile {
         }
     }
 
+    pub fn access_token(&self) -> String {
+        self.str("accessToken").to_string()
+    }
+
+    pub fn refresh_token(&self) -> String {
+        self.str("refreshToken").to_string()
+    }
+
+    pub fn file_name(&self) -> String {
+        self.name.clone()
+    }
+
     pub fn is_api_key(&self) -> bool {
         self.str("accessToken").starts_with("ck_")
     }
@@ -132,6 +144,18 @@ impl State {
         self.settings.read().unwrap().clone()
     }
 
+    pub fn accounts_snapshot(&self) -> Vec<AccountFile> {
+        self.accounts.read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    pub fn settings_snapshot(&self) -> Map<String, Value> {
+        self.settings.read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    pub fn accounts_dir_name(&self) -> String {
+        self.accounts_dir.display().to_string()
+    }
+
     pub fn accounts(&self) -> std::sync::RwLockReadGuard<'_, Vec<AccountFile>> {
         self.accounts.read().unwrap()
     }
@@ -190,6 +214,48 @@ impl State {
             .and_then(Value::as_bool)
             .unwrap_or(default)
     }
+}
+
+/// `wb_fingerprint.derive_id`：md5("<salt>:<uid>") 改成 UUIDv4 形状。
+pub fn derive_id(uid: &str, salt: &str) -> String {
+    use md5::{Digest, Md5};
+    let digest = format!("{:x}", Md5::digest(format!("{salt}:{}", if uid.is_empty() { "anonymous" } else { uid }).as_bytes()));
+    let bytes: Vec<char> = digest.chars().collect();
+    let mut h: Vec<char> = bytes[..32].to_vec();
+    h[12] = '4';
+    h[16] = 'a';
+    let s: String = h.into_iter().collect();
+    format!("{}-{}-{}-{}-{}", &s[0..8], &s[8..12], &s[12..16], &s[16..20], &s[20..32])
+}
+
+/// JWT 的 exp（秒）；解析不出来就是 None，调用方自己回落。
+pub fn jwt_exp(token: &str) -> Option<i64> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let raw = base64url_decode(payload)?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    value.get("exp").and_then(Value::as_i64)
+}
+
+fn base64url_decode(input: &str) -> Option<Vec<u8>> {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = Vec::new();
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for ch in input.bytes() {
+        if ch == b'=' {
+            break;
+        }
+        let value = TABLE.iter().position(|c| *c == ch)? as u32;
+        acc = (acc << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 pub fn now_epoch() -> i64 {
