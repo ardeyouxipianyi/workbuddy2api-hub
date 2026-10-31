@@ -1,7 +1,7 @@
-//! `POST /v1/chat/completions`（M1：非流式）。
+//! `POST /v1/chat/completions`（非流式 + 流式）。
 //!
-//! 契约见 specs/chat-nonstream.md，字节对齐由 harness 判定。流式（`stream:true`）
-//! 在 M2 接，现在显式报 501 而不是假装成功。
+//! 契约见 specs/chat-nonstream.md 与 specs/streaming-and-errors.md。流式的帧形状
+//! 是拿真进程抓出来的（不是照上游原样转发），见 stream.rs。
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::http::{body_json, error_resp, Resp};
 use crate::App;
 
-pub async fn completions(app: &Arc<App>, req: Request<Incoming>) -> Resp {
+pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String) -> Resp {
     let started = std::time::Instant::now();
     let realm = crate::http::requested_realm(&req, &app.state.current_realm());
     let body = match body_json(req).await {
@@ -23,13 +23,9 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>) -> Resp {
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     app.inflight.fetch_add(1, Ordering::Relaxed);
     let result = if stream {
-        // M2：SSE。现在返回 501，避免「静默降级成非流式」骗过客户端。
-        error_resp(
-            StatusCode::NOT_IMPLEMENTED,
-            "this backend has not ported streaming yet (capabilities: protocols.ported=false)",
-        )
+        crate::upstream::chat_stream(app, &body, &realm, started, &key_id).await
     } else {
-        crate::upstream::chat_once(app, &body, &realm, started).await
+        crate::upstream::chat_once(app, &body, &realm, started, &key_id).await
     };
     app.inflight.fetch_sub(1, Ordering::Relaxed);
     result

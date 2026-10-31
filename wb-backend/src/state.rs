@@ -18,6 +18,7 @@ const NON_ACCOUNT_FILES: &[&str] = &[
     "quota_scan.json",
 ];
 
+#[derive(Clone)]
 pub struct AccountFile {
     pub path: PathBuf,
     pub name: String,
@@ -40,6 +41,23 @@ impl AccountFile {
         }
         match self.str("realm") {
             "" => "intl".into(),
+            other => other.to_string(),
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.data.get("enabled").and_then(Value::as_bool).unwrap_or(true)
+    }
+
+    /// 账号自带的出站域名（`X-Domain`）；空则回落区域默认。
+    pub fn domain(&self) -> String {
+        self.str("domain").to_string()
+    }
+
+    /// 身分：desktop / vscode / cli，决定上游端点（wb_identity._ENDPOINTS）。
+    pub fn product(&self) -> String {
+        match self.str("product") {
+            "" => "desktop".into(),
             other => other.to_string(),
         }
     }
@@ -74,6 +92,8 @@ pub struct State {
     pub settings: RwLock<Map<String, Value>>,
     /// 启动时刻读完的账号快照，用于 M1 的「读」语义；写入留给 M3。
     pub model_catalog: RwLock<Value>,
+    /// 上次读盘时这两个文件的 mtime；用来「变了才重读」，不是节流。
+    stamp: std::sync::Mutex<(u64, u64)>,
 }
 
 impl State {
@@ -87,8 +107,29 @@ impl State {
             settings: RwLock::new(settings),
             model_catalog: RwLock::new(read_json(accounts_dir.join("model.json"))
                 .unwrap_or(Value::Null)),
+            stamp: std::sync::Mutex::new((0, 0)),
         };
+        state.refresh();
         state
+    }
+
+    /// 磁盘变了才重读账号与设置：面板改 key/切区域/换号都靠它立刻生效。
+    pub fn refresh(&self) {
+        let settings_m = mtime(&self.accounts_dir.join("settings.json"));
+        let accounts_m = mtime(&self.accounts_dir);
+        {
+            let mut stamp = self.stamp.lock().unwrap();
+            if *stamp == (settings_m, accounts_m) {
+                return;
+            }
+            *stamp = (settings_m, accounts_m);
+        }
+        *self.settings.write().unwrap() = read_settings(&self.accounts_dir);
+        *self.accounts.write().unwrap() = load_accounts(&self.accounts_dir);
+    }
+
+    pub fn settings(&self) -> Map<String, Value> {
+        self.settings.read().unwrap().clone()
     }
 
     pub fn accounts(&self) -> std::sync::RwLockReadGuard<'_, Vec<AccountFile>> {
@@ -155,6 +196,15 @@ pub fn now_epoch() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn mtime(path: impl AsRef<Path>) -> u64 {
+    std::fs::metadata(path.as_ref())
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 

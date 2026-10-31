@@ -355,7 +355,7 @@ def main(argv=None):
         fixture = Fixture(rust_binary=args.with_rust)
         try:
             a = capture(fixture.base)
-            b = capture(fixture.rust, include_stream=False)
+            b = capture(fixture.rust)
             response_problems = diff(a, b)
             usage_problems = diff_usage(fixture.usage_dirs[0], fixture.usage_dirs[1])
             for line in response_problems + usage_problems:

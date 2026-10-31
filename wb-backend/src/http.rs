@@ -5,18 +5,24 @@
 
 use std::sync::Arc;
 
-use http_body_util::Full;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
 use serde_json::{json, Value};
 
-use crate::{health, models, App};
+use crate::{auth, health, models, App};
 
-pub type Resp = Response<Full<Bytes>>;
+/// 流式与非流式共用一种响应体：M1 的 `Full` 装不下 SSE 的增量写。
+pub type Resp = Response<BoxBody<Bytes, std::convert::Infallible>>;
+
+fn full(bytes: Bytes) -> BoxBody<Bytes, std::convert::Infallible> {
+    Full::new(bytes).map_err(|e| match e {}).boxed()
+}
 
 pub fn json_resp(code: StatusCode, payload: &Value) -> Resp {
     let body = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
-    let mut resp = Response::new(Full::new(Bytes::from(body)));
+    let mut resp = Response::new(full(Bytes::from(body)));
     *resp.status_mut() = code;
     resp.headers_mut().insert(
         hyper::header::CONTENT_TYPE,
@@ -26,7 +32,7 @@ pub fn json_resp(code: StatusCode, payload: &Value) -> Resp {
 }
 
 fn text_resp(code: StatusCode, text: &str) -> Resp {
-    let mut resp = Response::new(Full::new(Bytes::from(text.to_string())));
+    let mut resp = Response::new(full(Bytes::from(text.to_string())));
     *resp.status_mut() = code;
     resp
 }
@@ -36,17 +42,61 @@ pub fn error_resp(code: StatusCode, message: &str) -> Resp {
     json_resp(code, &json!({"error": {"message": message, "type": "invalid_request_error"}}))
 }
 
+/// `/v1` 的鉴权闸门：返回写进 usage 行的 key id，失败时返回 401 响应。
+/// 报文与 Python 版（wb_proxy.py:18866-18881）逐字一致，客户端看到的是同一句提示。
+pub fn require_auth(app: &App, req: &Request<Incoming>) -> Result<String, Resp> {
+    let supplied = auth::supplied(req.headers(), req.uri().query());
+    match auth::check(&app.state, &supplied) {
+        Ok(passed) if !passed.required => Ok(String::new()),
+        Ok(passed) => Ok(passed.key_id),
+        Err(()) => {
+            let has_key = app
+                .state
+                .settings()
+                .get("api_keys")
+                .and_then(Value::as_array)
+                .map(|keys| {
+                    keys.iter().any(|k| k.get("enabled").and_then(Value::as_bool).unwrap_or(false))
+                })
+                .unwrap_or(false)
+                || std::env::var("WB_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
+            let hint = if has_key {
+                "send it as 'Authorization: Bearer ***' or '?key=<key>'; \
+                 copy the value from the panel's 设置 page"
+            } else {
+                "no key is configured - open the dashboard and add one, \
+                 or restart with --api-key"
+            };
+            Err(error_resp(
+                StatusCode::UNAUTHORIZED,
+                &format!("invalid api key - {hint}"),
+            ))
+        }
+    }
+}
+
 pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
+    // 账号与设置按 mtime 重读：面板改 key、切区域、换号都不用重启。
+    app.state.refresh();
     match (&method, path.as_str()) {
         (&Method::GET, "/health") => health::get(&app).await,
         (&Method::GET, "/v1/models") | (&Method::GET, "/models") => models::list(&app, &req).await,
         (&Method::POST, "/v1/chat/completions") | (&Method::POST, "/chat/completions") => {
-            crate::chat::completions(&app, req).await
+            match require_auth(&app, &req) {
+                Ok(key_id) => crate::chat::completions(&app, req, key_id).await,
+                Err(resp) => resp,
+            }
+        }
+        (&Method::POST, "/v1/responses") | (&Method::POST, "/responses") => {
+            match require_auth(&app, &req) {
+                Ok(key_id) => crate::responses::handle(&app, req, key_id).await,
+                Err(resp) => resp,
+            }
         }
         (&Method::OPTIONS, _) => text_resp(StatusCode::NO_CONTENT, ""),
-        (_, "/health") | (_, "/v1/models") | (_, "/v1/chat/completions") => {
+        (_, "/health") | (_, "/v1/models") | (_, "/v1/chat/completions") | (_, "/v1/responses") => {
             error_resp(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
         _ => error_resp(StatusCode::NOT_FOUND, "not found"),

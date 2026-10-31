@@ -89,55 +89,61 @@ pub fn aggregate(text: &str) -> Option<Aggregated> {
         if agg.first_chunk_at.is_none() {
             agg.first_chunk_at = Some(epoch_now());
         }
-        if agg.id.is_empty() {
-            if let Some(s) = chunk.get("id").and_then(Value::as_str) {
-                agg.id = s.to_string();
-            }
-        }
-        if agg.model.is_empty() {
-            if let Some(s) = chunk.get("model").and_then(Value::as_str) {
-                agg.model = s.to_string();
-            }
-        }
-        if agg.created == 0 {
-            if let Some(n) = chunk.get("created").and_then(Value::as_i64) {
-                agg.created = n;
-            }
-        }
-        if let Some(usage) = chunk.get("usage").filter(|u| !u.is_null()) {
-            // 上游可能在中途和末帧各报一次；要的是 total_tokens 最大的那个，
-            // 不是最后出现的那个（末帧有时只补 completion_tokens）。
-            let total = |v: &Value| v.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
-            let better = agg.usage.as_ref().map(|cur| total(usage) >= total(cur)).unwrap_or(true);
-            if better {
-                agg.usage = Some(usage.clone());
-            }
-        }
-        let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
-            continue;
-        };
-        for choice in choices {
-            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-                agg.finish = Some(reason.to_string());
-            }
-            let Some(delta) = choice.get("delta") else { continue };
-            if let Some(s) = delta.get("content").and_then(Value::as_str) {
-                agg.content.push_str(s);
-            }
-            if let Some(s) = delta.get("reasoning_content").and_then(Value::as_str) {
-                agg.reasoning.push_str(s);
-            }
-            if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
-                for call in calls {
-                    agg.tool_calls.push(call.clone());
-                }
-            }
-        }
+        absorb(&mut agg, &chunk);
     }
     if !saw_any {
         return None;
     }
     Some(agg)
+}
+
+/// 把上游的一帧折进聚合结果。流式与非流式（先整个读完再聚合）共用这一份，
+/// 免得两条路径对「usage 取哪一份」「delta 怎么累」各写一遍。
+pub fn absorb(agg: &mut Aggregated, chunk: &Value) {
+    if agg.id.is_empty() {
+        if let Some(s) = chunk.get("id").and_then(Value::as_str) {
+            agg.id = s.to_string();
+        }
+    }
+    if agg.model.is_empty() {
+        if let Some(s) = chunk.get("model").and_then(Value::as_str) {
+            agg.model = s.to_string();
+        }
+    }
+    if agg.created == 0 {
+        if let Some(n) = chunk.get("created").and_then(Value::as_i64) {
+            agg.created = n;
+        }
+    }
+    if let Some(usage) = chunk.get("usage").filter(|u| !u.is_null()) {
+        // 上游可能在中途和末帧各报一次；要的是 total_tokens 最大的那个，
+        // 不是最后出现的那个（末帧有时只补 completion_tokens）。
+        let total = |v: &Value| v.get("total_tokens").and_then(Value::as_i64).unwrap_or(0);
+        let better = agg.usage.as_ref().map(|cur| total(usage) >= total(cur)).unwrap_or(true);
+        if better {
+            agg.usage = Some(usage.clone());
+        }
+    }
+    let Some(choices) = chunk.get("choices").and_then(Value::as_array) else {
+        return;
+    };
+    for choice in choices {
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            agg.finish = Some(reason.to_string());
+        }
+        let Some(delta) = choice.get("delta") else { continue };
+        if let Some(s) = delta.get("content").and_then(Value::as_str) {
+            agg.content.push_str(s);
+        }
+        if let Some(s) = delta.get("reasoning_content").and_then(Value::as_str) {
+            agg.reasoning.push_str(s);
+        }
+        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                agg.tool_calls.push(call.clone());
+            }
+        }
+    }
 }
 
 pub fn epoch_now() -> f64 {
@@ -203,4 +209,13 @@ fn estimate_tokens(text: &str) -> i64 {
     } else {
         cjk + std::cmp::max(1, (other as f64 / 3.6) as i64)
     }
+}
+
+/// 16 个 hex 字符的随机 id 尾（`chatcmpl-wb-<16 hex>` 用）。
+pub fn hex_token(len: usize) -> String {
+    use std::io::Read;
+    let mut raw = vec![0u8; len];
+    let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut raw));
+    let alphabet = b"0123456789abcdef";
+    raw.iter().map(|b| alphabet[*b as usize % 16] as char).collect()
 }

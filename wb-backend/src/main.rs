@@ -3,14 +3,18 @@
 //! M1 只做：`/health`、`/v1/models`、非流式 chat、账号/settings 读、usage 追加。
 //! 契约来源是 Python 版（wb_proxy.py），逐字节对齐由 harness/compare.py 判定。
 
+mod auth;
 mod chat;
 mod fingerprint;
 mod health;
 mod http;
 mod models;
+mod pool;
 mod record;
+mod responses;
 mod sse;
 mod state;
+mod stream;
 mod upstream;
 mod usage;
 
@@ -35,6 +39,8 @@ pub struct App {
     pub inflight: std::sync::atomic::AtomicUsize,
     /// usage.jsonl 的写者（单进程串行追加）。
     pub recorder: usage::Recorder,
+    /// 账号冷却表（内存态，重启清空）。
+    pub pool: pool::Pool,
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -88,6 +94,7 @@ async fn main() -> std::io::Result<()> {
         started: std::time::Instant::now(),
         inflight: std::sync::atomic::AtomicUsize::new(0),
         recorder: usage::Recorder::new(args.usage_dir.clone()),
+        pool: pool::Pool::new(),
     });
 
     let listener = TcpListener::bind((args.host.as_str(), args.port)).await?;

@@ -16,6 +16,20 @@ python3 harness/compare.py --base http://127.0.0.1:8090 --base http://127.0.0.1:
 - **上游答案一变，比对必然会红**：`--self-check` 会故意改一份答案，确认比对器不是永远绿。
 - **请求必须落在假上游**：落空就报错，不会静默打真上游（那既烧额度又让夹具失去意义）。
 
+## 另一个假上游：`probe_upstream.py`
+
+`compare.py` 是对拍器；要**定义形状**（流式帧序列、错误分支）用 `probe_upstream.py`：
+第一条 user message 里的 marker 决定上游行为，整条流/整条错误响应都能指定。
+
+```
+python3 harness/probe_upstream.py --port 9555 --log /tmp/probe.jsonl &
+# marker: PROBE:base|role|reasoning|tools|usage_on_choice|nousage|nodone|empty
+#         |abort|abort0|keepalive|raw|slow   /   ERR:<status>:<json body>
+```
+
+用例表与抓到的字节见 `Plan/workbuddy-rust-rewrite/specs/streaming-and-errors.md` §5。
+注意：改账号状态的用例（11140 / 402 / 401 / 429）要换一份刚 bootstrap 的 accounts 目录并重启网关。
+
 ## 已知要点
 
 - 假账号的 `product` 必须是 `workbuddy`（桌面身分）。`vscode` 身分的 cn 对话端点
