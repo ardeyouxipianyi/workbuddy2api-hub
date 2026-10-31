@@ -174,7 +174,9 @@ pub async fn list(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         .as_ref()
         .map(crate::state::AccountFile::realm)
         .unwrap_or_else(|| crate::http::requested_realm(req, &app.state.current_realm()));
-    let mut data = entries(&realm);
+    // 走运行时目录：面板「刷新模型清单」写的是它，这里若只读内置快照，
+    // 刷新成功也看不见新模型（cn 一直停在 14 个）。
+    let (mut data, catalog) = crate::catalog_refresh::entries_for(&realm);
     if let Some(account) = pinned.as_ref() {
         let disabled = crate::keyref::disabled_models(account);
         if !disabled.is_empty() {
@@ -192,16 +194,6 @@ pub async fn list(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     payload.insert("object".into(), json!("list"));
     payload.insert("data".into(), Value::Array(data));
     payload.insert("realm".into(), json!(realm));
-    payload.insert(
-        "catalog".into(),
-        json!({"source": "bundled", "fetched_at": now_float(), "file_mtime": Value::Null}),
-    );
+    payload.insert("catalog".into(), catalog);
     json_resp(StatusCode::OK, &Value::Object(payload))
-}
-
-fn now_float() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
 }

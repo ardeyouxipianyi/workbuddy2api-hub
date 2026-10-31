@@ -122,7 +122,39 @@ pub fn entries_for(realm: &str) -> (Vec<Value>, Value) {
     {
         return (runtime.entries, runtime.meta);
     }
+    // 重启后运行时目录是空的：先把上次落盘的原始响应读回来，否则面板会退回
+    // 内置快照（cn 只有 14 个模型），看着像「刷新没生效」。
+    if let Some((entries, meta)) = load_cached(realm, &Config::from_env().cache_dir) {
+        return (entries, meta);
+    }
     (static_entries(realm), bundled_meta())
+}
+
+fn load_cached(realm: &str, dir: &Path) -> Option<(Vec<Value>, Value)> {
+    let path = dir.join(format!("product-config-{realm}.json"));
+    let raw: Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    let (ids, meta) = parse_remote_catalog(&raw)?;
+    let config = Config::from_env();
+    let curated = curate_remote_catalog(realm, &ids, &meta, &config);
+    let entries = merge_catalog(realm, &curated, &meta, true, &config);
+    let file_mtime = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let catalog = json!({"source": "cache", "fetched_at": now(), "file_mtime": file_mtime});
+    runtime()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            realm.to_string(),
+            RuntimeCatalog {
+                entries: entries.clone(),
+                meta: catalog.clone(),
+            },
+        );
+    Some((entries, catalog))
 }
 
 fn bundled_meta() -> Value {
@@ -954,6 +986,29 @@ mod tests {
         );
         assert_eq!(entry.get("tags"), Some(&json!(["craft", "live"])));
         assert_eq!(entry.get("always_reasoning"), Some(&json!(false)));
+    }
+
+    #[test]
+    fn cache_file_is_read_back_after_restart() {
+        let dir = std::env::temp_dir().join(format!(
+            "wb-rust-cache-{}",
+            crate::sse::hex_token(8)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let payload = json!({"code": 0, "data": {"agents": [{
+            "name": "cli", "models": ["glm-5.3", "hy3", "kimi-k3"]
+        }]}});
+        persist_remote_catalog("cn-cache-test", &payload, &dir).unwrap();
+        let (entries, meta) = load_cached("cn-cache-test", &dir).expect("cache should load");
+        assert_eq!(meta.get("source").and_then(Value::as_str), Some("cache"));
+        assert!(meta.get("file_mtime").and_then(Value::as_f64).unwrap_or(0.0) > 0.0);
+        let ids: Vec<&str> = entries
+            .iter()
+            .filter_map(|m| m.get("id").and_then(Value::as_str))
+            .collect();
+        // 上游清单里的模型必须出现在返回里（而不是只剩内置快照）。
+        assert!(ids.contains(&"glm-5.3"), "entries: {ids:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
