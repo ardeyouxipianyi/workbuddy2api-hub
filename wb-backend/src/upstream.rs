@@ -166,7 +166,7 @@ pub(crate) async fn open_upstream(
     let mut last = "no usable account".to_string();
     // 最多换三个号：再多就是上游整体挂了，换也没用。
     for _ in 0..3 {
-        let cand = match crate::pool::candidates(app, realm, &tried).into_iter().next() {
+        let cand = match crate::pool::candidates(app, realm, &tried, Some(&ctx.model)).into_iter().next() {
             Some(c) => c,
             None => break,
         };
@@ -199,6 +199,7 @@ pub(crate) async fn open_upstream(
         let resp = match sent {
             Ok(r) => r,
             Err(e) => {
+                app.pool.unknown_failure(&cand.uid);
                 last = format!("upstream unreachable: {e}");
                 continue;
             }
@@ -226,7 +227,11 @@ pub(crate) async fn open_upstream(
                     crate::quota::schedule(app, &cand.uid, &ctx.model, reset);
                 }
             }
-            crate::pool::cooldown(app, &cand.uid, 60);
+            if code >= 500 {
+                app.pool.hard_failure(&cand.uid);
+            } else {
+                crate::pool::cooldown(app, &cand.uid, 60);
+            }
             continue;
         }
         break; // 其它 4xx 是请求本身的问题，换号无意义

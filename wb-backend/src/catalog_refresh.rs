@@ -291,7 +291,7 @@ async fn fetch_remote(
     realm: &str,
     config: &Config,
 ) -> Option<(Vec<String>, Map<String, Value>, Value)> {
-    let candidate = crate::pool::candidates(app, realm, &[])
+    let candidate = crate::pool::candidates(app, realm, &[], None)
         .into_iter()
         .next()?;
     let token = crate::pool::ensure_fresh(app, &candidate).await;

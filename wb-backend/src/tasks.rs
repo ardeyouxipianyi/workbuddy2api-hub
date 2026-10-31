@@ -754,7 +754,12 @@ pub async fn daily_chat(app: &Arc<App>, uid: &str, uids: Option<&[String]>, trig
         results.push(out);
     }
     let now = crate::state::now_epoch();
-    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| crate::panel::account_view(a, now)).collect();
+    let accounts: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| crate::panel::account_view(app, a, now))
+        .collect();
     json!({"results": results, "accounts": accounts})
 }
 

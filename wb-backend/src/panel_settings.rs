@@ -180,7 +180,7 @@ fn schedule(settings: &Map<String, Value>, app: &App) -> Value {
     })
 }
 
-fn limits(settings: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn limits(settings: &Map<String, Value>) -> Map<String, Value> {
     let stored = settings.get("limits").and_then(Value::as_object);
     let mut out = Map::new();
     for (key, default) in [
@@ -195,15 +195,14 @@ fn limits(settings: &Map<String, Value>) -> Map<String, Value> {
             .and_then(Value::as_object);
         let global = entry
             .and_then(|value| value.get("global"))
-            .and_then(Value::as_i64)
-            .or_else(|| settings.get(key).and_then(Value::as_i64))
+            .and_then(limit_number)
+            .or_else(|| settings.get(key).and_then(limit_number))
             .unwrap_or(default)
             .max(0);
         let realm = |name: &str| {
             entry
                 .and_then(|value| value.get(name))
-                .and_then(Value::as_i64)
-                .filter(|value| *value >= 0)
+                .and_then(limit_number)
                 .map_or(Value::Null, |value| json!(value))
         };
         out.insert(
@@ -212,6 +211,17 @@ fn limits(settings: &Map<String, Value>) -> Map<String, Value> {
         );
     }
     out
+}
+
+fn limit_number(value: &Value) -> Option<i64> {
+    if value.is_boolean() || value.is_null() {
+        return None;
+    }
+    value
+        .as_i64()
+        .or_else(|| value.as_f64().map(|number| number as i64))
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .filter(|number| *number >= 0)
 }
 
 fn clean_products(settings: &Map<String, Value>) -> Vec<String> {

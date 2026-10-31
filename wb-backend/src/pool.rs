@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::state::{now_epoch, AccountFile};
+use crate::pool_breaker::{BreakerView, Breakers, FailureKind};
+use crate::pool_guards::{AccountGuards, Guards};
+use crate::state::{now_epoch, AccountFile, State};
 use crate::App;
 
 /// 一个可用候选（选号结果）。
@@ -25,26 +27,89 @@ pub struct Candidate {
 }
 
 pub struct Pool {
-    /// uid -> 冷却到什么时候（epoch 秒）。
-    cooldown: Mutex<HashMap<String, i64>>,
+    /// uid -> explicit cooldown deadline (epoch seconds).
+    cooldown: Mutex<HashMap<String, f64>>,
+    breakers: Breakers,
+    guards: Guards,
 }
 
 impl Pool {
     pub fn new() -> Pool {
-        Pool { cooldown: Mutex::new(HashMap::new()) }
+        Pool {
+            cooldown: Mutex::new(HashMap::new()),
+            breakers: Breakers::default(),
+            guards: Guards::default(),
+        }
     }
 
     pub fn cooling(&self, uid: &str) -> bool {
-        let map = self.cooldown.lock().unwrap();
-        map.get(uid).map(|until| *until > now_epoch()).unwrap_or(false)
+        let now = now_epoch() as f64;
+        self.cooldown_until(uid) > now || self.breakers.cooling(uid, now)
     }
 
     pub fn cooldown(&self, uid: &str, secs: i64) {
-        self.cooldown.lock().unwrap().insert(uid.to_string(), now_epoch() + secs);
+        self.cooldown
+            .lock()
+            .unwrap()
+            .insert(uid.to_string(), now_epoch() as f64 + secs as f64);
     }
 
     pub fn clear(&self, uid: &str) {
         self.cooldown.lock().unwrap().remove(uid);
+        self.breakers.success(uid);
+    }
+
+    pub fn hard_failure(&self, uid: &str) {
+        self.breakers
+            .failure(uid, FailureKind::Hard, now_epoch() as f64);
+    }
+
+    pub fn unknown_failure(&self, uid: &str) {
+        self.breakers
+            .failure(uid, FailureKind::Unknown, now_epoch() as f64);
+    }
+
+    pub fn breaker_view(&self, uid: &str) -> BreakerView {
+        self.breakers.view(uid, now_epoch() as f64)
+    }
+
+    pub fn fail_window(&self) -> i64 {
+        self.breakers.fail_window() as i64
+    }
+
+    pub fn cooldown_for(&self, uid: &str) -> Option<i64> {
+        let left = (self.cooldown_until(uid) - now_epoch() as f64).round() as i64;
+        (left > 0).then_some(left)
+    }
+
+    pub fn account_guards(
+        &self,
+        uid: &str,
+        realm: &str,
+        credits: Option<&Value>,
+    ) -> AccountGuards {
+        self.guards.account(uid, realm, credits)
+    }
+
+    pub fn refresh_guards(&self, state: &State, force: bool) {
+        state.refresh();
+        let settings = state.settings_snapshot();
+        let catalog = state
+            .model_catalog
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        self.guards
+            .refresh(&settings, &catalog, &state.usage_dir.join("usage.jsonl"), force);
+    }
+
+    fn cooldown_until(&self, uid: &str) -> f64 {
+        self.cooldown
+            .lock()
+            .unwrap()
+            .get(uid)
+            .copied()
+            .unwrap_or(0.0)
     }
 }
 
@@ -55,30 +120,56 @@ pub fn cooldown(app: &Arc<App>, uid: &str, secs: i64) {
 
 /// 候选：区域相同、enabled、有 token、未过期太久、不在冷却。
 /// 返回顺序 = 账号文件名排序（与 Python 的 `sorted(os.listdir)` 一致）。
-pub fn candidates(app: &Arc<App>, realm: &str, tried: &[String]) -> Vec<Candidate> {
+pub fn candidates(
+    app: &Arc<App>,
+    realm: &str,
+    tried: &[String],
+    model: Option<&str>,
+) -> Vec<Candidate> {
     let now = now_epoch();
+    app.pool.refresh_guards(&app.state, false);
     app.state
         .accounts()
         .iter()
-        .filter(|a| a.realm() == realm)
-        .filter(|a| !tried.contains(&a.uid()))
-        .filter(|a| !app.pool.cooling(&a.uid()))
-        // 上游风控窗口（`wb_accounts.py:989` 的 restrictedUntil，camelCase）：
-        // 窗口期内的号选了也是 403，直接跳过。
-        .filter(|a| a.restricted_until() <= now as f64)
-        .filter(|a| a.enabled())
-        .filter(|a| !a.str("accessToken").is_empty())
-        .filter(|a| a.expires_at() == 0 || a.expires_at() > now - 3600)
-        .map(|a: &AccountFile| Candidate {
-            uid: a.uid(),
-            token: a.str("accessToken").to_string(),
-            realm: a.realm(),
-            domain: a.domain(),
-            product: a.product(),
-            expires_at: a.expires_at(),
-            is_static_key: a.is_api_key(),
+        .filter_map(|account: &AccountFile| {
+            let uid = account.uid();
+            if account.realm() != realm
+                || tried.contains(&uid)
+                || app.pool.cooling(&uid)
+                // 上游风控窗口（`wb_accounts.py:989` 的 restrictedUntil）：
+                // 窗口期内的号选了也是 403，直接跳过。
+                || account.restricted_until() > now as f64
+                || !account.enabled()
+                || account.str("accessToken").is_empty()
+                || (account.expires_at() != 0 && account.expires_at() <= now - 3600)
+                || app.pool.guards.blocked(
+                    &uid,
+                    &realm,
+                    account.data.get("credits"),
+                    model,
+                )
+            {
+                return None;
+            }
+            Some(Candidate {
+                uid,
+                token: account.str("accessToken").to_string(),
+                realm: account.realm(),
+                domain: account.domain(),
+                product: account.product(),
+                expires_at: account.expires_at(),
+                is_static_key: account.is_api_key(),
+            })
         })
         .collect()
+}
+
+pub fn count_ready(app: &Arc<App>, realm: &str, model: Option<&str>) -> usize {
+    if realm == "all" {
+        candidates(app, "intl", &[], model).len() + candidates(app, "cn", &[], model).len()
+    } else {
+        candidates(app, realm, &[], model).len()
+    }
 }
 
 /// `ready()` 的临期分支：`0 < exp-now <= 120` 或已过期就刷新（wb_accounts.py:1835-1848）。

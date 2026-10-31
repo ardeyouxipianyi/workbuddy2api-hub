@@ -17,6 +17,8 @@ use serde_json::{json, Map, Value};
 use crate::http::{json_resp, Resp};
 use crate::App;
 
+pub(crate) use crate::panel_account::account_view;
+
 const DASHBOARD: &str = include_str!("../../dashboard.html");
 
 /// 面板登录限流：每客户端 IP 60 秒内 5 次失败（`wb_proxy.py` 的 `_login_attempts`）。
@@ -385,103 +387,6 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
     Some(out)
 }
 
-/// 风控窗口剩余秒数；没有限制时回 null（面板按真假判断，`wb_accounts.py:1264`）。
-fn restricted_for(account: &crate::state::AccountFile, now: f64) -> Value {
-    let left = (account.restricted_until() - now).max(0.0).round();
-    if left > 0.0 {
-        json!(left)
-    } else {
-        Value::Null
-    }
-}
-
-pub(crate) fn account_view(account: &crate::state::AccountFile, now: i64) -> Value {
-    let raw = &account.data;
-    let uid = account.uid();
-    let exp = match account.expires_at() {
-        0 => crate::state::jwt_exp(&account.access_token()),
-        v => Some(v),
-    };
-    let token_expired = exp.map(|e| e <= now).unwrap_or(true) || account.access_token().is_empty();
-    let enabled = account.enabled();
-    json!({
-        "uid": uid,
-        "nickname": raw.get("nickname").and_then(Value::as_str).filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uid.chars().take(8).collect()),
-        "domain": account.domain(),
-        "realm": account.realm(),
-        "platform": raw.get("platform").and_then(Value::as_str).unwrap_or(""),
-        "product": account.product(),
-        "enterpriseId": raw.get("enterpriseId").and_then(Value::as_str).unwrap_or(""),
-        "enabled": enabled,
-        "tasksEnabled": raw.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(enabled),
-        "weight": raw.get("weight").and_then(Value::as_i64).unwrap_or(1),
-        "note": raw.get("note").and_then(Value::as_str).unwrap_or(""),
-        "disabledModels": raw.get("disabledModels").cloned().unwrap_or(json!([])),
-        "source": raw.get("source").and_then(Value::as_str).unwrap_or("oauth"),
-        "apiKey": account.is_api_key(),
-        "credentialMask": "",
-        "proxySlot": raw.get("proxySlot").and_then(Value::as_str).unwrap_or(""),
-        "proxy": raw.get("proxy").and_then(Value::as_str).unwrap_or(""),
-        "expiresAt": exp,
-        "expiresIn": if token_expired { json!("expired") } else { json!(human_delta(exp.unwrap_or(0) - now)) },
-        "tokenExpired": token_expired,
-        "needRelogin": token_expired,
-        "hasRefreshToken": !account.refresh_token().is_empty(),
-        "lastError": "",
-        "lastErrorDetail": Value::Null,
-        "inCooldown": false,
-        "cooldownFor": Value::Null,
-        "restrictedFor": restricted_for(account, now as f64),
-        "modelCooldowns": [],
-        "softStreak": 0,
-        "unscopedStreak": 0,
-        "breakerFor": Value::Null,
-        "degradeFor": Value::Null,
-        "fails": 0,
-        "failWindow": 600,
-        "lastFailFor": Value::Null,
-        "addedAt": raw.get("addedAt").cloned().unwrap_or(Value::Null),
-        "file": account.file_name(),
-        "credits": raw.get("credits").cloned().unwrap_or(Value::Null),
-        "tier": raw.get("tier").filter(|value| value.is_object()).cloned().unwrap_or(Value::Null),
-        "reserveCredits": raw.get("reserveCredits").and_then(Value::as_i64).unwrap_or(0),
-        "reserveBlocked": false,
-        "dailyTokenLimit": raw.get("dailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
-        "dailyTokensToday": Value::Null,
-        "dailyLimitBlocked": false,
-        "dailyCreditLimit": raw.get("dailyCreditLimit").and_then(Value::as_i64).unwrap_or(0),
-        "dailyCreditsToday": Value::Null,
-        "creditLimitReached": false,
-        "modelDailyTokenLimit": raw.get("modelDailyTokenLimit").and_then(Value::as_i64).unwrap_or(0),
-        "modelDailyTokens": Value::Null,
-        "lastCheckin": raw.get("lastCheckin").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
-        "lastDailyChat": raw.get("lastDailyChat").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
-        "lastActivityReport": raw.get("lastActivityReport").filter(|value| !value.is_null() && value.as_i64() != Some(0)).cloned().unwrap_or(Value::Null),
-        "canCheckin": account.realm() == "cn",
-        "canDailyChat": account.realm() == "intl",
-        "canReportActivity": account.realm() == "cn" || account.realm() == "intl",
-        "machineId": crate::state::derive_id(&uid, "machine"),
-        "sessionId": crate::state::derive_id(&uid, "session"),
-    })
-}
-
-fn human_delta(seconds: i64) -> String {
-    if seconds <= 0 {
-        return "expired".into();
-    }
-    let days = seconds as f64 / 86400.0;
-    if days >= 1.0 {
-        return format!("{days:.0} days");
-    }
-    let hours = seconds as f64 / 3600.0;
-    if hours >= 1.0 {
-        return format!("{hours:.1} hours");
-    }
-    format!("{} min", seconds / 60)
-}
-
 /// `POST /quota-scan/run`：忽略查询间隔立刻查一轮。
 /// 已登记 429 窗口的配额线仍然不动（那几条交给窗口探针）。
 async fn quota_scan_run(app: &std::sync::Arc<App>) -> Resp {
@@ -507,7 +412,7 @@ fn accounts_credits(app: &std::sync::Arc<App>, req: &Request<Incoming>) -> Resp 
                 continue;
             }
         }
-        let mut view = account_view(&account, now);
+        let mut view = account_view(app, &account, now);
         let credits = account.data.get("credits").cloned().unwrap_or(Value::Null);
         if let Some(obj) = view.as_object_mut() {
             obj.insert("credits".into(), credits);
@@ -531,7 +436,7 @@ fn mutate_account(
         return None;
     }
     app.state.reload();
-    let fresh = account_view(&account_with(app, uid)?, crate::state::now_epoch());
+    let fresh = account_view(app, &account_with(app, uid)?, crate::state::now_epoch());
     Some(fresh)
 }
 
@@ -627,7 +532,12 @@ async fn accounts_delete(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
     app.log("accounts", "WARN", &format!("账号 {} 已删除", &uid[..uid.len().min(8)]));
     app.state.reload();
     let now = crate::state::now_epoch();
-    let list: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    let list: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| account_view(app, a, now))
+        .collect();
     json_resp(StatusCode::OK, &json!({"deleted": removed, "accounts": list}))
 }
 
@@ -714,7 +624,24 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
     };
     let mut settings = app.state.settings_snapshot();
     let mut applied = Vec::new();
+    match crate::panel_limits::apply(&mut settings, patch) {
+        Ok(touched) => {
+            if patch.contains_key("limits") {
+                applied.push("limits".to_string());
+            }
+            applied.extend(touched);
+        }
+        Err(message) => {
+            return json_resp(
+                StatusCode::BAD_REQUEST,
+                &json!({"error": {"message": message, "code": 400}}),
+            );
+        }
+    }
     for (key, value) in patch {
+        if key == "limits" || crate::panel_limits::is_limit_key(key) {
+            continue;
+        }
         // 观察清单要先规整（去空白/去重/保序），与 Python 版落盘的口径一致。
         if key == "quota_scan_models" {
             let Some(models) = clean_models(value) else {
@@ -742,10 +669,19 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
         applied.push(key.clone());
     }
     let path = app.state.accounts_dir.join("settings.json");
-    let value = Value::Object(settings);
+    let value = Value::Object(settings.clone());
+    let limits_changed = applied
+        .iter()
+        .any(|key| key == "limits" || crate::panel_limits::is_limit_key(key));
     match crate::state::write_json_atomic(&path, &value) {
         Ok(()) => {
+            *app
+                .state
+                .settings
+                .write()
+                .unwrap_or_else(|error| error.into_inner()) = settings;
             app.state.reload();
+            app.pool.refresh_guards(&app.state, limits_changed);
             app.log("settings", "INFO", &format!("设置已保存: {}", applied.join(", ")));
             json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
         }
@@ -814,7 +750,12 @@ async fn accounts_product(app: &std::sync::Arc<App>, req: Request<Incoming>) -> 
         }
     }
     let now = crate::state::now_epoch();
-    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    let accounts: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| account_view(app, a, now))
+        .collect();
     json_resp(StatusCode::OK, &json!({"ok": true, "product": product, "changed": changed, "accounts": accounts}))
 }
 
@@ -979,7 +920,12 @@ async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
     }
     if dry_run {
         let now = crate::state::now_epoch();
-        let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+        let accounts: Vec<Value> = app
+            .state
+            .accounts_snapshot()
+            .iter()
+            .map(|a| account_view(app, a, now))
+            .collect();
         return json_resp(
             StatusCode::OK,
             &json!({"dryRun": true, "imported": imported, "overwritten": overwritten,
@@ -988,7 +934,12 @@ async fn accounts_import(app: &std::sync::Arc<App>, req: Request<Incoming>) -> R
     }
     app.state.reload();
     let now = crate::state::now_epoch();
-    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| account_view(a, now)).collect();
+    let accounts: Vec<Value> = app
+        .state
+        .accounts_snapshot()
+        .iter()
+        .map(|a| account_view(app, a, now))
+        .collect();
     app.log(
         "accounts",
         "INFO",
@@ -1072,7 +1023,7 @@ async fn add_api_key(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp 
         .accounts_snapshot()
         .into_iter()
         .find(|a| a.uid() == uid)
-        .map(|a| account_view(&a, crate::state::now_epoch()))
+        .map(|a| account_view(app, &a, crate::state::now_epoch()))
         .unwrap_or(Value::Null);
     json_resp(
         StatusCode::OK,

@@ -24,19 +24,20 @@ fn query_value(req: &Request<Incoming>, name: &str) -> String {
 pub fn accounts(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realm = crate::http::requested_realm(req, &app.state.current_realm());
     let now = crate::state::now_epoch();
+    let usable = crate::pool::count_ready(app, &realm, None);
     let list: Vec<Value> = app
         .state
         .accounts_snapshot()
         .iter()
         .filter(|account| realm == "all" || account.realm() == realm)
-        .map(|account| crate::panel::account_view(account, now))
+        .map(|account| crate::panel::account_view(app, account, now))
         .collect();
     json_resp(
         StatusCode::OK,
         &json!({
             "accounts": list,
             "storage": app.state.accounts_dir_name(),
-            "usable": app.state.ready_count(),
+            "usable": usable,
         }),
     )
 }
@@ -95,7 +96,7 @@ pub async fn tasks(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         &json!({
             "tasks": tasks,
             "summary": summary,
-            "account": crate::panel::account_view(account, crate::state::now_epoch()),
+            "account": crate::panel::account_view(app, account, crate::state::now_epoch()),
             "accounts": account_list,
         }),
     )
