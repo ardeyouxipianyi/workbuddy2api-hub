@@ -27,10 +27,7 @@ PROTOCOL_TODO = {
     "GET /v1/balance-summary",
 }
 PANEL_TODO = {
-    "/accounts", "/settings", "/scheduler", "/tasks", "/agents",
-    "/agents/available", "/agents/model-selection", "/pricing", "/updates",
-    "/usage", "/usage/recent", "/usage/perf", "/usage/analytics",
-    "/usage/by-account", "/usage/timeseries", "/usage/remaining",
+    "/pricing", "/updates",
 }
 
 
