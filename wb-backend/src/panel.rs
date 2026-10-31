@@ -141,6 +141,8 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             StatusCode::OK,
             &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
         ),
+        (&Method::GET, "/admin/backend/status") => crate::launcher::status(app).await,
+        (&Method::POST, "/admin/backend") => crate::launcher::switch(app, req).await,
         (&Method::GET, "/accounts") => accounts(app),
         (&Method::GET, "/settings") => settings(app),
         (&Method::GET, "/usage") => usage(app),

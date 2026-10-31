@@ -11,6 +11,7 @@ mod health;
 mod credits;
 mod identity;
 mod http;
+mod launcher;
 mod models;
 mod activity;
 mod agents;
