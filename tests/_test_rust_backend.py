@@ -22,10 +22,8 @@ BINARY = next((p for p in CANDIDATES if os.path.exists(p)), None)
 
 #: 明知还没移植的项。列在这里的东西不会让用例红，但**已经对上了就必须删掉**
 #: （用例会报「把它们从 *_TODO 里删掉」），免得这份清单慢慢变成永远为真的假话。
-PROTOCOL_TODO = {
-    "completions.plain", "messages.plain", "messages.count",
-    "GET /v1/balance-summary",
-}
+# 协议面已经全绿；这张表留着给下一批缺口用，空着就说明一条都不欠。
+PROTOCOL_TODO = set()
 PANEL_TODO = {
     "/pricing", "/updates",
 }

@@ -13,6 +13,15 @@ use serde_json::{json, Value};
 
 use crate::{auth, health, models, App};
 
+mod anthropic;
+mod anthropic_content;
+mod anthropic_sse;
+mod anthropic_stream;
+mod anthropic_translate;
+mod balance;
+mod completions;
+mod protocol;
+
 /// Client address retained past hyper's connection layer for local-only routes.
 #[derive(Clone, Copy)]
 pub struct PeerAddr(pub std::net::IpAddr);
@@ -92,11 +101,22 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
             Ok(_) => models::list(&app, &req).await,
             Err(resp) => resp,
         },
+        (&Method::GET, "/v1/balance-summary") => match protocol::authorize(&app, &req) {
+            Ok(identity) => balance::summary(&app, &req, &identity),
+            Err(()) => protocol::openai_auth_error(&app),
+        },
         (&Method::POST, "/v1/chat/completions") | (&Method::POST, "/chat/completions") => {
             match require_auth(&app, &req) {
                 Ok(key_id) => crate::chat::completions(&app, req, key_id).await,
                 Err(resp) => resp,
             }
+        }
+        (&Method::POST, "/v1/completions") => match protocol::authorize(&app, &req) {
+            Ok(identity) => completions::handle(&app, req, identity).await,
+            Err(()) => protocol::openai_auth_error(&app),
+        },
+        (&Method::POST, "/v1/messages") | (&Method::POST, "/v1/messages/count_tokens") => {
+            anthropic::handle(&app, req).await
         }
         (&Method::POST, "/v1/responses") | (&Method::POST, "/responses") => {
             match require_auth(&app, &req) {
@@ -105,7 +125,14 @@ pub async fn route(app: Arc<App>, req: Request<Incoming>) -> Resp {
             }
         }
         (&Method::OPTIONS, _) => text_resp(StatusCode::NO_CONTENT, ""),
-        (_, "/health") | (_, "/v1/models") | (_, "/v1/chat/completions") | (_, "/v1/responses") => {
+        (_, "/health")
+        | (_, "/v1/models")
+        | (_, "/v1/balance-summary")
+        | (_, "/v1/chat/completions")
+        | (_, "/v1/completions")
+        | (_, "/v1/messages")
+        | (_, "/v1/messages/count_tokens")
+        | (_, "/v1/responses") => {
             error_resp(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
         _ => match crate::panel::handle(&app, req).await {
