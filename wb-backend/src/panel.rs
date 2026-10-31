@@ -193,6 +193,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             json_resp(StatusCode::OK, &json!({"ok": true, "msg": "已触发巡检保活", "result": out}))
         }
         (&Method::POST, "/tasks/run") => tasks_run(app, req).await,
+        (&Method::POST, "/accounts/daily-chat") => daily_chat(app, req).await,
         (&Method::POST, "/tasks/travel") => tasks_travel(app, req).await,
         (&Method::POST, "/tasks/claim") => tasks_claim(app, req).await,
         (&Method::POST, "/settings/save") => settings_save(app, req).await,
@@ -1445,5 +1446,19 @@ fn format_stamp(epoch: i64) -> String {
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec
+    )
+}
+
+/// `POST /accounts/daily-chat`：国际版每日活跃（桌面腿 + 网页腿缺口如实回报）。
+async fn daily_chat(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
+    let body = crate::http::body_json(req).await.unwrap_or(json!({}));
+    let uid = body.get("uid").and_then(Value::as_str).unwrap_or("");
+    // `uids` 存在但为空 = 一个都不打；不存在 = 走全部参与任务的账号。
+    let uids: Option<Vec<String>> = body.get("uids").and_then(Value::as_array).map(|l| {
+        l.iter().filter_map(Value::as_str).map(String::from).collect()
+    });
+    json_resp(
+        StatusCode::OK,
+        &crate::tasks::daily_chat(app, uid, uids.as_deref(), "manual").await,
     )
 }

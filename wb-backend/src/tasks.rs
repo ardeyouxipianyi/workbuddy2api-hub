@@ -639,6 +639,126 @@ pub async fn travel(app: &Arc<App>, uid: &str) -> Value {
     json!({"ok": true, "results": results, "msg": summary, "accounts_count": targets.len()})
 }
 
+/// 国际版每日活跃：桌面腿发一句轻量对话；网页通道没移植，所以按设置决定
+/// 是改走「活跃上报」还是如实报失败（`daily_chat_web_fallback_activity`）。
+async fn daily_chat_one(app: &Arc<App>, account: &AccountFile, trigger: &str) -> Value {
+    if account.realm() != "intl" {
+        return json!({"ok": false, "error": "daily chat is only for international accounts"});
+    }
+    let today = crate::state::local_stamp()[..10].to_string();
+    if account.str("lastDailyChat").starts_with(&today) {
+        return json!({"ok": true, "skipped": true, "msg": "今日活跃已完成，跳过本轮"});
+    }
+    let model = std::env::var("WB_DAILY_CHAT_MODEL").unwrap_or_else(|_| "deepseek-v4.1-flash".into());
+    let ctx = crate::identity::Ctx {
+        realm: "intl",
+        uid: &account.uid(),
+        token: &account.access_token(),
+        enterprise_id: None,
+        department: None,
+        session_key: None,
+    };
+    let mut req = app
+        .upstream
+        .post(format!("{}/v2/chat/completions", crate::upstream::chat_upstream_base("intl", &account.str("product"))))
+        .timeout(std::time::Duration::from_secs(20))
+        // 请求体走与正常 chat 同一套改写，否则上游按「缺字段」回 400。
+        .json(&crate::upstream::build_upstream_body(&json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": false,
+            "max_tokens": 10,
+            "reasoning_effort": "none",
+        })));
+    for (k, v) in chat_headers(&ctx) {
+        req = req.header(k, v);
+    }
+    let desktop = req.send().await;
+    if !matches!(desktop, Ok(ref r) if r.status().is_success()) {
+        let detail = match desktop {
+            Ok(r) => format!("HTTP {}", r.status()),
+            Err(e) => e.to_string(),
+        };
+        crate::activity::record(app, &account.uid(), &account.str("nickname"), "intl", "daily_chat", trigger, false, &detail);
+        return json!({"ok": false, "error": format!("桌面腿失败: {detail}")});
+    }
+    let _ = desktop.map(|r| r.bytes());
+
+    // 网页通道（真正计入 30/50 积分的那条腿）没移植：按设置改走活跃上报，
+    // 否则如实报失败——桌面腿跑过不等于当天积分到账。
+    let settings = app.state.settings_snapshot();
+    let want_web = settings.get("daily_chat_web").and_then(Value::as_bool).unwrap_or(false);
+    let fallback = settings
+        .get("daily_chat_web_fallback_activity")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let (ok, msg) = if want_web && !fallback {
+        (false, "桌面腿已发，但网页通道打卡未移植到 Rust 后端（可在设置里打开网页腿失败改走活跃上报）".to_string())
+    } else {
+        (true, if want_web { "桌面腿完成，已按设置改走活跃上报" } else { "每日活跃对话成功完成" }.to_string())
+    };
+    if ok {
+        let mut data = account.data.clone();
+        data.insert("lastDailyChat".into(), json!(crate::state::local_stamp()));
+        let _ = crate::state::write_json_atomic(&account.path, &Value::Object(data));
+        app.state.reload();
+    }
+    crate::activity::record(app, &account.uid(), &account.str("nickname"), "intl", "daily_chat", trigger, ok, &msg);
+    if ok {
+        json!({"ok": true, "msg": msg})
+    } else {
+        json!({"ok": false, "error": msg, "msg": msg})
+    }
+}
+
+/// `POST /accounts/daily-chat`：uid / uids 名单 / 全部参与任务的国际版账号。
+pub async fn daily_chat(app: &Arc<App>, uid: &str, uids: Option<&[String]>, trigger: &str) -> Value {
+    let explicit = !uid.is_empty() && uid != "all";
+    let all: Vec<AccountFile> = app
+        .state
+        .accounts_snapshot()
+        .into_iter()
+        // 点名一个账号就照做（与 Python 的 POOL.get(uid) 一致，不看启停）；
+        // 批量才按「启用 + 参与任务」筛。
+        .filter(|a| {
+            a.realm() == "intl"
+                && !a.is_api_key()
+                && if explicit {
+                    true
+                } else {
+                    a.enabled() && a.data.get("tasksEnabled").and_then(Value::as_bool).unwrap_or(true)
+                }
+        })
+        .collect();
+    let targets: Vec<AccountFile> = if explicit {
+        all.into_iter().filter(|a| a.uid() == uid).collect()
+    } else if let Some(list) = uids {
+        // 空名单就是「一个都不打」，不能回落成全部账号。
+        all.into_iter().filter(|a| list.contains(&a.uid())).collect()
+    } else {
+        all
+    };
+    let mut results = Vec::new();
+    for account in &targets {
+        let res = daily_chat_one(app, account, trigger).await;
+        let mut out = res.clone();
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert("uid".into(), json!(account.uid()));
+            obj.insert("nickname".into(), json!(account.str("nickname")));
+        }
+        app.log(
+            "tasks",
+            if res.get("ok").and_then(Value::as_bool).unwrap_or(false) { "INFO" } else { "WARN" },
+            &format!("账号 [{}] 每日活跃打卡: {}", account.str("nickname"),
+                res.get("msg").or_else(|| res.get("error")).and_then(Value::as_str).unwrap_or("")),
+        );
+        results.push(out);
+    }
+    let now = crate::state::now_epoch();
+    let accounts: Vec<Value> = app.state.accounts_snapshot().iter().map(|a| crate::panel::account_view(a, now)).collect();
+    json!({"results": results, "accounts": accounts})
+}
+
 /// 单独领一个任务（面板行内「领取」按钮）。
 pub async fn claim_one(app: &Arc<App>, account: &AccountFile, code: &str) -> Value {
     let (ok, credit, msg) = claim_task(app, account, code).await;
