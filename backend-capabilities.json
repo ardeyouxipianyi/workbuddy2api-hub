@@ -17,7 +17,7 @@
     },
     "panel": {
       "label": "面板接口与用量聚合",
-      "ported": false
+      "ported": true
     },
     "tasks": {
       "label": "自动化任务与调度器（签到/成长/猫猫/活跃/保活）",

@@ -1,6 +1,6 @@
 [package]
 name = "wb-backend"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Optional Rust backend for workbuddy2api-hub (same HTTP contract as wb_proxy.py)"
 license = "MIT"
