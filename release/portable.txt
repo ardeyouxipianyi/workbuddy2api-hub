@@ -61,6 +61,8 @@ wb_fingerprint.py
 wb_identity.py
 wb_ipintel.py
 wb_logstore.py
+wb_media.py
+wb_media_client.py
 wb_modelsdev.py
 wb_pricing.py
 wb_probes.py

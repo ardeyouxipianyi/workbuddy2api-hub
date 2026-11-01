@@ -74,6 +74,8 @@ import wb_codearts
 import wb_egress
 import wb_ipintel
 import wb_logstore
+import wb_media
+import wb_media_client
 import wb_pricing
 import wb_settings
 import wb_webprompts
@@ -291,6 +293,159 @@ def install_console_close_handler():
 # ---------------------------------------------------------------------------
 UPSTREAM = "https://www.workbuddy.ai"
 CHAT_PATH = "/v2/chat/completions"
+
+#: 媒体路由（生图 / 改图 / 生视频）。与 chat 并列的一层，鉴权走同一个 API Key 门，
+#: 但**不占** chat 的并发槽：一次生图要十几秒、一条视频要几十秒到几分钟。
+MEDIA_POST_PATHS = (
+    "/v1/images/generations", "/images/generations",
+    "/v1/images/edits", "/images/edits",
+)
+#: 媒体请求体上限。改图的输入图是 data URL：8 MB 原图编码后约 10.7 MB，再包一层
+#: JSON 就逼近通用上限（默认 16 MB，还可能被 max_payload_mb 调小），而那条上限是
+#: 给 chat 定的。媒体单独放宽，且**只放宽不收紧**：用户配得更大就随他。
+MEDIA_MAX_PAYLOAD_BYTES = 24 * 1024 * 1024
+#: 一次媒体调用最多换几个账号。与 chat 的重试量级一致；媒体贵，再多就是烧钱。
+MEDIA_ROTATE_MAX = 3
+#: 媒体并发槽。默认 4：生图单张十几秒，一条视频的**提交**只要几秒（轮询在后台 worker），
+#: 所以这里管的是「同时在跑的请求数」，不是「同时在排队的任务数」。
+MEDIA_SLOTS_DEFAULT = 4
+try:
+    MEDIA_SLOTS = max(1, int(os.environ.get("WB_MEDIA_SLOTS", MEDIA_SLOTS_DEFAULT)))
+except ValueError:
+    MEDIA_SLOTS = MEDIA_SLOTS_DEFAULT
+_MEDIA_SLOTS_SEM = threading.BoundedSemaphore(MEDIA_SLOTS)
+_MEDIA_INFLIGHT = 0
+_MEDIA_INFLIGHT_LOCK = threading.Lock()
+_MEDIA_RATE_LOCK = threading.Lock()
+#: (key_id, 分钟桶) → 本分钟内已发的生图次数。只在内存里：重启清零是可接受的，
+#: 它是一道防误循环的闸，不是账本（账本在 usage.jsonl）。
+_MEDIA_RATE = {}
+#: `/v3/config` 的**原始** payload（含 media tags），按区缓存。与 _models_cache 分开：
+#: 后者已被投影成聊天目录，媒体条目在投影里丢了（selectCliModels 不认它们）。
+_catalog_raw = {}
+
+#: 换号可能就过了的失败：都是「这个账号此刻不行」而不是「这个请求不对」。
+MEDIA_RETRYABLE = frozenset(("AUTH", "RATE_LIMIT", "NO_CREDIT", "UPSTREAM"))
+#: 可能已经扣过积分的失败，要进模型级冷却。
+#: REJECTED / INVALID_ARGS / NO_MEDIA_MODEL 不在其中——它们一分钱没花。
+MEDIA_BILLABLE = frozenset(("AUTH", "RATE_LIMIT", "NO_CREDIT", "UPSTREAM",
+                            "EMPTY_RESULT", "TASK_FAILED"))
+
+
+class MediaRateLimited(Exception):
+    """429 的鸭子类型载体：`_rate_limited()` 只读 wait / message / detail。"""
+
+    def __init__(self, wait):
+        Exception.__init__(self, "media rate limit")
+        self.wait = int(wait or 60)
+        self.message = ("媒体请求太频繁：每 Key 每分钟的生图上限已用尽，请 %d 秒后再试"
+                        % self.wait)
+        self.detail = ""
+
+
+def acquire_media_slot():
+    """拿一个媒体并发槽；满员返回 False（调用方回 503 + Retry-After）。"""
+    global _MEDIA_INFLIGHT
+    if not _MEDIA_SLOTS_SEM.acquire(blocking=False):
+        return False
+    with _MEDIA_INFLIGHT_LOCK:
+        _MEDIA_INFLIGHT += 1
+    return True
+
+
+def release_media_slot():
+    global _MEDIA_INFLIGHT
+    with _MEDIA_INFLIGHT_LOCK:
+        if _MEDIA_INFLIGHT > 0:
+            _MEDIA_INFLIGHT -= 1
+    try:
+        _MEDIA_SLOTS_SEM.release()
+    except ValueError:
+        pass
+
+
+def media_inflight():
+    with _MEDIA_INFLIGHT_LOCK:
+        return _MEDIA_INFLIGHT
+
+
+def media_rate_allow(key_id, per_minute, now=None):
+    """每 Key 每分钟的生图次数闸。返回 (是否放行, 建议等待秒数)。
+
+    这是一道「防客户端死循环把额度烧光」的闸，不是账本——账本在 usage.jsonl。
+    所以它只在内存里、重启清零是可接受的；也因此它不允许被环境变量调大。
+    """
+    if per_minute is None or per_minute <= 0:
+        return True, 0
+    now = time.time() if now is None else now
+    bucket = int(now // 60)
+    with _MEDIA_RATE_LOCK:
+        # 顺手清掉上一分钟的桶：进程长跑时这张表不会越滚越大。
+        for existing in list(_MEDIA_RATE):
+            if existing[1] != bucket:
+                del _MEDIA_RATE[existing]
+        slot = (key_id or "", bucket)
+        used = _MEDIA_RATE.get(slot, 0)
+        if used >= per_minute:
+            return False, max(1, int(60 - (now % 60)))
+        _MEDIA_RATE[slot] = used + 1
+    return True, 0
+
+
+def media_budget_ok(account, cost):
+    """派发前的两道预算预检，返回 (是否够, 不够的原因)。
+
+    `ready()` 只回答「这个账号此刻能不能用」，不回答「付不付得起这一次」：
+    一条 5 秒 kling 视频约 128 积分，在 300 积分余额的账号上是 43%；而
+    `credit_limit_blocked()` 只在 `used >= limit` 时才为真，**不预判本次成本**。
+    所以两道都要看：
+
+      1. 缓存余额 `credits["remain"]` —— 余额未知时不拦（与 reserve_blocked 同一口径，
+         否则新装的账号会永远派不出去）
+      2. 日限额余量 `daily_credit_limit - daily_credits_today` —— 不预检的话，
+         媒体单次超额会把账号当日额度顶穿，然后 chat 也被 credit_limit_blocked 摘掉
+    """
+    credits = getattr(account, "credits", None)
+    if isinstance(credits, dict):
+        try:
+            remain = float(credits.get("remain"))
+        except (TypeError, ValueError):
+            remain = None
+        if remain is not None and remain < cost:
+            return False, "缓存余额 %g 积分 < 本次预估 %g" % (remain, cost)
+    try:
+        limit = int(getattr(account, "daily_credit_limit", 0) or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit > 0:
+        used = getattr(account, "daily_credits_today", None)
+        try:
+            used = float(used)
+        except (TypeError, ValueError):
+            used = None
+        if used is not None:
+            headroom = limit - used
+            if headroom < cost:
+                return False, ("今日额度剩 %g 积分 < 本次预估 %g"
+                               % (max(0.0, headroom), cost))
+    return True, ""
+
+
+def read_catalog_dump(realm):
+    """冷启动时从留档副本读 `/v3/config` 原文；读不到返回 None。
+
+    `catalog/README.txt` 原先写着「Nothing reads it back」。媒体目录是第一个真的
+    会读它的消费者（该文件的说明已同步更新）：内存缓存 `_catalog_raw` 只在成功拉取
+    后才有，重启后的第一分钟要靠这份副本，否则一次生图会先白白多打一次上游。
+    """
+    try:
+        path = catalog_cache_path(realm)
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
 MODELS_PATH = "/v2/enterprises/personal/models"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -843,7 +998,7 @@ def _best_cached_tokens(usage):
 
 def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_ms=None, fp=None,
                 account=None, outcome="completed", key=None, effort=None,
-                requested_model=None, realm=None):
+                requested_model=None, realm=None, kind="chat"):
     """Record one finished request as exactly one JSONL row.
 
     A request without a usage block still gets a row (flagged usage_missing):
@@ -873,6 +1028,9 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         "model": model,
         "stream": bool(stream),
         "outcome": outcome,
+        # 请求类型：chat / image / video。默认 chat，旧调用点一个字不用改；
+        # 旧行没有这个字段，读的一侧按 chat 处理（row.get("kind", "chat")）。
+        "kind": kind,
         "elapsed_ms": elapsed_ms,
         "ttft_ms": ttft_ms,
         "gen_ms": gen_ms,
@@ -901,8 +1059,13 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     # The price policy this request is measured against, stored as a reference
     # so the table can be de-duplicated and swept. A row written before the
     # table existed has no reference and falls back to the timeline.
-    row["cost_policy"] = ("codearts:unpriced" if realm == "codearts"
-                          else wb_pricing.current_policy_id(model))
+    if kind != "chat":
+        # 媒体模型不在 chat 价目表里，current_policy_id() 会给一个 chat 的默认策略，
+        # 那会让「按价目表统计」把媒体请求算进某个 chat 策略的样本里。
+        row["cost_policy"] = "media"
+    else:
+        row["cost_policy"] = ("codearts:unpriced" if realm == "codearts"
+                              else wb_pricing.current_policy_id(model))
     # Only when the request had one: the panel shows a chip for rows that carry
     # the field, and a model without reasoning controls has nothing to report.
     if effort:
@@ -923,7 +1086,13 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         key_tag = f" key={key_label(key)}" if key else ""
         speed_tag = f" {row.get('tokens_per_sec', 0)}t/s" if row.get("tokens_per_sec") else ""
         miss_tag = " usage=missing" if usage_missing else ""
-        log(f"chat done: model={model}{acc_tag}{key_tag}{dur} tokens={t_tokens} (in={fields.get('prompt_tokens',0)} out={fields.get('completion_tokens',0)}){speed_tag}{miss_tag}", tag="chat")
+        if kind == "chat":
+            log(f"chat done: model={model}{acc_tag}{key_tag}{dur} tokens={t_tokens} (in={fields.get('prompt_tokens',0)} out={fields.get('completion_tokens',0)}){speed_tag}{miss_tag}", tag="chat")
+        else:
+            # 媒体请求没有 token 概念，日志行只说"谁的哪个模型、花了多少、用多久"，
+            # 并用 kind 当 tag，这样「运行日志」页能单独筛出媒体。
+            credit_tag = (" %.2f 积分" % fields["credit"]) if fields.get("credit") else ""
+            log(f"{kind} done: model={model}{acc_tag}{key_tag}{dur}{credit_tag}", tag=kind)
     except Exception:
         pass
     return row
@@ -10317,6 +10486,12 @@ def runtime_settings_view():
         "account_inflight": account_inflight_snapshot(),
         "affinity_stable_key_enabled":
             wb_settings.affinity_stable_key_enabled(ACCOUNTS_DIR),
+        # 媒体能力（生图 / 生视频）。默认关；面板把它读回去，才知道开关该画在哪一格。
+        "media": wb_settings.media_config(ACCOUNTS_DIR),
+        "media_limits": dict(wb_settings.MEDIA_LIMITS),
+        "media_minimums": dict(wb_settings.MEDIA_MINIMUMS),
+        "media_realms": list(wb_settings.MEDIA_REALMS),
+        "media_identities": list(wb_settings.MEDIA_IDENTITIES),
         "log_db_enabled": wb_settings.log_db_enabled(ACCOUNTS_DIR),
         "log_db_max_rows": wb_settings.log_db_max_rows(ACCOUNTS_DIR),
         "log_db_max_days": wb_settings.log_db_max_days(ACCOUNTS_DIR),
@@ -11495,6 +11670,10 @@ def fetch_remote_product_config(realm):
             wb_tiers.ingest(realm, payload)
             # 成功副本落盘留档（catalog/，纯存档；见 persist_remote_catalog）。
             persist_remote_catalog(realm, payload)
+            # 顺手留一份原始 payload：媒体目录要从 data.models[].tags 里投影，
+            # 而聊天目录那一步会把媒体条目丢掉。留内存（5 分钟 TTL 与目录缓存一致）
+            # 比 dsh 插件再发一次 /v3/config 省一次往返。
+            _catalog_raw[realm] = payload
             return parsed
         last = "empty catalogue"
     log("remote catalog: %s fetch failed (%s)" % (realm, last))
@@ -19058,6 +19237,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_v1_balance_summary()
         if path in ("/v1/models", "/models"):
             return self._get_v1_models()
+        if path in ("/v1/media/models", "/media/models"):
+            # 媒体模型清单（含 videoGeneration 原样）。**不进 /v1/models**：
+            # 那个清单是给聊天客户端用的，塞进媒体模型会让客户端拿它去对话。
+            return self._get_media_models(query)
         if path in ("/usage", "/v1/usage"):
             return self._get_v1_usage(query)
         if path == "/usage/recent":
@@ -19198,6 +19381,16 @@ class Handler(BaseHTTPRequestHandler):
             # CodeArts 只是子字段：它掉线不能把整体 /health 变红。
             info["codearts"] = {"configured": False, "ok": False,
                                 "error": str(exc)[:200]}
+        # 媒体能力：`/health` 是运维第一眼看的地方，早给比晚给好。队列深度等视频
+        # 任务表落地后再补（生图是同步请求，没有队列可报）。
+        media_cfg = wb_settings.media_config(ACCOUNTS_DIR)
+        info["media"] = {
+            "enabled": media_cfg["enabled"],
+            "realm": media_cfg["realm"],
+            "identity": media_cfg["identity"],
+            "slots": MEDIA_SLOTS,
+            "inflight": media_inflight(),
+        }
         if self._key_ok():
             info.update({
                 "uid": rep.uid if rep else None,
@@ -19864,6 +20057,336 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._error(400, "invalid JSON body", "invalid_request_error")
             return None
+    # ------------------------------------------------------------ 媒体（生图 / 生视频）
+
+    def _payload_or_error_for_media(self):
+        """媒体路由的体上限：**不小于** 24 MB，也不小于用户配置的通用上限。
+
+        只放宽不收紧：改图的输入图是 data URL，8 MB 原图编码后约 10.7 MB，而通用
+        上限默认 16 MB、还可能被 `max_payload_mb` 调小——那是给 chat 定的尺子。
+        """
+        configured = wb_settings.max_payload_mb(ACCOUNTS_DIR)
+        generic = configured * 1024 * 1024 if configured is not None else MAX_PAYLOAD_BYTES
+        limit = max(generic, MEDIA_MAX_PAYLOAD_BYTES)
+        try:
+            return self._read_payload(max_bytes=limit, allow_list=False)
+        except BodyTooLarge as exc:
+            self.close_connection = True
+            self._body_consumed = True
+            self._error(413, "payload too large (%d bytes > %d limit)" % (exc.length, limit),
+                        "invalid_request_error")
+            return None
+        except BadJSON:
+            self._error(400, "invalid JSON body", "invalid_request_error")
+            return None
+
+    def _media_error(self, exc):
+        """把 MediaError 翻成 HTTP 响应。
+
+        状态码的分界是「谁的错」：**客户端的错回 4xx，账号 / 上游的错回 5xx**。
+        把「上游账号积分不足」报成 4xx，会让客户端以为自己的请求写错了而不再重试。
+        """
+        mapping = {
+            "INVALID_ARGS": (400, "invalid_request_error"),
+            "NO_MEDIA_MODEL": (400, "invalid_request_error"),
+            "REJECTED": (400, "invalid_request_error"),
+            "NO_ROUTE": (404, "invalid_request_error"),
+            "NO_CREDIT": (402, "insufficient_quota"),
+            "RATE_LIMIT": (429, "rate_limit_error"),
+            "AUTH": (502, "server_error"),
+            "UPSTREAM": (502, "server_error"),
+            "EMPTY_RESULT": (502, "server_error"),
+            "COOLDOWN": (429, "rate_limit_error"),
+        }
+        status, err_type = mapping.get(exc.code, (502, "server_error"))
+        message = exc.message or exc.code
+        if exc.code in ("REJECTED", "INVALID_ARGS", "NO_MEDIA_MODEL"):
+            # 这三类一分钱没花，客户端可以改完参数立刻重来——把这句话说出来，
+            # 否则对方会以为要等冷却窗口。
+            message += "（本次未扣积分，改完参数可立即重试）"
+        # 不调 record_error()：它是按"模型名"记账的，媒体没有对应的聊天模型，
+        # 塞一个假模型名会污染按模型的错误率统计。这里只写一行带 tag 的运行日志。
+        log("media error: HTTP %d %s" % (status, message), tag="media")
+        return self._error(status, message, err_type)
+
+    def _media_config(self):
+        return wb_settings.media_config(ACCOUNTS_DIR)
+
+    def _media_realm(self, config):
+        """这次媒体请求走哪个出口：Key 绑定的出口优先，其次面板配置。"""
+        bound = self._key_realm()
+        if bound:
+            if bound != config["realm"]:
+                raise wb_media.MediaError(
+                    "INVALID_ARGS",
+                    "本 Key 绑定在 %s 出口，而媒体能力配置在 %s 出口；"
+                    "请换对应出口的 Key，或在设置页把媒体出口改成 %s"
+                    % (bound, config["realm"], bound))
+            return bound
+        return config["realm"]
+
+    def _media_prepare(self, path, payload, config):
+        """校验开关、挑出模型、拼好请求体。**一个字节都不发**。
+
+        放在这里而不是散在路由里，是因为「参数不对」和「上游拒绝」必须能分开：
+        前者一分钱没花、不进冷却，后者可能已经扣过积分。
+        """
+        if not config["enabled"]:
+            # 关着就是不存在：404 而不是 403，少一个探测面。
+            raise wb_media.MediaError("NO_ROUTE", "not found")
+        realm = self._media_realm(config)
+        kind = "edit" if path in ("/v1/images/edits", "/images/edits") else "generate"
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or prompt.strip() == "":
+            raise wb_media.MediaError("INVALID_ARGS", "prompt 必填，且必须是非空字符串")
+        models = self._media_catalog(realm)
+        tag = (wb_media.TAG_IMAGE_TO_IMAGE if kind == "edit"
+               else wb_media.TAG_TEXT_TO_IMAGE)
+        model = wb_media.pick_model(models, payload.get("model"), tag)
+        size = wb_media.check_size(payload.get("size"))
+        count = payload.get("n")
+        if count is None or count == "":
+            count = 1
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            raise wb_media.MediaError("INVALID_ARGS", "n 必须是整数 1")
+        if kind == "edit":
+            images = self._media_images(payload)
+            if not images:
+                raise wb_media.MediaError("INVALID_ARGS", "改图要带 image")
+            body = wb_media.build_edit_body(model["id"], prompt, size, images)
+            mode = "edit"
+        else:
+            body = wb_media.build_image_body(model["id"], prompt, size, count)
+            mode = "generate"
+        return {"realm": realm, "kind": kind, "mode": mode,
+                "model": model, "body": body, "size": size}
+
+    def _media_images(self, payload):
+        """把客户端给的输入图归一成 data URL 数组。
+
+        只接受 data URL 与公网 http(s)：本地路径在 `classify_image_input` 里就被拒，
+        公网 URL 由 client 层过公网地址校验并禁掉 3xx 跟随。见 docs/MEDIA-IMPL.md §13.1。
+        """
+        raw = payload.get("image")
+        values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+        return [wb_media_client.resolve_input_image(value) for value in values]
+
+    def _media_catalog(self, realm):
+        """该区的媒体模型清单：内存 → 留档副本 → 现拉一次。"""
+        payload = _catalog_raw.get(realm)
+        if payload is None:
+            payload = read_catalog_dump(realm)
+            if payload is not None:
+                _catalog_raw[realm] = payload
+        if payload is None:
+            account = POOL.representative(realm=realm) if POOL else None
+            if account is None:
+                raise wb_media.MediaError("NO_ROUTE", "该区没有可用账号，读不到媒体目录")
+            payload = wb_media_client._get_json(
+                account, wb_media_client.CONFIG_PATH,
+                wb_media_client.CONFIG_TIMEOUT_SECONDS)
+            _catalog_raw[realm] = payload
+        models = wb_media.media_models(payload)
+        if not models:
+            raise wb_media.MediaError(
+                "NO_MEDIA_MODEL",
+                "该区目录里没有任何媒体模型（该账号可能没有生图权限）")
+        return models
+
+    def _pick_media_account(self, realm, model_id, cost_hint, excluded):
+        """挑一个账号跑这次媒体请求：四道闸门全过才派发。
+
+        与 chat 共用同一个 `POOL.pick()`，所以面板权重、临期积分优先、轮转、账号级
+        熔断全都自动继承（`note_error(model=…)` 只写模型级冷却，画图失败不连累 chat）。
+        这里补的是 `pick()` 不知道、但 chat 在 `open_upstream()` 里做了的四件事：
+        派发前刷新护栏、连坐暂停、Key 的账号白名单、钉住的账号。
+        """
+        apply_daily_guards()
+        apply_reserve_credits()
+        hold = restriction_hold_remaining(realm)
+        if hold > 0:
+            # 整池暂停期间一个上游请求都不发：继续打只会把同设备的其它账号送走。
+            raise wb_media.MediaError(
+                "RATE_LIMIT",
+                "上游账号级限制生效中（整池暂停），%d 秒后再试" % (int(hold) + 1))
+        allowed = self._key_allowed_accounts()
+        pinned = pinned_account()
+        if pinned is not None:
+            if allowed is not None and pinned.uid not in allowed:
+                raise wb_media.MediaError("AUTH", "钉住的账号不在本 Key 的绑定范围内")
+            if pinned.realm != realm:
+                raise wb_media.MediaError(
+                    "INVALID_ARGS",
+                    "钉住的账号属于 %s 出口，媒体只走 %s" % (pinned.realm, realm))
+            if not pinned.ready(model=model_id):
+                raise wb_media.MediaError(
+                    "UPSTREAM", "钉住的账号此刻不可用：%s"
+                    % pinned.unavailable_reason(model=model_id))
+            ok, reason = media_budget_ok(pinned, cost_hint)
+            if not ok:
+                raise wb_media.MediaError(
+                    "NO_CREDIT", "钉住的账号付不起这次调用：%s" % reason)
+            return pinned
+        skipped = []
+        for _ in range(4):
+            account = POOL.pick(realm=realm, exclude=excluded, model=model_id,
+                                allowed=allowed)
+            if account is None:
+                if skipped:
+                    # 有账号、但都被预算刷掉了：说清是谁差多少，别让人以为是池子空了。
+                    raise wb_media.MediaError(
+                        "NO_CREDIT",
+                        "没有账号付得起这次调用（预估 %g 积分）：%s"
+                        % (cost_hint, "；".join(skipped)))
+                raise wb_media.MediaError(
+                    "UPSTREAM",
+                    "没有可用账号跑这次媒体请求%s"
+                    % pool_unavailable_detail(realm, model_id, allowed))
+            ok, reason = media_budget_ok(account, cost_hint)
+            if ok:
+                return account
+            skipped.append("%s %s" % ((account.uid or "?")[:8], reason))
+            excluded.add(account.uid)
+        raise wb_media.MediaError(
+            "NO_CREDIT",
+            "没有账号付得起这次调用（预估 %g 积分）：%s"
+            % (cost_hint, "；".join(skipped)))
+
+    def _media_note_failure(self, account, exc, model_id):
+        """记一次媒体失败。**只有真花过钱的失败才冷却**，且冷却只作用于这个模型。"""
+        if exc.code in ("REJECTED", "INVALID_ARGS", "NO_MEDIA_MODEL"):
+            return                      # 没建任务、没扣钱：冷却只会让人以为工具坏了
+        if exc.code == "AUTH" and restriction_is_account_level(exc.detail or exc.message):
+            # 账号级风控（403 / 11140）：整池暂停，且**绝不换号**——换号继续打同一台
+            # 设备正是这条红线要防的事。
+            account.note_restricted(detail=exc.detail or exc.message)
+            _persist_restriction(account)
+            note_account_restriction(account.realm, account.uid)
+            return
+        if exc.code in MEDIA_BILLABLE:
+            # model=… 让冷却只作用于这个媒体模型：note_error 命中这个分支后直接
+            # return，账号级的 cooldown_until 一个字不动，所以画图失败不会连累 chat。
+            account.note_error(exc.message, cooldown=60, model=model_id,
+                               detail=exc.detail or "")
+
+    def _media_note_success(self, account, model_id, credit, kind, started_at, realm):
+        account.note_success(model=model_id)
+        record_usage(
+            model_id,
+            {"credit": credit} if credit is not None else {},
+            stream=False,
+            elapsed_ms=(time.time() - started_at) * 1000.0,
+            account=account.uid, outcome="completed", key=self._key_id(),
+            realm=realm, kind=kind)
+
+    def _handle_media_post(self, path, payload):
+        """媒体 POST 的入口：开关 → 参数 → 限流 → 并发槽 → 选号 → 发请求 → 记账。"""
+        config = self._media_config()
+        try:
+            prepared = self._media_prepare(path, payload, config)
+        except wb_media.MediaError as exc:
+            return self._media_error(exc)
+
+        allowed_now, wait = media_rate_allow(self._key_id(), config["image_max_per_minute"])
+        if not allowed_now:
+            return self._rate_limited(MediaRateLimited(wait))
+
+        if not acquire_media_slot():
+            return self._error(
+                503, "media slots busy (%d in flight); retry shortly" % MEDIA_SLOTS,
+                "server_error")
+        cost_hint = wb_media.estimate_cost("image")
+        excluded = set()
+        tried = 0
+        try:
+            while tried < MEDIA_ROTATE_MAX:
+                try:
+                    account = self._pick_media_account(
+                        prepared["realm"], prepared["model"]["id"], cost_hint, excluded)
+                except wb_media.MediaError as exc:
+                    return self._media_error(exc)
+                started_at = time.time()
+                try:
+                    if prepared["kind"] == "edit":
+                        outcome = wb_media_client.edit_image(account, prepared["body"])
+                    else:
+                        outcome = wb_media_client.generate_image(account, prepared["body"])
+                except wb_media.MediaError as exc:
+                    self._media_note_failure(account, exc, prepared["model"]["id"])
+                    # 账号级风控（403 / code 11140）**绝不换号**：换号继续打同一台
+                    # 设备会把同设备的其它账号一起送走，那是仓库明写的红线。
+                    restricted = (exc.code == "AUTH" and restriction_is_account_level(
+                        exc.detail or exc.message))
+                    if (not restricted and exc.code in MEDIA_RETRYABLE
+                            and tried + 1 < MEDIA_ROTATE_MAX):
+                        excluded.add(account.uid)
+                        tried += 1
+                        continue
+                    return self._media_error(exc)
+                self._media_note_success(account, prepared["model"]["id"],
+                                         outcome.get("credit"), "image",
+                                         started_at, prepared["realm"])
+                return self._json(200, self._media_image_body(outcome, prepared))
+            return self._error(502, "media request failed on every account",
+                               "server_error")
+        finally:
+            release_media_slot()
+
+    def _media_image_body(self, outcome, prepared):
+        """生图响应按 OpenAI Images 的形状回：`{created, data:[{url|b64_json}]}`。"""
+        item = {}
+        if outcome.get("url") is not None:
+            item["url"] = outcome["url"]
+        if outcome.get("b64") is not None:
+            # 上游在「其它」模型分支上按 b64_json 回：直接以 OpenAI 的 `b64_json`
+            # 转给客户端，不落盘、不把几 MB 的 base64 写进日志。
+            item["b64_json"] = outcome["b64"]
+        if outcome.get("revised_prompt") is not None:
+            item["revised_prompt"] = outcome["revised_prompt"]
+        body = {
+            "created": outcome.get("created") or int(time.time()),
+            "model": prepared["model"]["id"],
+            "mode": prepared["mode"],
+            "data": [item],
+        }
+        if outcome.get("credit") is not None:
+            body["credit"] = outcome["credit"]
+        if item.get("url") is not None:
+            body["hint"] = "COS 签名 URL 约 24 小时失效；要长期保留请及时下载。"
+        return body
+
+    def _get_media_models(self, query):
+        """`GET /v1/media/models`：该区有哪些媒体模型、各自约束是什么。
+
+        与 `/v1/models` 分开是刻意的：那个清单是给聊天客户端用的，把生图模型塞进去
+        客户端会拿它去对话。这里返回**未经投影**的媒体条目，`videoGeneration` 原样
+        带走，调用方据此知道自己能要几秒、哪些分辨率。开关关着也能查——配置之前
+        先看看有什么，正是这个接口存在的理由之一。
+        """
+        if not self._authorized():
+            return
+        config = self._media_config()
+        realm = (query.get("realm") or [None])[0] or config["realm"]
+        if realm not in wb_settings.MEDIA_REALMS:
+            return self._error(400, "realm must be one of %s"
+                               % ", ".join(wb_settings.MEDIA_REALMS),
+                               "invalid_request_error")
+        tag = (query.get("tag") or [None])[0]
+        try:
+            models = self._media_catalog(realm)
+        except wb_media.MediaError as exc:
+            return self._media_error(exc)
+        if tag:
+            models = [model for model in models if tag in model.get("tags", ())]
+        return self._json(200, {
+            "realm": realm,
+            "enabled": config["enabled"],
+            "identity": config["identity"],
+            "models": models,
+        })
+
     def _anthropic_route(self):
         """True when the request path is one of the Anthropic Messages routes.
 
@@ -20568,6 +21091,20 @@ class Handler(BaseHTTPRequestHandler):
             wb_settings.set_quota_scan_models(ACCOUNTS_DIR, raw_models)
             reply["quota_scan_models_saved"] = len(
                 wb_settings.quota_scan_models(ACCOUNTS_DIR))
+        if "media" in payload:
+            # 媒体设置的写入点。**这张白名单是必须的**：_handle_settings_save 只认
+            # 显式列出的键，未列出的键会被静默忽略——前端会回「保存成功」而实际
+            # 什么都没落盘，那是这类改动最难查的一种坏法。
+            raw = payload.get("media")
+            if not isinstance(raw, dict):
+                return self._error(400, "media must be an object",
+                                   "invalid_request_error")
+            try:
+                patch = wb_settings.validate_media_patch(raw)
+            except ValueError as exc:
+                return self._error(400, str(exc), "invalid_request_error")
+            wb_settings.set_media_config(ACCOUNTS_DIR, patch)
+            reply["media"] = wb_settings.media_config(ACCOUNTS_DIR)
         if "codearts" in payload:
             raw = payload.get("codearts")
             if not isinstance(raw, dict):
@@ -22815,11 +23352,15 @@ class Handler(BaseHTTPRequestHandler):
             or path.startswith("/logs")
             or path.startswith("/codearts")
         )
-        if not is_account_route and not is_messages_route and path not in (
-                "/v1/chat/completions", "/chat/completions",
-                "/v1/completions", "/completions",
-                "/v1/responses", "/responses",
-                "/v1/responses/compact", "/responses/compact"):
+        # 媒体路由（生图 / 改图 / 生视频）与 chat 并列：同一个 API Key 门，但不占
+        # chat 的并发槽，也不进 chat 的模型别名与 body 改写。不在这行放行，它们
+        # 会连"开关关着就 404"都走不到——直接被这里判成 not found。
+        is_media_route = path in MEDIA_POST_PATHS
+        if not is_account_route and not is_messages_route and not is_media_route                 and path not in (
+                    "/v1/chat/completions", "/chat/completions",
+                    "/v1/completions", "/completions",
+                    "/v1/responses", "/responses",
+                    "/v1/responses/compact", "/responses/compact"):
             return self._error(404, "not found", "invalid_request_error")
         if is_messages_route:
             if not self._key_ok():
@@ -22838,7 +23379,12 @@ class Handler(BaseHTTPRequestHandler):
                 "Enable it in the Settings panel or set WB_ENABLE_ANTHROPIC_MESSAGES=1 "
                 "to opt in at your own risk (see issue #367).",
                 "invalid_request_error")
-        payload = self._payload_or_error(allow_list=(path == "/accounts/import"))
+        if is_media_route:
+            # 改图的输入图是 data URL，8 MB 原图编码后约 10.7 MB；通用上限
+            # （默认 16 MB，还可能被 max_payload_mb 调小）会把一次合法请求判成 413。
+            payload = self._payload_or_error_for_media()
+        else:
+            payload = self._payload_or_error(allow_list=(path == "/accounts/import"))
         if payload is None:
             return
         if is_account_route:
@@ -22849,6 +23395,8 @@ class Handler(BaseHTTPRequestHandler):
             aliases = {}
         _apply_model_aliases(payload, aliases)
         _apply_background_model_alias(payload)
+        if is_media_route:
+            return self._handle_media_post(path, payload)
         # Check per-key concurrency limit (#359)
         key_ok, cur_key_conc, max_key_conc = _acquire_key_slot(self.key_entry)
         if not key_ok:
