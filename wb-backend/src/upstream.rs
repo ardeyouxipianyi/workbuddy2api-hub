@@ -306,13 +306,29 @@ pub async fn chat_stream(
         };
         let mut first_chunk_at: Option<f64> = None;
         let mut broken: Option<String> = None;
+        // 上游沉默时给客户端写 SSE 注释（Python 是 15s 的 SSEHeartbeat）：读上游是阻塞的，
+        // 不心跳的话客户端空闲超时/重试会让界面反复重画「思考」，而且断连后我们还挂在流上。
+        let mut beat = tokio::time::interval(std::time::Duration::from_secs(5));
+        beat.tick().await;
+        let mut last_out = std::time::Instant::now();
         loop {
-            let chunk = match resp.chunk().await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => break,
-                Err(e) => {
-                    broken = Some(format!("upstream stream aborted: {e}"));
-                    break;
+            let chunk = tokio::select! {
+                next = resp.chunk() => match next {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(e) => {
+                        broken = Some(format!("upstream stream aborted: {e}"));
+                        break;
+                    }
+                },
+                _ = beat.tick() => {
+                    if last_out.elapsed() >= std::time::Duration::from_secs(15) {
+                        if tx.send(Ok(Frame::data(Bytes::from_static(b": keepalive\n\n")))).await.is_err() {
+                            return;
+                        }
+                        last_out = std::time::Instant::now();
+                    }
+                    continue;
                 }
             };
             if first_chunk_at.is_none() {
@@ -346,10 +362,11 @@ pub async fn chat_stream(
                     .unwrap_or(false);
                 if has_choices {
                     let out = emitter.rewrite(&frame);
-                    if !out.is_empty()
-                        && tx.send(Ok(Frame::data(Bytes::from(out)))).await.is_err()
-                    {
-                        return;
+                    if !out.is_empty() {
+                        if tx.send(Ok(Frame::data(Bytes::from(out)))).await.is_err() {
+                            return;
+                        }
+                        last_out = std::time::Instant::now();
                     }
                 }
             }

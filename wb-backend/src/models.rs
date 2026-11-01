@@ -173,7 +173,7 @@ pub async fn list(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
     let realm = pinned
         .as_ref()
         .map(crate::state::AccountFile::realm)
-        .unwrap_or_else(|| crate::http::requested_realm(req, &app.state.current_realm()));
+        .unwrap_or_else(|| crate::http::requested_realm(req, &app.state.current_realm(), ""));
     // CodeArts 是活目录（三路上游 + 种子兜底），不走内置快照。
     if realm == "codearts" {
         return crate::codearts::chat::models_response(app).await;

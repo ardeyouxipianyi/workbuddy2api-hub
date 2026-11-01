@@ -219,7 +219,11 @@ pub async fn handle(
     let started = std::time::Instant::now();
     let path = req.uri().path().to_string();
     let pin = crate::keyref::pinned(&req);
-    let realm = crate::http::requested_realm(&req, &app.state.current_realm());
+    let realm = crate::http::requested_realm(
+        &req,
+        &app.state.current_realm(),
+        &crate::auth::bound_realm(&app.state, &key_id),
+    );
     let session = crate::http::session_key_header(req.headers());
     let body = match crate::http::body_json(req).await {
         Ok(v) => v,

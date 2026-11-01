@@ -81,6 +81,25 @@ pub fn supplied(req_headers: &hyper::HeaderMap, query: Option<&str>) -> String {
     String::new()
 }
 
+/// 某个 Key 绑定的出口（`""` = 跟随面板切换）。路由时 Key 的绑定优先于全局开关，
+/// 与 Python `_resolve_realm` 同序（wb_proxy.py:18915：显式 ?realm= > Key > X-Realm > 全局）。
+pub fn bound_realm(state: &State, key_id: &str) -> String {
+    if key_id.is_empty() {
+        return String::new();
+    }
+    let settings = state.settings();
+    settings
+        .get("api_keys")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|list| {
+            list.iter()
+                .find(|entry| entry.get("id").and_then(serde_json::Value::as_str) == Some(key_id))
+                .and_then(|entry| entry.get("realm").and_then(serde_json::Value::as_str))
+                .map(|realm| realm.trim().to_lowercase())
+        })
+        .unwrap_or_default()
+}
+
 /// 返回命中的 key id（写进 usage 行），空串表示「免鉴权放行」。
 pub struct Auth {
     pub required: bool,

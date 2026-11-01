@@ -16,7 +16,11 @@ use crate::App;
 pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String) -> Resp {
     let started = std::time::Instant::now();
     let pin = crate::keyref::pinned(&req);
-    let realm = crate::http::requested_realm(&req, &app.state.current_realm());
+    let realm = crate::http::requested_realm(
+        &req,
+        &app.state.current_realm(),
+        &crate::auth::bound_realm(&app.state, &key_id),
+    );
     let session = crate::http::session_key_header(req.headers());
     let body = match body_json(req).await {
         Ok(v) => v,

@@ -286,7 +286,9 @@ pub fn session_key_body(body: &Value) -> Option<String> {
     None
 }
 
-pub fn requested_realm(req: &Request<Incoming>, current: &str) -> String {
+/// `key_realm` = 本次请求所用 Key 绑定的出口（`""` 表示没绑）；
+/// 优先级与 Python 一致：显式 `?realm=` > Key 绑定 > `X-Realm` > 全局开关。
+pub fn requested_realm<B>(req: &Request<B>, current: &str, key_realm: &str) -> String {
     // `codearts` 也原样放行：rust 还没实现这个出口，明确回「池子里没有可用账号」
     // 比悄悄按当前出口派单诚实（v1.10.0 的第三个 realm）。
     fn accept(value: &str) -> Option<String> {
@@ -300,6 +302,9 @@ pub fn requested_realm(req: &Request<Incoming>, current: &str) -> String {
                 }
             }
         }
+    }
+    if let Some(realm) = accept(key_realm) {
+        return realm;
     }
     if let Some(v) = req.headers().get("x-realm").and_then(|v| v.to_str().ok()) {
         if let Some(realm) = accept(v) {
@@ -377,6 +382,32 @@ mod tests {
     use http_body_util::BodyExt;
 
     use super::*;
+
+    /// Key 绑定的出口要压过全局开关，否则「一把 Key 绑国内、一把绑国际」形同虚设；
+    /// 但显式 `?realm=` 仍然最优先（与 Python 的选择顺序一致）。
+    #[test]
+    fn key_realm_outranks_header_and_current() {
+        let plain = hyper::Request::builder()
+            .uri("/v1/chat/completions")
+            .body(())
+            .unwrap();
+        assert_eq!(requested_realm(&plain, "cn", "intl"), "intl");
+        assert_eq!(requested_realm(&plain, "cn", ""), "cn");
+        let asked = hyper::Request::builder()
+            .uri("/v1/chat/completions?realm=cn")
+            .body(())
+            .unwrap();
+        assert_eq!(requested_realm(&asked, "intl", "intl"), "cn");
+        let mut headered = hyper::Request::builder()
+            .uri("/v1/chat/completions")
+            .body(())
+            .unwrap();
+        headered
+            .headers_mut()
+            .insert("x-realm", hyper::header::HeaderValue::from_static("intl"));
+        assert_eq!(requested_realm(&headered, "cn", "cn"), "cn");
+        assert_eq!(requested_realm(&headered, "cn", ""), "intl");
+    }
 
     #[test]
     fn payload_limit_follows_the_panel_setting() {
