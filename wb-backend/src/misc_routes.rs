@@ -130,12 +130,15 @@ fn file_response(body: Vec<u8>, content_type: &'static str, disposition: String)
     response
 }
 
-/// `GET /logs/export`: the current in-memory ring as a plain-text attachment.
+/// `GET /logs/export`: 面板日志页那 5000 条，纯文本附件（Python 同口径）。
 pub fn logs_export(app: &App) -> Resp {
-    let ring = app
+    let query = crate::logs::Query { limit: 5000, ..Default::default() };
+    let ring: Vec<String> = app
         .logs
-        .lock()
-        .map(|items| items.iter().map(log_line).collect::<Vec<_>>())
+        .query(&query)
+        .get("logs")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(log_line).collect())
         .unwrap_or_default();
     let body = ring.join("\n").into_bytes();
     let filename = export_filename(&crate::state::local_stamp());

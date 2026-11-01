@@ -340,8 +340,15 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             json_resp(StatusCode::OK, &credit_grants(app))
         }
         (&Method::GET, "/logs") => {
-            let ring = app.logs.lock().map(|r| r.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
-            json_resp(StatusCode::OK, &json!({"total": ring.len(), "logs": ring}))
+            // 面板按 `since_id` 增量拉、按 level/tag/search 过滤，还要 mode/stored 文案。
+            let query = crate::logs::parse_query(req.uri().query().unwrap_or(""));
+            let mut body = app.logs.query(&query);
+            body["mode"] = json!(app.logs.mode());
+            if let Some(stats) = app.logs.stats() {
+                body["stored"] = json!(stats["rows"]);
+                body["db_bytes"] = json!(stats["bytes"]);
+            }
+            json_resp(StatusCode::OK, &body)
         }
         (&Method::GET, "/logs/export") => crate::misc_routes::logs_export(app),
         (&Method::POST, "/shutdown") => {
@@ -353,9 +360,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
             json_resp(StatusCode::OK, &json!({"ok": true, "shutting_down": true}))
         }
         (&Method::POST, "/logs/clear") => {
-            if let Ok(mut ring) = app.logs.lock() {
-                ring.clear();
-            }
+            app.logs.clear();
             json_resp(StatusCode::OK, &json!({"ok": true}))
         }
         (&Method::GET, "/settings/reveal") => {
@@ -761,6 +766,9 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
                 key.as_str(),
                 "api_keys" | "deleted_api_key_ids" | "panel_password" | "active_realm"
                     | "update_check_enabled"
+                    // 日志落库四键：老配置里没有它们，但面板要能第一次就打开落库。
+                    | "log_db_enabled" | "log_db_max_rows" | "log_db_max_days"
+                    | "log_db_max_bytes"
             );
         if !known {
             continue;
@@ -782,6 +790,8 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
                 .unwrap_or_else(|error| error.into_inner()) = settings;
             app.state.reload();
             app.pool.refresh_guards(&app.state, limits_changed);
+            // 日志落库的开关与上限改完立即生效（Python 的 apply_log_db_settings）。
+            app.logs.configure_from(&app.state.settings_snapshot());
             app.log("settings", "INFO", &format!("设置已保存: {}", applied.join(", ")));
             json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
         }

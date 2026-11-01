@@ -54,11 +54,16 @@ impl Scheduler {
         let next_slot = effective.first().cloned().unwrap_or_default();
         let logs: Vec<String> = app
             .logs
-            .lock()
+            .query(&crate::logs::Query {
+                limit: 0,
+                tag: "scheduler".to_string(),
+                ..Default::default()
+            })
+            .get("logs")
+            .and_then(Value::as_array)
             .map(|entries| {
                 entries
                     .iter()
-                    .filter(|entry| entry.get("tag").and_then(Value::as_str) == Some("scheduler"))
                     .filter_map(|entry| {
                         Some(format!(
                             "[{}] {}",

@@ -21,6 +21,7 @@ mod models;
 mod activity;
 pub mod agentcfg;
 mod agents;
+mod logs;
 mod misc_routes;
 mod panel;
 mod panel_account;
@@ -111,8 +112,8 @@ pub struct App {
     pub pricing: pricing::Pricing,
     pub scheduler: scheduler::Scheduler,
     pub updates: std::sync::Arc<updates::Manager>,
-    /// 最近 500 条面板/后端事件，`GET /logs` 直接读它（面板「运行日志」页）。
-    pub logs: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    /// 面板「运行日志」页：内存环形缓冲 + 可选 SQLite 落库（见 logs.rs）。
+    pub logs: logs::Logs,
     /// 对话并发闸门（Python 的 `_chat_slots`）：许可 drop 即释放。
     pub slots: slots::Slots,
 }
@@ -121,20 +122,14 @@ impl App {
     /// 记一条运行日志（面板「运行日志」页用；同一条也给 stderr）。
     pub fn log(&self, tag: &str, level: &str, msg: &str) {
         eprintln!("[{tag}] {msg}");
-        let entry = serde_json::json!({
-            "id": crate::sse::hex_token(8),
-            "ts": crate::state::now_epoch(),
-            "time": crate::state::local_stamp(),
-            "level": level,
-            "tag": tag,
-            "msg": msg,
-        });
-        if let Ok(mut ring) = self.logs.lock() {
-            ring.push_back(entry);
-            while ring.len() > 500 {
-                ring.pop_front();
-            }
-        }
+        self.logs.add(msg, Some(level), Some(tag));
+    }
+
+    /// 同 `log`，但不指定级别/模块，交给关键字推断（Python 的 `log()` 默认行为：
+    /// 访问日志、chat 起止这些行本来就只有一个自由文本）。
+    pub fn note(&self, msg: &str) {
+        eprintln!("{msg}");
+        self.logs.add(msg, None, None);
     }
 
     pub fn recorder_path(&self) -> std::path::PathBuf {
@@ -205,11 +200,13 @@ async fn main() -> std::io::Result<()> {
         pricing,
         scheduler: scheduler::Scheduler::default(),
         updates: std::sync::Arc::new(updates::Manager::new(&args.accounts_dir)),
-        logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        logs: logs::Logs::new(args.usage_dir.clone()),
         // `auto` 的上限按就绪账号数算，所以要在状态装好之后才建。
         slots: slots::Slots::from_env(ready_accounts),
     });
     app.pool.refresh_guards(&app.state, false);
+    // 日志落库开关与保留上限来自面板设置（Python 在启动后与每次保存设置时各调一次）。
+    app.logs.configure_from(&app.state.settings_snapshot());
 
     scheduler::spawn(app.clone());
     updates::spawn(app.clone());
@@ -230,10 +227,31 @@ async fn main() -> std::io::Result<()> {
             let io = TokioIo::new(stream);
             let service = service_fn(move |mut req: Request<Incoming>| {
                 let app = app.clone();
+                // 访问日志要在 route 之前取：req 会被交给 handler 吃掉。
+                let method = req.method().as_str().to_string();
+                let path = req
+                    .uri()
+                    .path_and_query()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default();
                 // 对端地址只有 accept 时拿得到：面板登录限流按它分桶，/agents 的
                 // 本机限定也按它判断回环。
                 req.extensions_mut().insert(http::PeerAddr(peer.ip()));
-                async move { Ok::<_, std::convert::Infallible>(http::route(app, req).await) }
+                async move {
+                    let resp = http::route(app.clone(), req).await;
+                    // Python 的 log_message：一行一个请求，面板高频轮询的 200 GET 不记。
+                    let stamp = state::local_stamp();
+                    if let Some(line) = logs::access_line(
+                        &peer.ip().to_string(),
+                        &method,
+                        &path,
+                        resp.status().as_u16(),
+                        &stamp,
+                    ) {
+                        app.note(&line);
+                    }
+                    Ok::<_, std::convert::Infallible>(resp)
+                }
             });
             let _ = hyper::server::conn::http1::Builder::new()
                 .serve_connection(io, service)

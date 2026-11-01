@@ -201,6 +201,13 @@ pub async fn handle(
     let session = session.or_else(|| crate::http::session_key_body(&body));
     let session = session.as_deref();
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    app.note(&format!(
+        "responses: model={} stream={} msgs={} key={}",
+        chat_body.get("model").and_then(Value::as_str).unwrap_or("-"),
+        stream,
+        chat_body.get("messages").and_then(Value::as_array).map_or(0, Vec::len),
+        key_id.get(..8).unwrap_or(&key_id),
+    ));
     app.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let result = if compact {
         // 压缩入口不认固定账号（Python 的 compact 分支也不看 X-Key-Ref）。

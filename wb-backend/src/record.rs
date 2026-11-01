@@ -136,6 +136,31 @@ pub fn record(app: &crate::App, row: Row<'_>) {
         let pct = (cached as f64 * 100.0 / prompt_tokens as f64 * 10.0).round() / 10.0;
         out.insert("cache_hit_pct".into(), json!(pct));
     }
+    // Python 在 record_usage 末尾打这一行；面板日志页按 chat 模块归类的另一半。
+    let duration = row.elapsed_ms.map(|ms| format!(" {ms}ms")).unwrap_or_default();
+    let account = row
+        .account
+        .map(|uid| format!(" acct={}", uid.get(..8).unwrap_or(uid)))
+        .unwrap_or_default();
+    let key = if row.key.is_empty() {
+        String::new()
+    } else {
+        format!(" key={}", row.key.get(..8).unwrap_or(row.key))
+    };
+    let speed = out
+        .get("tokens_per_sec")
+        .and_then(Value::as_f64)
+        .map(|tps| format!(" {tps}t/s"))
+        .unwrap_or_default();
+    let missing = if row.usage.is_none() { " usage=missing" } else { "" };
+    let total = out
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    app.note(&format!(
+        "chat done: model={}{account}{key}{duration} tokens={total} (in={prompt_tokens} out={completion_tokens}){speed}{missing}",
+        row.model
+    ));
     app.recorder.append(&Value::Object(out));
 }
 

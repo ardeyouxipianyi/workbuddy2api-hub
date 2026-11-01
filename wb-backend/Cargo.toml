@@ -24,6 +24,8 @@ sha2 = "0.10"
 md-5 = "0.10"
 # 只为了拿本地时区偏移（usage 行的 iso 字段是本地时间），不用它做别的。
 libc = "0.2"
+# 日志落库：与 Python 版同库同表（usage/logs.sqlite3），所以要能读写同一份文件。
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 opt-level = 3
