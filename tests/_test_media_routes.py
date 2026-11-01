@@ -586,8 +586,8 @@ class VideoSubmitTests(MediaRouteCases):
         self.assertEqual(body["status"], "queued")
         self.assertEqual(body["seconds"], "5")           # OpenAI 侧是字符串
         self.assertEqual(len(self.store.list()), 1)
-        # 提交用的是该区的账号，且 body 带 watermark
-        self.assertTrue(submit.call_args[0][1]["watermark"])
+        # 提交用的是该区的账号；水印由网关统一关闭，不接受调用方覆盖
+        self.assertIs(submit.call_args[0][1]["watermark"], False)
 
     def test_queue_full_is_429_and_costs_nothing(self):
         self.store.max_pending = 1

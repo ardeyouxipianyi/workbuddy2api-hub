@@ -465,11 +465,25 @@ class VideoBodyTests(unittest.TestCase):
     def test_text_to_video_shape(self):
         body = self.build({"prompt": "海边日落", "seconds": 5},
                           model_by_id("kling-video-v3")["videoGeneration"])
-        self.assertIs(body["watermark"], True)
+        self.assertIs(body["watermark"], False)  # 网关口径：始终不带水印
         self.assertEqual(body["negative_prompt"], "")
         self.assertEqual(body["extra_parameters"]["resolution"], "720P")
         self.assertEqual(body["extra_parameters"]["aspect_ratio"], "16:9")
         self.assertNotIn("image_url", body)
+
+    def test_watermark_always_off_and_not_overridable(self):
+        """水印固定关闭，且**不接受调用方覆盖**。
+
+        这是网关的统一口径：上游 `watermark=false` 后画面左上角没有"AI生成"
+        （实测）。既然不对外暴露这个选项，那么传什么都得是 false——传 true
+        也必须被忽略，否则等于偷偷开了一个后门。
+        """
+        generation = model_by_id("kling-video-v3")["videoGeneration"]
+        for value in (True, "true", "yes", 1, "", "随便写", None, False, "false", 0):
+            body = self.build({"prompt": "x", "watermark": value}, generation)
+            self.assertIs(body["watermark"], False,
+                          "watermark=%r 也必须产出 false" % (value,))
+        self.assertIs(self.build({"prompt": "x"}, generation)["watermark"], False)
 
     def test_image_to_video_drops_aspect_ratio(self):
         body = self.build({"prompt": "动起来", "image": "https://a/b.png"},

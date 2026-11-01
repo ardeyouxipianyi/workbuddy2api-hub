@@ -521,7 +521,10 @@ def learned_video_seconds(realm, model_id):
         return _MEDIA_LEARNED_SECONDS.get((realm, model_id))
 
 
-#: 实测单价账本：`(模型, 分辨率) → 积分/秒`。
+#: 单价账本：`(模型, 分辨率) → 积分/秒`，来源是上游 `usage.credit` ÷ 秒数。
+#: 该数值与账号余额**核对得上**：实测一条 4 秒视频记账 57.14，服务账号
+#: `credits.remain` 随后正好减少 57.14（入账有约 2 分钟延迟，早查会看成没扣）。
+#: 核对工具见 scripts/reconcile_credits.py。
 #:
 #: 上游目录**没有价格字段**，价格只在结算时以 `credit` 返回，所以真实单价只能从
 #: "实扣 ÷ 秒数"反推。为什么要单独记：原来的估算用一个一刀切的 26 积分/秒，
@@ -655,7 +658,7 @@ def learn_media_price(model, resolution, credit, seconds):
 
 
 def media_price_per_second(model, resolution=None):
-    """实测单价；没有观测值返回 None。
+    """实测单价（上游 credit ÷ 秒数）；没有观测值返回 None。
 
     精确匹配 `(模型, 分辨率)` 优先；只有别的分辨率的观测值时取该模型**最大值**
     ——估算宁可往高报：高估只是可能少派一次，低估会把账号打穿。

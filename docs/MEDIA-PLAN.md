@@ -80,7 +80,7 @@ def media_models(payload, tag=None)          # data.models 里按 tag 过滤、�
 def pick_model(models, requested, tag)       # 点名的必须在这一组里，否则抛 MediaError('NO_MEDIA_MODEL')
 def build_image_body(model, prompt, size, n=1)   # hunyuan-* 加 n；gemini-* 不加；其它加 response_format=b64_json
 def build_edit_body(...)                     # 上面 + image:[dataurl,...]
-def build_video_body(...)                    # watermark:true 写死；图生视频不带 aspect_ratio
+def build_video_body(...)                    # watermark:false 写死（网关口径，不接受调用方覆盖）；图生视频不带 aspect_ratio
 def resolve_video_params(request, config)    # → (seconds, resolution, aspect_ratio, warnings) 或抛 INVALID_ARGS
 def parse_supported_seconds_range(text)      # "supported range: 4-15" → (4,15)，读不出就 None
 def parse_image_response(payload)            # 信封 code!=0 / data.data[0].url|b64_json / usage.credit

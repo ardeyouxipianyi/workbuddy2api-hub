@@ -15,9 +15,11 @@
 
 ## 出站形态照抄官方 CLI
 
-端点、请求体、`watermark: true`、轮询节奏（5 秒）与整体上限（600 秒）都来自
+端点、请求体、轮询节奏（5 秒）与整体上限（600 秒）都来自
 WorkBuddy 官方 CLI 的 `ImageService` / `VideoService`，取证记录见 `docs/VIDEO_GEN.md`
-与 dsh-connect-workbuddy 的同名文档。唯一没照抄的是**输入图的形态**：那边接受
+与 dsh-connect-workbuddy 的同名文档。两处没照抄：一是 `watermark`，官方 CLI 写
+`true`，本网关固定 `false`（画面不带"AI生成"字样，且不对调用方开放这个开关）；
+二是**输入图的形态**：那边接受
 本地路径，这里只接受 data URL 与公网 http(s)——网关面对任意 API 客户端，
 接受路径等于开放任意文件读取。
 

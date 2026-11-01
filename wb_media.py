@@ -15,7 +15,7 @@ CLI）。所有网络与文件动作都在 `wb_media_client.py`。
     POST {chat_base}/v2/images/generations     body={model,prompt,size,...按前缀分支}
     POST {chat_base}/v2/images/edits           body=上面 + image:[dataURL,...]
     POST {chat_base}/v2/videos/generations     body={prompt,model,seconds,negative_prompt,
-                                                     watermark:true,image_url?,
+                                                     watermark:false(网关口径),image_url?,
                                                      extra_parameters:{resolution,enable_audio,
                                                                        aspect_ratio(仅文生)}}
     POST {chat_base}/v2/videos/tasks           body={task_id}   → status/ videos[]/ usage.credit
@@ -685,7 +685,8 @@ def read_reference_materials(request, generation):
 def build_video_body(model_id, request, params):
     """拼提交任务的请求体，完全照抄官方 CLI 的 `submitTask`。
 
-    `watermark` 固定 true（官方 CLI 也是这么写的）；图生视频带 `image_url`
+    `watermark` **固定 false**（不带"AI生成"字样），且不接受调用方覆盖：
+    这是网关的统一口径，不属于对外参数。图生视频带 `image_url`
     （首帧）与可选 `last_image_url`（尾帧），**不带** `aspect_ratio`——
     输入图已经决定了比例，多发一个字段只会让上游在两套规则之间挑。
     """
@@ -699,7 +700,10 @@ def build_video_body(model_id, request, params):
         "model": model_id,
         "seconds": params.get("seconds"),
         "negative_prompt": request.get("negative_prompt") or "",
-        "watermark": True,
+        # 水印固定关闭：上游 `CreateVideoRequest.watermark=false` 产出画面
+        # 左上角没有"AI生成"字样（实测，见 docs/MEDIA-IMPL.md）。
+        # **不对外暴露这个开关**——它是网关的统一口径，不由调用方决定。
+        "watermark": False,
     }
     image = _as_string(request.get("image")) or _as_string(request.get("input_reference"))
     if image is not None:
