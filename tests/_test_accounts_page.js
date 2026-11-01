@@ -108,7 +108,7 @@ assert.ok(/<span id="accountsSectionsAnchor" hidden><\/span>/.test(html),
 assert.ok(/<span id="accountsHomeAnchor" hidden><\/span>/.test(html),
   '账号页缺少区块的回家锚点 #accountsHomeAnchor');
 // 页签文字要被改写，所以得有个能定位的节点，不能只留一段裸文本
-assert.ok(/<span id="navGatewayLabel">网关<\/span>/.test(html),
+assert.ok(/<span id="navGatewayLabel">运行概览<\/span>/.test(html),
   '网关页签的文字节点缺少 id，合并时改不成「网关与账号」');
 
 // 字段名必须与 wb_settings / wb_proxy 一致：写错一个字母就是「开关存了，
@@ -345,7 +345,7 @@ function check(label, ok, detail){
     moved.every(s => kids(gatewayBody).indexOf(s) < kids(gatewayBody).indexOf(anchor)));
   check('合并后「账号」页签被藏起来', el('btnNavAccounts').style.display === 'none',
     el('btnNavAccounts').style.display);
-  check('合并后网关页签改名「网关与账号」', el('navGatewayLabel').textContent === '网关与账号',
+  check('合并后网关入口保持「运行概览」', el('navGatewayLabel').textContent === '运行概览',
     el('navGatewayLabel').textContent);
   check('合并后开关读回来是关', api.accountsSeparateTab() === false);
 
@@ -358,7 +358,7 @@ function check(label, ok, detail){
   check('拆开后三个区块回到账号页', sectionsOfAccounts().length === 3,
     String(sectionsOfAccounts().length));
   check('拆开后顺序不变', sectionsOfAccounts().join('|') === moved.join('|'));
-  check('拆开后网关页签改回「网关」', el('navGatewayLabel').textContent === '网关',
+  check('拆开后网关入口仍保持「运行概览」', el('navGatewayLabel').textContent === '运行概览',
     el('navGatewayLabel').textContent);
   check('拆开后开关读回来是开', api.accountsSeparateTab() === true);
 

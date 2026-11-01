@@ -28,7 +28,7 @@ function check(label, ok, detail) {
 
 /* ---- 1. 结构：设置页那个区块、清单容器与 [hidden] 规则 ------------------ */
 
-check(/<h2>顶部页签显示 <em id="setPagesState"><\/em><\/h2>/.test(html),
+check(/<h2>功能菜单显示 <em id="setPagesState"><\/em><\/h2>/.test(html),
   'dashboard.html 里找不到「顶部页签显示」区块标题');
 check(/<div id="setPagesList"[^>]*><\/div>/.test(html),
   '清单容器 #setPagesList 必须是设置页里的空容器：选项由脚本现场生成');

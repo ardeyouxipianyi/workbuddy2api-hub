@@ -285,7 +285,7 @@ table.account-cards td[data-label="账号"] .cool-list{display:flex;flex-directi
 table.account-cards td[data-label="账号"] .cool-pill{display:block;width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (min-width:641px){
   table.account-cards{table-layout:fixed;min-width:1262px}
-  table.account-cards th:nth-child(2),table.account-cards td:nth-child(2){width:180px}
+  table.account-cards th:nth-child(2),table.account-cards td:nth-child(2){width:210px}
   table.account-cards td.acct-actions{white-space:normal;min-width:232px;width:232px;position:sticky;right:0;z-index:2;background:var(--panel);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
   table.account-cards th:last-child{position:sticky;right:0;z-index:3;background:var(--panel2);box-shadow:-8px 0 12px -12px rgba(31,30,27,.55)}
   table.account-cards tbody tr:hover td.acct-actions{background:var(--panel2)}
@@ -894,30 +894,30 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 
 
 #pageAnalytics{
-  --bg:#efebe0; --panel:#ffffff; --panel2:#e9e5d6; --panel3:#e0dbc9;
-  --line:#d5cfbc; --line2:#c5bfab;
-  --fg:#1f1e1b; --fg2:#3d3d3a; --dim:#625f57; --dim2:#87847a;
-  --accent:#a14427; --accent-2:#c25f3d; --accent-soft:rgba(161,68,39,.09);
-  --green:#497035; --green-soft:rgba(73,112,53,.12);
-  --blue:#4f82b0; --gold:#a0691c; --red:#b5473b;
-  --chart-bar:#c25f3d; --chart-bar-soft:rgba(194,95,61,.55);
-  --chart-line:#4f82b0;
-  --hm0:#e4dfcf; --hm1:#f3d9cb; --hm2:#e8b49c; --hm3:#c25f3d; --hm4:#a14427;
-  --shadow:0 1px 2px rgba(31,30,27,.04), 0 4px 14px rgba(31,30,27,.04);
-  --shadow-lg:0 2px 6px rgba(31,30,27,.06), 0 12px 32px rgba(31,30,27,.10);
+  --bg:#f5f7fa; --panel:#ffffff; --panel2:#f2f4f7; --panel3:#e9edf2;
+  --line:#e3e8ef; --line2:#c9d3e1;
+  --fg:#1d2129; --fg2:#3d3d3a; --dim:#4e5969; --dim2:#86909c;
+  --accent:#ff6a00; --accent-2:#ff8a3d; --accent-soft:rgba(255,106,0,.10);
+  --green:#00a870; --green-soft:rgba(0,168,112,.12);
+  --blue:#1677ff; --gold:#ff9a2e; --red:#d93026;
+  --chart-bar:#1677ff; --chart-bar-soft:rgba(22,119,255,.45);
+  --chart-line:#ff6a00;
+  --hm0:#eef1f5; --hm1:#ffe2cc; --hm2:#ffc194; --hm3:#ff9440; --hm4:#ff6a00;
+  --shadow:0 1px 2px rgba(29,33,41,.04), 0 4px 14px rgba(29,33,41,.04);
+  --shadow-lg:0 2px 6px rgba(29,33,41,.06), 0 12px 32px rgba(29,33,41,.10);
   --serif:ui-serif, Georgia, "Source Han Serif SC", "Noto Serif SC", "Songti SC", serif;
-  --sans:ui-sans-serif, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --sans:-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 [data-theme="dark"] #pageAnalytics{
-  --bg:#1f1e1b; --panel:#2d2c25; --panel2:#38362f; --panel3:#433f37;
-  --line:#4f4b42; --line2:#5d584e;
-  --fg:#edebe3; --fg2:#d6d3c9; --dim:#a5a29a; --dim2:#7c796f;
-  --accent:#e88a68; --accent-2:#f0967a; --accent-soft:rgba(232,138,104,.14);
-  --green:#8fae78; --green-soft:rgba(143,174,120,.14);
-  --blue:#8ab4d9; --gold:#d9b25f; --red:#d97b72;
-  --chart-bar:#f0967a; --chart-bar-soft:rgba(240,150,122,.5);
-  --chart-line:#8ab4d9;
-  --hm0:#38362f; --hm1:#4a382e; --hm2:#6b4936; --hm3:#a05f41; --hm4:#e88a68;
+  --bg:#0f172a; --panel:#151f32; --panel2:#1b2940; --panel3:#22334e;
+  --line:#2a3a50; --line2:#3b4d66;
+  --fg:#f2f5fa; --fg2:#d6d3c9; --dim:#a9b7c9; --dim2:#8494a8;
+  --accent:#ff7a1a; --accent-2:#ff9440; --accent-soft:rgba(255,122,26,.15);
+  --green:#2bd19a; --green-soft:rgba(43,209,154,.16);
+  --blue:#5b9cff; --gold:#ffb454; --red:#ff6b6b;
+  --chart-bar:#5b9cff; --chart-bar-soft:rgba(91,156,255,.45);
+  --chart-line:#ff7a1a;
+  --hm0:#1b2940; --hm1:#4a2f18; --hm2:#8a4a1c; --hm3:#c26220; --hm4:#ff7a1a;
   --shadow:0 1px 2px rgba(0,0,0,.25), 0 4px 14px rgba(0,0,0,.25);
   --shadow-lg:0 2px 6px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.4);
 }
@@ -1297,6 +1297,398 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 @media (prefers-reduced-motion:reduce){
   .cs-panel,.cs-arrow,.cs-trigger{transition:none}
 }
+
+<style id="wb-alibaba-console">
+/* ============================================================
+   Alibaba Cloud console skin (first pass)
+   - cool neutral surfaces, orange only for primary/active
+   - one navigation level: top tabs; the in-page sidebar is hidden
+   - flat cards and quieter tables, no warm gradients/shadows
+   ============================================================ */
+:root{
+  --serif: var(--sans);
+  --radius-card: 10px;
+  --radius-control: 7px;
+  --radius-pill: 999px;
+}
+body{background:var(--bg);font-family:var(--sans);font-size:13px}
+header{
+  min-height:56px;height:56px;padding:0 var(--page-pad);
+  background:var(--panel);border-bottom:1px solid var(--line);
+  box-shadow:none;backdrop-filter:none;position:sticky;
+}
+.header-left{gap:24px;flex-wrap:nowrap}
+h1{font-size:16px;font-weight:600;letter-spacing:0}
+h1 .dot{width:7px;height:7px;box-shadow:none}
+h2,h3,.main-page h2{font-family:var(--sans);letter-spacing:0}
+.main-nav{
+  display:flex;height:56px;padding:0;gap:0;background:transparent;
+  border:0;border-radius:0;
+}
+.main-nav-btn{
+  height:56px;padding:0 16px;border:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;
+  color:var(--dim);font-size:13px;font-weight:500;position:relative;
+}
+.main-nav-btn:hover{color:var(--fg);background:transparent!important}
+.main-nav-btn.active{color:var(--accent)!important;font-weight:600;background:transparent!important}
+.main-nav-btn.active::after{
+  content:"";position:absolute;left:16px;right:16px;bottom:0;height:2px;
+  background:var(--accent);border-radius:2px 2px 0 0;
+}
+.header-right{gap:8px}
+.gh-link,.hdr-icon-btn,.theme-btn{
+  border:0!important;background:transparent!important;box-shadow:none!important;
+  width:32px;height:32px;border-radius:7px!important;
+}
+.gh-link:hover,.hdr-icon-btn:hover,.theme-btn:hover{background:var(--panel2)!important}
+main{max-width:1680px;padding:24px 32px 56px}
+
+/* One navigation level: hide the generated in-page sidebar. The section
+   anchors still exist and all existing JS keeps working. */
+.main-page.page-nav-on.active{display:block;grid-template-columns:none}
+.main-page.page-nav-on.active>.page-sidebar{display:none!important}
+.main-page.page-nav-on.active>*{grid-column:auto}
+.page-nav-body{min-width:0;width:100%}
+
+section,.gw-summary,.realm-card,.card,.modal{border-radius:10px!important;box-shadow:none!important}
+section{padding:16px 20px;border-color:var(--line);margin-bottom:16px}
+#pageAnalytics section.panel,#pageAnalytics .panel{border-radius:10px!important}
+
+.realm-cards-grid{gap:12px!important;margin-bottom:16px!important}
+.realm-card{
+  min-height:104px;padding:16px 18px;background:var(--panel);
+  border:1px solid var(--line);box-shadow:none!important;transition:border-color .15s ease;
+}
+.realm-card:hover{transform:none;border-color:var(--line-hover);box-shadow:none!important}
+.realm-card.active{
+  border-color:var(--accent)!important;background:var(--accent-soft)!important;
+  box-shadow:none!important;
+}
+.realm-card.active#tabCn{
+  border-color:var(--think)!important;background:var(--think-soft)!important;
+  box-shadow:none!important;
+}
+.realm-card.gateway-ctrl{background:var(--panel2)!important;border-color:var(--line)!important}
+.gw-summary{overflow:hidden;border-color:var(--line)}
+#cards .card{padding:14px 20px}
+#cards .card .k{font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--dim)}
+#cards .card .v{font-size:24px;font-weight:600;letter-spacing:-.3px}
+#cards .card .v-num{font-size:17px;font-weight:600}
+#schedulerBar{background:var(--panel2);font-size:11.5px;padding:9px 20px}
+
+button{
+  border-radius:7px;border:1px solid var(--accent);background:var(--accent);
+  color:#fff;box-shadow:none;font-size:12.5px;font-weight:500;padding:6px 12px;
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease;
+}
+button:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button.sec{background:var(--panel);border-color:var(--line);color:var(--fg)}
+button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
+button.mini{padding:4px 9px;font-size:11px}
+button.danger{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
+button.danger:hover{background:var(--bad);border-color:var(--bad);color:#fff}
+.toggle-realm-btn{
+  background:var(--panel);border-color:var(--line);color:var(--fg);
+  box-shadow:none;border-radius:7px;
+}
+.toggle-realm-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.id-btn.active{background:var(--accent);color:#fff;box-shadow:none}
+.id-btn-group{border-radius:6px}
+.realm-switch button.active#accountsRealmCn{color:var(--think);border-color:var(--think)}
+
+input,select,textarea{border-radius:7px;border-color:var(--line);background:var(--panel)}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent)!important;
+  box-shadow:0 0 0 3px var(--accent-soft)!important;
+}
+
+/* Tables: calm header, tabular numbers, no card-in-card look. */
+table{font-size:12.5px}
+th{
+  height:38px;padding:8px 12px;border-bottom:1px solid var(--line);
+  background:var(--panel2)!important;color:var(--dim);font-size:11.5px;font-weight:600;
+}
+td{padding:8px 12px;border-bottom:1px solid var(--line)}
+tbody tr:hover{background:var(--panel2)}
+.table-wrap{border-radius:8px}
+table.account-cards .acct-actions button.mini{box-shadow:none}
+table.account-cards td.acct-actions{
+  background:var(--panel)!important;box-shadow:none!important;
+  border-left:1px solid var(--line);
+}
+table.account-cards tbody tr:hover td.acct-actions{background:var(--panel2)!important}
+table.account-cards th:last-child{background:var(--panel2)!important;box-shadow:none!important}
+/* Account row actions: keep two compact rows inside the sticky cell. The
+   "出站身份：" label is redundant (the WB/VSC/CLI title explains it). */
+table.account-cards .acct-actions-row{flex-wrap:wrap;gap:3px}
+table.account-cards .acct-actions .id-btn-label{display:none}
+table.account-cards .acct-actions button.mini{padding:3px 7px;font-size:10.5px}
+table.account-cards .acct-actions .id-btn{padding:2px 5px;font-size:10px}
+
+.badge,.cool-pill,.badge-effort{border-color:transparent!important;box-shadow:none;font-weight:500}
+.badge{border-radius:999px;padding:1px 7px;font-size:10.5px;background:var(--panel2);color:var(--dim)}
+.badge.ok{color:var(--accent2);background:var(--accent2-soft)}
+.badge.s{color:var(--think);background:var(--think-soft)}
+.badge.warn{color:var(--warn);background:var(--warn-soft)}
+.badge.bad{color:var(--bad);background:var(--bad-soft)}
+.badge.off{color:var(--dim);background:var(--panel2)}
+.cool-pill{color:var(--warn);background:var(--warn-soft)}
+.badge-effort{color:var(--think);background:var(--think-soft)}
+.realm-badge-intl{color:var(--think);background:var(--think-soft);border-color:transparent}
+.realm-badge-cn{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.realm-badge-codearts{color:var(--warn);background:var(--warn-soft);border-color:transparent}
+.credit-main b{color:var(--accent2)}
+
+/* Keep the panel usable at tablet/mobile widths after removing the sidebar. */
+@media (max-width:1100px){
+  header{height:auto;min-height:56px;padding:8px 16px;gap:8px}
+  .header-left{width:100%;gap:10px;flex-wrap:wrap}
+  .main-nav{order:9;width:100%;height:auto;overflow-x:auto;border-top:1px solid var(--line);padding-top:2px}
+  .main-nav-btn{height:42px;padding:0 10px;white-space:nowrap}
+  .main-nav-btn.active::after{left:10px;right:10px}
+  main{padding:18px 16px 48px}
+}
+/* Phone shell: brand and tools on row 1, scrollable tabs on row 2. */
+@media (max-width:860px){
+  header{
+    display:grid;grid-template-columns:1fr auto;
+    grid-template-areas:"brand tools" "nav nav";
+    height:auto;min-height:0;padding:8px 12px;gap:4px 8px;
+  }
+  .header-left{display:contents}
+  .header-left h1{grid-area:brand;align-self:center;font-size:15px}
+  .header-right{display:flex!important;grid-area:tools;justify-self:end;align-items:center;gap:4px}
+  .header-left .gh-link,.header-left .hdr-icon-btn{display:none}
+  .main-nav{
+    grid-area:nav;width:100%;height:44px;padding:0;
+    border-top:1px solid var(--line);overflow-x:auto;overflow-y:hidden;
+  }
+  .main-nav-btn{height:42px;padding:0 11px;font-size:12.5px}
+  .main-nav-btn.active::after{left:11px;right:11px}
+}
+@media (max-width:860px){
+  .realm-cards-grid{grid-template-columns:1fr!important}
+  section{padding:14px;border-radius:10px}
+  .main-page.page-nav-on.active{display:block}
+}
+</style>
+<style id="wb-console-v2">
+/* Console grid: 216px navigation + one fluid workspace, 16px gutters. */
+.main-page>div:first-child:not(.page-sidebar):not(.page-nav-body),.main-page>.page-nav-body>div:first-child:not(.console-contextbar){}
+:root{
+  --console-nav-w:216px;--console-top-h:52px;--console-ground:#f5f7fa;
+  --console-ink:#1d2129;--console-muted:#4e5969;--console-edge:#e3e8ef;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+html[data-theme-style="claude"]{--radius-card:6px;--radius-control:4px}
+header{height:var(--console-top-h);min-height:var(--console-top-h);padding:0 20px;position:sticky;top:0;
+  background:var(--panel);border-bottom:1px solid var(--line);box-shadow:none;z-index:60}
+.header-left{gap:18px!important;flex-wrap:nowrap!important;min-width:0}
+.console-product{display:flex;align-items:center;gap:9px;flex:none}
+.console-mark{position:relative;display:inline-flex;align-items:flex-end;gap:2px;width:23px;height:23px;padding:3px;background:var(--accent);border-radius:4px}
+.console-mark i{display:block;width:4px;background:#fff;border-radius:1px 1px 0 0;transform:skewY(-24deg)}
+.console-mark i:nth-child(1){height:7px}.console-mark i:nth-child(2){height:12px}.console-mark i:nth-child(3){height:16px}
+.console-wordmark{font-size:15px;font-weight:650;line-height:1.1;letter-spacing:-.2px;white-space:nowrap;color:var(--fg)}
+.console-wordmark span{display:block;margin-top:3px;font-size:8px;font-weight:600;letter-spacing:1.8px;color:var(--dim)}
+.console-service{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:12px;white-space:nowrap}
+.console-service .dot{width:6px;height:6px;margin:0;box-shadow:none}
+.console-port{padding-left:7px;border-left:1px solid var(--line);font-variant-numeric:tabular-nums}
+.header-right{gap:5px}.header-right .meta{font-size:11px}
+.console-mobile-menu{display:none;background:transparent;border:0;color:var(--fg);width:36px;height:36px;padding:0;font-size:19px}
+.console-shell{display:grid;grid-template-columns:var(--console-nav-w) minmax(0,1fr);align-items:start;min-height:calc(100vh - var(--console-top-h))}
+.console-sidebar{position:sticky;top:var(--console-top-h);z-index:40;height:calc(100vh - var(--console-top-h));
+  display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;overflow-x:hidden}
+.console-nav-head{display:flex;align-items:center;justify-content:space-between;height:46px;padding:0 16px;flex:none;color:var(--dim);font-size:12px}
+.console-collapse{display:flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;background:transparent;border:0;color:var(--dim);font-size:18px}
+.console-collapse:hover{background:var(--panel2);color:var(--fg)}
+.console-sidebar .main-nav{display:block;width:auto;height:auto;padding:0 8px 14px;background:transparent;border:0;overflow:visible}
+.console-nav-group{padding:9px 0 5px}
+.console-nav-caption{height:26px;padding:0 10px;color:var(--dim);font-size:11px;line-height:26px;white-space:nowrap}
+.console-sidebar .main-nav-btn,.console-nav-link{position:relative;display:flex;align-items:center;width:100%;height:36px;padding:0 12px 0 22px;
+  border:0!important;border-radius:4px!important;background:transparent!important;color:var(--console-muted);box-shadow:none!important;
+  font-size:13px;font-weight:400;line-height:36px;text-align:left;justify-content:flex-start;white-space:nowrap}
+.console-sidebar .main-nav-btn::before,.console-nav-link::before{content:"";position:absolute;left:10px;top:50%;width:4px;height:4px;border:1px solid currentColor;border-radius:1px;opacity:.65;transform:translateY(-50%)}
+.console-sidebar .main-nav-btn:hover,.console-nav-link:hover{background:var(--panel2)!important;color:var(--fg)}
+.console-sidebar .main-nav-btn.active{background:var(--accent-soft)!important;color:var(--accent)!important;font-weight:600}
+.console-sidebar .main-nav-btn.active::after{content:"";position:absolute;left:0;top:7px;bottom:7px;width:2px;background:var(--accent);border-radius:0 2px 2px 0}
+.console-sidebar .main-nav-btn.active::before,.console-nav-link.active::before{background:currentColor;opacity:1}
+.console-nav-link.active{color:var(--accent);background:var(--accent-soft);font-weight:600}
+.console-sidebar-foot{display:flex;align-items:center;gap:6px;margin:auto 14px 14px;padding-top:13px;border-top:1px solid var(--line);color:var(--dim);font-size:11px;white-space:nowrap}
+.console-side-dot{width:5px;height:5px;border-radius:50%;background:var(--accent2)}
+.console-sidebar-foot .mono{margin-left:auto;font-size:10px}
+.console-scrim{display:none}
+main{max-width:none;width:100%;min-width:0;padding:0 24px 48px;background:var(--bg)}
+.console-contextbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;margin:0 -24px 20px;padding:0 24px;
+  background:var(--panel);border-bottom:1px solid var(--line);color:var(--dim);font-size:12px}
+.console-context-root{color:var(--dim)}.console-context-sep{margin:0 10px;color:var(--dim-light)}
+#consoleCurrentPage{color:var(--fg)}
+.console-context-actions{display:flex;align-items:center;gap:12px;font-size:11px}
+.main-page{min-width:0}.main-page>.page-nav-body{min-width:0}
+.main-page>div:first-child:not(.page-sidebar):not(.page-nav-body),.main-page>.page-nav-body>div:first-child:not(.console-contextbar){}
+.main-page h2{font-family:var(--sans);letter-spacing:0}
+.main-page h2[style*="font-size:17px"]{font-size:20px!important;font-weight:600!important;line-height:1.4}
+section,.gw-summary,.realm-card,.card,.modal,#pageAnalytics section.panel,#pageAnalytics .panel{border-radius:6px!important;box-shadow:none!important;border-color:var(--line)}
+section{padding:16px 18px;margin-bottom:16px}
+section h2{font-size:13px;text-transform:none;letter-spacing:0;color:var(--fg)}
+.realm-cards-grid{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))!important;gap:12px!important}
+.realm-card{min-height:104px;padding:14px 16px;background:var(--panel)}
+.realm-card.active,.realm-card.active#tabCn{border-color:var(--accent)!important;background:var(--panel)!important;box-shadow:inset 0 2px 0 var(--accent)!important}
+.realm-card.gateway-ctrl{background:var(--panel2)!important}
+#cards{min-height:88px}#cards .card{padding:14px 20px}#cards .card .v{font-size:25px;font-weight:600}
+#schedulerBar{padding:9px 18px;background:var(--panel2)}
+button,.btn,input,select,textarea{border-radius:4px}
+button{min-height:30px;padding:5px 13px;font-size:12px;font-weight:500}
+button.sec{background:var(--panel);border-color:var(--line-hover);color:var(--fg)}
+button.mini{min-height:26px;padding:3px 9px;font-size:11px}
+button:disabled{opacity:.55;cursor:not-allowed}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea{min-height:32px}
+.badge,.badge-effort,.cool-pill{border-radius:3px!important;font-size:11px!important;padding:1px 6px}
+.table-wrap{border-radius:4px}
+th{background:var(--panel2)!important;font-size:12px;font-weight:500;border-radius:0!important}
+th,td{padding:9px 11px}td{border-color:var(--line)}
+/* 最近请求的耗时列：值很短（4.04 s），挤一点就折成两行，读起来像两个数字。 */
+#recent td[data-label="耗时"],#recent td[data-label="首字"]{white-space:nowrap}
+/* Filter bars are pure presentation: they never change bulk-action scope. */
+.console-filterbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:4px}
+.console-filterbar input,.console-filterbar select{width:auto;min-width:150px;background:var(--panel)!important;border:1px solid var(--line-hover);padding:5px 10px;color:var(--fg);font:inherit}
+.console-filterbar .console-search{width:260px;max-width:100%}
+.console-filter-count{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap}
+.console-filter-empty{display:flex;align-items:center;justify-content:center;gap:12px;min-height:72px;color:var(--dim);font-size:13px}
+.console-insights{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:16px;margin:16px 0}
+.console-insight{min-width:0;padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.console-insight-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.console-insight-head h2{margin:0;font-size:13px;font-weight:600;color:var(--fg)}
+.console-insight-note{font-size:11px;color:var(--dim)}
+#consoleUsageChart{display:block;width:100%;height:168px}
+.console-health-row{display:grid;grid-template-columns:54px 1fr auto;align-items:center;gap:10px;min-height:42px;font-size:12px}
+.console-health-track,.console-share-track{height:5px;background:var(--panel3);border-radius:3px;overflow:hidden}
+.console-health-fill,.console-share-fill{display:block;height:100%;background:var(--accent2);border-radius:3px}
+.console-health-row:nth-child(2) .console-health-fill{background:var(--accent)}
+.console-health-row strong{font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
+.console-share-row{display:grid;grid-template-columns:minmax(90px,1fr) minmax(80px,1.2fr) auto;gap:10px;align-items:center;min-height:29px;font-size:11px}
+.console-share-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.console-share-value{font-variant-numeric:tabular-nums;color:var(--dim);white-space:nowrap}
+.console-share-fill{background:var(--accent)}
+/* Analytics: one divided KPI strip and compact evidence panels. */
+#pageAnalytics{background:transparent;font-size:13px}
+#pageAnalytics .wrap{max-width:none;margin:0;padding:0}
+#pageAnalytics .pagehead{margin-bottom:16px}
+#pageAnalytics h1.pagetitle{font-family:var(--sans);font-size:20px;font-weight:600;letter-spacing:0}
+#pageAnalytics .pagesub{font-size:12px}
+#pageAnalytics .kpis{grid-template-columns:repeat(6,minmax(0,1fr));gap:0;margin-bottom:16px;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+#pageAnalytics .kpi{padding:12px 14px;border:0;border-right:1px solid var(--line);border-radius:0;box-shadow:none;overflow:hidden}
+#pageAnalytics .kpi:last-child{border-right:0}
+#pageAnalytics .kpi:hover{box-shadow:none;border-color:var(--line)}
+#pageAnalytics .kpi .k{font-size:12px;font-weight:500;letter-spacing:0}
+#pageAnalytics .kpi .k .ic{display:none}
+#pageAnalytics .kpi .v{font-size:23px;font-weight:600;margin-top:6px}
+#pageAnalytics .kpi .s{font-size:11px;margin-top:5px}
+#pageAnalytics .kpi .accentbar{display:none}
+#pageAnalytics .kpi.big .spark{height:26px;margin-top:7px}
+#pageAnalytics .ringwrap{padding:2px 0}
+#pageAnalytics .ring{width:58px;height:58px}
+#pageAnalytics .ring .hole{inset:6px}
+#pageAnalytics .ring .hole b{font-size:14px}
+#pageAnalytics .ring .hole span{display:none}
+#pageAnalytics .maingrid{grid-template-columns:minmax(0,1.8fr) minmax(280px,1fr);gap:16px;align-items:stretch}
+#pageAnalytics .maingrid>section.panel{display:flex;flex-direction:column}
+#pageAnalytics .maingrid>section.panel .pbody{flex:1}
+#pageAnalytics .chartbox{min-height:176px}
+#pageAnalytics section.panel{padding:0;margin-bottom:16px;overflow:hidden}
+#pageAnalytics .phead{padding:13px 16px;border-bottom:1px solid var(--line);min-height:48px}
+#pageAnalytics .phead h2{font-size:13px}
+#pageAnalytics .pbody{padding:12px 16px}
+#pageAnalytics .chartbox{min-height:176px}
+#pageAnalytics .seg,#pageAnalytics .chiprow,#pageAnalytics .dimtabs{border-radius:4px;padding:2px;background:var(--panel2)}
+#pageAnalytics .seg button,#pageAnalytics .chiprow button,#pageAnalytics .dimtabs button{border-radius:3px;min-height:27px;box-shadow:none!important}
+#pageAnalytics .seg button.on,#pageAnalytics .chiprow button.on,#pageAnalytics .dimtabs button.on{color:var(--accent);border-color:var(--line);box-shadow:none}
+#pageAnalytics .folds{gap:8px}
+#pageAnalytics .fold,#pageAnalytics .fold summary{border-radius:5px}
+/* Settings and resource forms use full-width rows instead of floating mini-cards. */
+#pageSettings section,#pageAgents section{margin-bottom:12px}
+#pageSettings section>div[style*="flex"],#pageAgents section>div[style*="flex"]{row-gap:12px}
+.modal{border-radius:8px!important}
+/* A collapsed rail keeps every destination available through tooltips. */
+body.console-collapsed{--console-nav-w:52px}
+body.console-collapsed .console-nav-head{justify-content:center;padding:0}
+body.console-collapsed .console-nav-head>span,body.console-collapsed .console-nav-caption,
+body.console-collapsed .console-sidebar .main-nav-btn,body.console-collapsed .console-nav-link{font-size:0}
+body.console-collapsed .console-sidebar .main-nav-btn,body.console-collapsed .console-nav-link{padding:0;justify-content:center}
+body.console-collapsed .console-sidebar .main-nav-btn::before,body.console-collapsed .console-nav-link::before{left:50%;width:7px;height:7px;transform:translate(-50%,-50%)}
+body.console-collapsed .console-sidebar-foot{justify-content:center;margin: auto 0 14px;padding:12px 0 0}
+body.console-collapsed .console-sidebar-foot span:not(.console-side-dot){display:none}
+@media (min-width:1500px){:root{--console-nav-w:224px}main{padding-left:28px;padding-right:28px}.console-contextbar{margin-left:-28px;margin-right:-28px;padding-left:28px;padding-right:28px}}
+@media (max-width:1240px){
+  .realm-cards-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  #pageAnalytics .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  #pageAnalytics .kpi:nth-child(3){border-right:0}
+  #pageAnalytics .kpi:nth-child(-n+3){border-bottom:1px solid var(--line)}
+  #pageAnalytics .maingrid{grid-template-columns:minmax(0,1.45fr) minmax(250px,1fr)}
+}
+@media (max-width:1000px){
+  :root{--console-nav-w:184px}
+  main{padding-left:16px;padding-right:16px}.console-contextbar{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
+  .console-insights,#pageAnalytics .maingrid{grid-template-columns:1fr}
+  .console-service{display:none}
+  .console-sidebar .main-nav-btn,.console-nav-link{padding-left:20px}
+}
+@media (max-width:760px){
+  :root{--console-top-h:56px;--console-nav-w:216px}
+  header{height:auto;min-height:56px;padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;position:sticky}
+  .header-left{order:1;flex:1 1 auto!important;gap:10px!important;min-width:0}
+  .header-right{order:2;flex:0 0 auto!important;display:flex!important;gap:2px;align-items:center}
+  .console-mobile-menu{display:flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px}
+  .console-product{min-width:0}
+  .console-wordmark{font-size:14px}.console-wordmark span{font-size:7px;letter-spacing:1.4px}
+  .console-mark{width:21px;height:21px}.console-service{display:none}
+  .header-left .gh-link,.header-left .hdr-icon-btn{display:none}
+  .header-right .meta{display:none}.lang-btn{min-width:30px}
+  .console-shell{display:block;min-height:calc(100vh - 56px)}
+  .console-sidebar{position:fixed;left:0;top:56px;bottom:0;z-index:90;width:240px;height:auto;transform:translateX(-100%);transition:transform .18s ease;box-shadow:none}
+  body.console-nav-open .console-sidebar{transform:translateX(0)}
+  .console-scrim{position:fixed;inset:56px 0 0;z-index:80;background:rgba(15,23,42,.35)}
+  body.console-nav-open .console-scrim{display:block}
+  .console-collapse{display:none}.console-nav-head{height:40px}
+  .console-sidebar .main-nav-btn,.console-nav-link{height:42px;line-height:42px;font-size:14px}
+  body.console-collapsed .console-sidebar .main-nav-btn,body.console-collapsed .console-nav-link{font-size:14px;padding:0 12px 0 22px;justify-content:flex-start}
+  body.console-collapsed .console-nav-caption{display:block}
+  body.console-collapsed .console-sidebar .main-nav-btn::before,body.console-collapsed .console-nav-link::before{left:10px;width:4px;height:4px;transform:translateY(-50%)}
+  body.console-collapsed .console-sidebar-foot{justify-content:flex-start;margin:auto 14px 14px;padding:13px 0 0}
+  body.console-collapsed .console-sidebar-foot span:not(.console-side-dot){display:inline}
+  main{padding:0 12px 36px}
+  .console-contextbar{min-height:44px;margin:0 -12px 16px;padding:0 12px;flex-wrap:wrap;gap:4px}
+  .console-context-root,.console-context-sep{display:none}
+  #consoleCurrentPage{font-size:13px;font-weight:600}
+  .console-context-actions{gap:7px;margin-left:auto}.console-context-actions #consoleRefreshState{display:none}
+  .realm-cards-grid{grid-template-columns:1fr!important}
+  .realm-card{min-height:96px}
+  #cards{grid-template-columns:1fr}#cards .card{padding:12px 16px}
+  .console-insights{gap:12px;margin:12px 0}.console-insight{padding:14px}
+  .console-filterbar{align-items:stretch;padding:10px;gap:8px}
+  .console-filterbar .console-search{width:100%;min-width:0}
+  .console-filterbar select{flex:1;min-width:120px}
+  .console-filter-count{margin-left:0;align-self:center}
+  .console-filterbar button{min-height:34px}
+  section{padding:14px 12px}
+  #pageAnalytics .pagehead{align-items:flex-start}
+  #pageAnalytics h1.pagetitle{display:block;font-size:20px}
+  #pageAnalytics .pagesub{display:block;margin-top:4px}
+  #pageAnalytics .seg{width:100%;overflow-x:auto}
+  #pageAnalytics .seg button{flex:1;padding:5px 8px}
+  #pageAnalytics .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #pageAnalytics .kpi:nth-child(3){border-right:1px solid var(--line)}
+  #pageAnalytics .kpi:nth-child(2n){border-right:0}
+  #pageAnalytics .kpi:nth-child(-n+4){border-bottom:1px solid var(--line)}
+  #pageAnalytics .kpi{padding:11px 12px}
+  #pageAnalytics .kpi .v{font-size:21px}
+  #pageAnalytics .kpi .k{font-size:11px}
+  #pageAnalytics .phead{padding:11px 12px;flex-wrap:wrap}
+  #pageAnalytics .pbody{padding:10px 12px}
+  #pageAnalytics .recent-list{max-height:240px}
+  .main-page h2[style*="font-size:17px"]{font-size:19px!important}
+}
+@media (prefers-reduced-motion:reduce){.console-sidebar{transition:none}}
 </style>
 <script>
 /* Runs before <body> is parsed, so the page the user last had is the
@@ -1306,12 +1698,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   var THEME_KEY = 'wb-theme';
   var THEME_STYLE_KEY = 'wb-theme-style';
   var THEME_STYLES = {
-    claude: {label:'Claude', light:{"--bg":"#efebe0","--panel":"#ffffff","--panel2":"#e9e5d6","--panel3":"#e0dbc9","--line":"#d5cfbc","--line-hover":"#c5bfab","--fg":"#1f1e1b","--dim":"#625f57","--dim-light":"#87847a","--accent":"#a14427","--accent-hover":"#8a3a20","--accent-soft":"rgba(161,68,39,.09)","--accent-selected-bg":"rgba(161,68,39,.14)","--accent2":"#497035","--accent2-soft":"rgba(73,112,53,.12)","--warn":"#a0691c","--warn-soft":"rgba(183,121,31,.12)","--think":"#7d5c8a","--think-soft":"rgba(125,92,138,.10)","--bad":"#b5473b","--bad-soft":"rgba(181,71,59,.09)","--shadow-sm":"0 1px 2px 0 rgba(31,30,27,.05)","--shadow":"0 1px 2px 0 rgba(31,30,27,.05),0 4px 14px rgba(31,30,27,.04)","--shadow-md":"0 2px 6px 0 rgba(31,30,27,.06),0 12px 32px rgba(31,30,27,.09)","--header-bg":"rgba(239,235,224,.92)","--hm0":"#ece6db","--hm1":"#f3d5c1","--hm2":"#e8a98a","--hm3":"#d6846a","--hm4":"#b4533a"}, dark:{"--bg":"#1f1e1b","--panel":"#2d2c25","--panel2":"#38362f","--panel3":"#433f37","--line":"#4f4b42","--line-hover":"#5d584e","--fg":"#edebe3","--dim":"#a5a29a","--dim-light":"#9c9a90","--accent":"#e88a68","--accent-hover":"#f0967a","--accent-soft":"rgba(232,138,104,.14)","--accent-selected-bg":"rgba(232,138,104,.18)","--accent2":"#8fae78","--accent2-soft":"rgba(143,174,120,.15)","--warn":"#d9b25f","--warn-soft":"rgba(217,178,95,.15)","--think":"#bfa3cc","--think-soft":"rgba(191,163,204,.15)","--bad":"#d97b72","--bad-soft":"rgba(217,123,114,.15)","--shadow-sm":"0 1px 2px 0 rgba(0,0,0,.25)","--shadow":"0 1px 2px 0 rgba(0,0,0,.25),0 4px 14px rgba(0,0,0,.25)","--shadow-md":"0 2px 6px 0 rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4)","--header-bg":"rgba(31,30,27,.92)","--hm0":"#2b2924","--hm1":"#3d352e","--hm2":"#5a3e30","--hm3":"#8a5a45","--hm4":"#c97250"}},
+    claude: {label:'Alibaba', light:{"--bg":"#f5f7fa","--panel":"#ffffff","--panel2":"#f2f4f7","--panel3":"#e9edf2","--line":"#e3e8ef","--line-hover":"#c9d3e1","--fg":"#1d2129","--dim":"#4e5969","--dim-light":"#86909c","--accent":"#ff6a00","--accent-hover":"#e65f00","--accent-soft":"rgba(255,106,0,.10)","--accent-selected-bg":"rgba(255,106,0,.08)","--accent2":"#00a870","--accent2-soft":"rgba(0,168,112,.12)","--warn":"#ff9a2e","--warn-soft":"rgba(255,154,46,.14)","--think":"#1677ff","--think-soft":"rgba(22,119,255,.10)","--bad":"#d93026","--bad-soft":"rgba(217,48,38,.10)","--shadow-sm":"0 1px 2px rgba(29,33,41,.05)","--shadow":"0 1px 2px rgba(29,33,41,.04)","--shadow-md":"0 6px 16px rgba(29,33,41,.08)","--header-bg":"rgba(255,255,255,.92)","--hm0":"#fff3e8","--hm1":"#ffd9bf","--hm2":"#ffb27a","--hm3":"#ff8a3d","--hm4":"#ff6a00"}, dark:{"--bg":"#0f172a","--panel":"#151f32","--panel2":"#1b2940","--panel3":"#22334e","--line":"#2a3a50","--line-hover":"#3b4d66","--fg":"#f2f5fa","--dim":"#a9b7c9","--dim-light":"#8494a8","--accent":"#ff7a1a","--accent-hover":"#ff9440","--accent-soft":"rgba(255,122,26,.15)","--accent-selected-bg":"rgba(255,122,26,.18)","--accent2":"#2bd19a","--accent2-soft":"rgba(43,209,154,.16)","--warn":"#ffb454","--warn-soft":"rgba(255,180,84,.16)","--think":"#5b9cff","--think-soft":"rgba(91,156,255,.16)","--bad":"#ff6b6b","--bad-soft":"rgba(255,107,107,.16)","--shadow-sm":"0 1px 2px rgba(0,0,0,.35)","--shadow":"0 1px 2px rgba(0,0,0,.35)","--shadow-md":"0 8px 24px rgba(0,0,0,.45)","--header-bg":"rgba(15,23,42,.90)","--hm0":"#1b2940","--hm1":"#2a3a50","--hm2":"#6a3b1f","--hm3":"#b05a20","--hm4":"#ff7a1a"}},
     material: {label:'Material', light:{"--bg":"#fefbff","--panel":"#ffffff","--panel2":"#f5eff7","--panel3":"#ece6f0","--line":"#cac4d0","--line-hover":"#b4aab8","--fg":"#1d1b20","--dim":"#5b5b66","--dim-light":"#767680","--accent":"#6750a4","--accent-hover":"#4f378b","--accent-soft":"#eaddff","--accent-selected-bg":"#e8def8","--accent2":"#006a60","--accent2-soft":"#ccfbee","--warn":"#7e5260","--bad":"#b3261e","--bad-soft":"#f9dedc","--think":"#5e5891","--think-soft":"#e5dffa","--shadow-sm":"0 1px 2px 0 rgba(29,27,32,.15)","--shadow":"0 1px 2px 0 rgba(29,27,32,.18),0 1px 3px 1px rgba(29,27,32,.10)","--shadow-md":"0 2px 4px -1px rgba(29,27,32,.12),0 4px 6px 1px rgba(29,27,32,.10)","--header-bg":"rgba(254,251,255,.94)","--hm0":"#e8def8","--hm1":"#d3c2f1","--hm2":"#b8a1ec","--hm3":"#9a82e3","--hm4":"#6750a4"}, dark:{"--bg":"#141218","--panel":"#211f26","--panel2":"#2b2930","--panel3":"#36343b","--line":"#49454f","--line-hover":"#5b5963","--fg":"#e6e1e5","--dim":"#c4c5d0","--dim-light":"#928f9a","--accent":"#d0bcff","--accent-hover":"#b9a4fa","--accent-soft":"rgba(208,188,255,.24)","--accent-selected-bg":"rgba(208,188,255,.30)","--accent2":"#4ecdb4","--accent2-soft":"rgba(78,205,180,.24)","--warn":"#f2b8b4","--bad":"#f2b8b4","--bad-soft":"rgba(242,184,180,.24)","--think":"#cfc4f7","--think-soft":"rgba(207,196,247,.18)","--shadow-sm":"0 1px 2px 0 rgba(0,0,0,.30)","--shadow":"0 1px 2px 0 rgba(0,0,0,.40),0 1px 3px 1px rgba(0,0,0,.30)","--shadow-md":"0 2px 4px -1px rgba(0,0,0,.45),0 4px 6px 1px rgba(0,0,0,.32)","--header-bg":"rgba(20,18,24,.88)","--hm0":"#2b2930","--hm1":"#332e44","--hm2":"#3d3460","--hm3":"#4d4080","--hm4":"#d0bcff"}},
     miuix: {label:'MiuiX', light:{"--bg":"#f6f7fa","--panel":"#ffffff","--panel2":"#eef0f4","--panel3":"#e2e6ee","--line":"#dde1e8","--line-hover":"#c9d0db","--fg":"#1f2024","--dim":"#5f6671","--dim-light":"#8c93a0","--accent":"#ff5c00","--accent-hover":"#ff7a33","--accent-soft":"rgba(255,92,0,.10)","--accent-selected-bg":"rgba(255,92,0,.18)","--accent2":"#07c160","--accent2-soft":"rgba(7,193,96,.12)","--warn":"#d48200","--bad":"#e53935","--bad-soft":"rgba(229,57,53,.10)","--think":"#7c4dff","--think-soft":"rgba(124,77,255,.10)","--shadow-sm":"0 1px 2px 0 rgba(31,32,36,.05)","--shadow":"0 2px 6px 0 rgba(31,32,36,.08)","--shadow-md":"0 6px 16px 0 rgba(31,32,36,.10)","--header-bg":"rgba(255,255,255,.85)","--hm0":"#ffece0","--hm1":"#ffd0b8","--hm2":"#ffb085","--hm3":"#ff8c4a","--hm4":"#ff5c00"}, dark:{"--bg":"#0e0f12","--panel":"#191b1f","--panel2":"#22252b","--panel3":"#2a2d34","--line":"#2e3239","--line-hover":"#3a3f48","--fg":"#f0f1f4","--dim":"#9aa0aa","--dim-light":"#7a8090","--accent":"#ff7a33","--accent-hover":"#ff9056","--accent-soft":"rgba(255,122,51,.18)","--accent-selected-bg":"rgba(255,122,51,.26)","--accent2":"#3ed984","--accent2-soft":"rgba(62,217,132,.20)","--warn":"#ffb852","--bad":"#ff6f6f","--bad-soft":"rgba(255,111,111,.16)","--think":"#a78bff","--think-soft":"rgba(167,139,255,.18)","--shadow-sm":"0 1px 2px 0 rgba(0,0,0,.40)","--shadow":"0 2px 6px 0 rgba(0,0,0,.55)","--shadow-md":"0 6px 18px 0 rgba(0,0,0,.60)","--header-bg":"rgba(14,15,18,.78)","--hm0":"#22252b","--hm1":"#332820","--hm2":"#4a2c20","--hm3":"#5c3220","--hm4":"#ff7a33"}}
   };
   window.__WB_THEME_STYLES__ = THEME_STYLES;
-  var STYLE_GEOMETRY = {claude:12, material:14, miuix:20};
+  var STYLE_GEOMETRY = {claude:10, material:14, miuix:20};
   Object.keys(THEME_STYLES).forEach(function(id){
     ['light','dark'].forEach(function(mode){
       var v=THEME_STYLES[id][mode];
@@ -1492,6 +1884,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       if(btn) btn.classList.toggle('active', t === pick);
     });
     window.initThemeSystem();
+    if(typeof initConsoleShell === 'function') initConsoleShell();
     if(window.applyStyle) window.applyStyle(getStyle());
   });
 })();
@@ -1544,7 +1937,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '+ 添加槽位': '+ Add slot',
     '+ 添加账号 (OAuth)': '+ Add account (OAuth)',
     '「设置」是页面显示开关自己的入口，收起来就放不回去了，固定保留。': 'Settings is where this switch lives, so it cannot be unticked - there would be no way back.',
-    '取消勾选就把该页签从顶部收起来，勾回来即恢复；清单按顶部现有的页签现场生成，上游增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。': 'Unticking a tab takes it out of the top bar; tick it again to bring it back. The list is built from the tabs the panel actually has, so a page added or removed upstream shows up here on its own. The choice is stored on this gateway, so it survives a different browser and a restart. Settings stays: it is where this switch lives.',
+    '取消勾选就把该功能从左侧菜单收起来，勾回来即恢复；清单按现有页面现场生成，后续增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。': 'Untick a feature to remove it from the left navigation; tick it again to bring it back. The list is built from the pages the panel has, so later additions appear here automatically. The choice is stored on this gateway, so it survives a different browser and a restart. Settings stays: it is where this switch lives.',
     '添加': 'Add',
     '0 个 Key': '0 keys',
     '0 个 Key 生效': '0 keys active',
@@ -1795,7 +2188,40 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '固定 CodeArts 出口': 'CodeArts exit only',
     '固定国际版出口': 'Global exit only',
     '国内版': 'China',
-    '顶部页签显示': 'Top tab visibility',
+    '功能菜单显示': 'Navigation visibility',
+    '运行概览': 'Overview',
+    '账号管理': 'Accounts',
+    '模型管理': 'Models',
+    '请求记录': 'Requests',
+    '智能体接入': 'Agent connections',
+    '网关设置': 'Gateway settings',
+    // 控制台外壳：左侧菜单分组、顶栏与概览页新增的标签。
+    '控制台': 'Console',
+    '工作台': 'Workspace',
+    '资源管理': 'Resources',
+    '监控与统计': 'Monitoring',
+    '配置中心': 'Configuration',
+    '本地网关': 'Local gateway',
+    'API 服务运行中': 'API service running',
+    '自动刷新': 'Auto refresh',
+    '刷新数据': 'Refresh',
+    '当前页请求': 'Requests on this page',
+    '请求 Token 分布': 'Token distribution',
+    '账号健康度': 'Account health',
+    '搜索账号': 'Search accounts',
+    '搜索最近请求': 'Search recent requests',
+    '搜索模型清单': 'Search the model catalogue',
+    '全部状态': 'All states',
+    '需关注': 'Needs attention',
+    '本地停用': 'Disabled locally',
+    '清除筛选': 'Clear filters',
+    '当前页全部记录': 'All records on this page',
+    '当前页没有符合筛选条件的请求': 'No request on this page matches the filter',
+    '没有符合当前条件的账号': 'No account matches the current filter',
+    '没有符合当前条件的模型': 'No model matches the current filter',
+    '暂无模型用量分布': 'No model usage yet',
+    '筛选仅影响显示，批量操作仍按原账号范围执行': 'Filtering only changes what is shown; bulk actions still act on the original account scope',
+    '按启用状态、凭证有效期、限流、熔断与本地限额护栏计算，与账号列表的「启用」计数口径不同：启用但凭证失效或被护栏挡住的账号，在这里算不可用。': 'Computed from the enabled flag, credential expiry, rate limiting, circuit breaking and the local limit guards - a different rule from the "enabled" count in the account table: an account that is enabled but has an expired credential or is held back by a guard counts as unavailable here.',
     '（国内版）': '(China)',
     '国内版 (China)': 'China',
     '国内版 (China) · copilot.tencent.com': 'China · copilot.tencent.com',
@@ -3436,7 +3862,13 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "请先粘贴密钥": "請先貼上金鑰",
     "校验中…": "校驗中…",
     "面板手动停用，该账号不参与轮询": "面板手動停用，該帳號不參與輪詢",
-    "顶部页签显示": "頂部頁籤顯示",
+    "功能菜单显示": "功能選單顯示",
+    "运行概览": "執行概覽",
+    "账号管理": "帳號管理",
+    "模型管理": "模型管理",
+    "请求记录": "請求記錄",
+    "智能体接入": "智能體接入",
+    "网关设置": "閘道設定",
     "面板窗口限高": "面板視窗限高",
     "每个窗口（区块）超过这个高度时在窗口内部滚动，不再把整页拉长；滚动时标题行固定在窗口顶部。单位像素；填 0 表示不限。": "每個視窗（區塊）超過這個高度時在視窗內部捲動，不再把整頁拉長；捲動時標題列固定在視窗頂部。單位像素；填 0 表示不限。",
     "窗口最高高度（像素，0 = 不限）": "視窗最高高度（像素，0 = 不限）",
@@ -3982,30 +4414,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 <body>
 <header>
   <div class="header-left" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
-    <h1><span class="dot" id="statusDot"></span>WorkBuddy 网关</h1>
-    <nav class="main-nav">
-      <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')">
-        <span id="navGatewayLabel">网关</span>
-      </button>
-      <button class="main-nav-btn" id="btnNavAccounts" onclick="switchMainTab('accounts')">
-        账号
-      </button>
-      <button class="main-nav-btn" id="btnNavTasks" onclick="switchMainTab('tasks')">
-        任务与福利
-      </button>
-      <button class="main-nav-btn" id="btnNavAnalytics" onclick="switchMainTab('analytics')">
-        数据看板
-      </button>
-      <button class="main-nav-btn" id="btnNavAgents" onclick="switchMainTab('agents')">
-        智能体配置
-      </button>
-      <button class="main-nav-btn" id="btnNavSettings" onclick="switchMainTab('settings')">
-        设置
-      </button>
-      <button class="main-nav-btn" id="btnNavLogs" onclick="switchMainTab('logs')">
-        运行日志
-      </button>
-    </nav>
+    <button type="button" class="console-mobile-menu" id="btnConsoleNav" onclick="toggleConsoleNav()" aria-label="打开功能导航" aria-controls="consoleSidebar" aria-expanded="false">☰</button>
+    <div class="console-product">
+      <span class="console-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="console-wordmark">WorkBuddy<span>API HUB</span></span>
+    </div>
+    <div class="console-service"><span class="dot" id="statusDot"></span><span>本地网关</span><span class="console-port" id="consolePort">8788</span></div>
     <a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
        title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -4036,7 +4450,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </button>
       <div class="theme-dropdown" id="themeDropdown" role="menu" aria-label="选择颜色主题">
         <div class="theme-style-group" role="group" aria-label="主题风格">
-          <button type="button" class="theme-option" data-theme-style-option="claude" onclick="selectStyle('claude', event)" role="menuitem">Claude</button>
+          <button type="button" class="theme-option" data-theme-style-option="claude" onclick="selectStyle('claude', event)" role="menuitem">Alibaba</button>
           <button type="button" class="theme-option" data-theme-style-option="material" onclick="selectStyle('material', event)" role="menuitem">Material</button>
           <button type="button" class="theme-option" data-theme-style-option="miuix" onclick="selectStyle('miuix', event)" role="menuitem">MiuiX</button>
         </div>
@@ -4107,7 +4521,55 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     </div>
   </div>
 </div>
+<div class="console-scrim" id="consoleScrim" onclick="setConsoleNavOpen(false)" aria-hidden="true"></div>
+<div class="console-shell">
+<aside class="console-sidebar" id="consoleSidebar" aria-label="功能导航">
+  <div class="console-nav-head">
+    <span>控制台</span>
+    <button type="button" class="console-collapse" id="btnConsoleCollapse" onclick="toggleConsoleCollapse()" aria-label="收起功能导航" title="收起功能导航" aria-expanded="true">«</button>
+  </div>
+  <nav class="main-nav">
+    <div class="console-nav-group">
+      <div class="console-nav-caption">工作台</div>
+      <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')"><span id="navGatewayLabel">运行概览</span></button>
+    </div>
+    <div class="console-nav-group">
+      <div class="console-nav-caption">资源管理</div>
+      <button class="main-nav-btn" id="btnNavAccounts" onclick="switchMainTab('accounts')">
+        账号管理
+      </button>
+      <button type="button" class="console-nav-link" id="btnNavModels" onclick="openModelCatalog()">模型管理</button>
+      <button class="main-nav-btn" id="btnNavTasks" onclick="switchMainTab('tasks')">
+        任务与福利
+      </button>
+    </div>
+    <div class="console-nav-group">
+      <div class="console-nav-caption">监控与统计</div>
+      <button class="main-nav-btn" id="btnNavAnalytics" onclick="switchMainTab('analytics')">
+        数据看板
+      </button>
+      <button type="button" class="console-nav-link" id="btnNavRequests" onclick="openRecentRequests()">请求记录</button>
+      <button class="main-nav-btn" id="btnNavLogs" onclick="switchMainTab('logs')">
+        运行日志
+      </button>
+    </div>
+    <div class="console-nav-group">
+      <div class="console-nav-caption">配置中心</div>
+      <button class="main-nav-btn" id="btnNavAgents" onclick="switchMainTab('agents')">
+        智能体接入
+      </button>
+      <button class="main-nav-btn" id="btnNavSettings" onclick="switchMainTab('settings')">
+        网关设置
+      </button>
+    </div>
+  </nav>
+  <div class="console-sidebar-foot"><span class="console-side-dot"></span><span>API 服务运行中</span><span class="mono" id="consoleFootPort">8788</span></div>
+</aside>
 <main>
+  <div class="console-contextbar">
+    <div><span class="console-context-root">WorkBuddy API Hub</span><span class="console-context-sep">/</span><span id="consoleCurrentPage">运行概览</span></div>
+    <div class="console-context-actions"><span id="consoleRefreshState">自动刷新</span><button type="button" class="sec mini" onclick="refresh()" title="立即刷新当前数据">刷新数据</button></div>
+  </div>
   <div id="pageGateway" class="main-page">
   <!-- 页面头部：标题 + 一行说明，与其它页面的头部结构保持一致 -->
   <div style="margin-bottom:16px">
@@ -4208,6 +4670,19 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     <div class="cards" id="codeartsCards"></div>
   </div>
 
+  <div class="console-insights" id="consoleInsights">
+    <div class="console-insight">
+      <div class="console-insight-head"><h2>请求 Token 分布</h2><span class="console-insight-note" id="consoleUsageNote">当前页请求</span></div>
+      <canvas id="consoleUsageChart" height="168" aria-label="当前页请求的 Token 用量图" role="img"></canvas>
+      <div id="consoleModelShare" style="margin-top:8px"></div>
+    </div>
+    <div class="console-insight">
+      <div class="console-insight-head"><h2>账号健康度</h2><span class="console-insight-note" id="consoleHealthSummary">—</span></div>
+      <div id="consoleAccountHealth"></div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)">按启用状态、凭证有效期、限流、熔断与本地限额护栏计算，与账号列表的「启用」计数口径不同：启用但凭证失效或被护栏挡住的账号，在这里算不可用。</div>
+    </div>
+  </div>
+
   <!-- 合并模式（设置里「账号独立成一个页签」关闭，默认）时，账号页的三个区块搬到
        这里，位置与拆分前一致：控制栏之后、最近请求之前。拆分模式下这里是空的。 -->
   <span id="accountsSectionsAnchor" hidden></span>
@@ -4215,7 +4690,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   <!-- 融合后的：模型性能与用量矩阵 -->
   
 
-  <section>
+  <section id="recentRequestsSection">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <h2 style="margin:0">最近请求<em id="recentRealmTag" style="color:var(--dim);font-weight:500"></em><em id="recentCount"></em></h2>
       <div style="display:inline-flex;align-items:center;gap:8px">
@@ -4229,6 +4704,14 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </div>
     <div id="recent" class="table-wrap"></div>
+    <div class="console-filterbar" aria-label="最近请求筛选">
+      <input id="recentModelFilter" class="console-search" type="search" placeholder="搜索模型、账号或 API Key" aria-label="搜索最近请求" oninput="RECENT_FILTERS.query=this.value;renderRecentView()">
+      <select id="recentOutcomeFilter" aria-label="请求结果" onchange="RECENT_FILTERS.outcome=this.value;renderRecentView()">
+        <option value="">全部结果</option><option value="completed">完成</option><option value="failed">失败</option><option value="client_aborted">客户端取消</option><option value="upstream_aborted">上游中断</option>
+      </select>
+      <span class="console-filter-count" id="recentFilterCount">当前页全部记录</span>
+      <button type="button" class="sec mini" onclick="clearRecentFilters()">清除筛选</button>
+    </div>
     <div id="recentPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex-wrap:wrap;gap:8px">
       <div id="recentPageInfo">第 1 / 1 页 · 共 0 条记录</div>
       <div style="display:inline-flex;gap:5px;align-items:center">
@@ -4240,7 +4723,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   </section>
 
   <!-- 版本模型库与能力清单 -->
-  <section>
+  <section id="gatewayModelsSection">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       <h2 style="margin:0">网关模型清单<em id="modelsRealmTag" style="color:var(--dim);font-weight:500"></em><em id="availModelCount"></em><span id="modelPickActions" class="page-nav-exclude" style="font-weight:400;margin-left:10px;white-space:nowrap"><button class="sec mini" onclick="applyModelPickAction('all')" title="把当前清单里的模型全部勾上（与「从未改过勾选」的默认态等价）">全选</button><button class="sec mini" onclick="applyModelPickAction('none')" title="取消全部勾选：DSH 等读取模型清单的客户端会被拦下，不会写出一份空清单">全不选</button><button class="sec mini" onclick="applyModelPickAction('invert')" title="按当前勾选状态取反：只想排除个别模型时比逐个点快">反选</button></span></h2>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -4254,6 +4737,11 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     <!-- 勾选语义（静态说明）：复选框只决定「一键配置」把哪些模型写进 DSH 等
          客户端，不改网关路由（未勾选的模型在网关侧照常可用）。选择是全局一份，
          不按版本视图分开；服务端没存过时按「全部勾选」画（= 升级前行为）。 -->
+    <div class="console-filterbar" aria-label="模型清单筛选">
+      <input id="modelCatalogFilter" class="console-search" type="search" placeholder="搜索模型 ID、名称或能力" aria-label="搜索模型清单" oninput="MODEL_CATALOG_FILTER=this.value;renderAvailableModels()">
+      <span class="console-filter-count" id="modelCatalogFilterCount"></span>
+      <button type="button" class="sec mini" onclick="clearModelCatalogFilter()">清除筛选</button>
+    </div>
     <div id="modelPickHint" style="font-size:12px;color:var(--dim);margin:0 0 10px;line-height:1.6"
          title="勾选结果存在网关设置里，对所有版本视图生效；未勾选只影响一键配置写入客户端的模型清单，网关本身照常提供这些模型。">只有勾选的模型才会写入 DSH 等客户端（一键配置）；默认全部勾选，可用表头「全选 / 全不选 / 反选」批量调整，改完请重新一键配置并重启客户端。</div>
     <!-- 清单来源横幅：API 获取 → 绿色状态条（附刷新时间）；非 API（项目默认
@@ -4326,6 +4814,15 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     </h2>
     <div id="accountsBody" class="collapse">
       <div class="collapse-inner">
+    <div class="console-filterbar" aria-label="账号列表筛选">
+      <input id="accountSearchFilter" class="console-search" type="search" placeholder="搜索昵称、备注或 UID" aria-label="搜索账号" oninput="ACCOUNT_FILTERS.query=this.value;renderAccounts()">
+      <select id="accountStatusFilter" aria-label="账号状态" onchange="ACCOUNT_FILTERS.status=this.value;renderAccounts()">
+        <option value="">全部状态</option><option value="healthy">可用</option><option value="attention">需关注</option><option value="disabled">本地停用</option>
+      </select>
+      <span class="console-filter-count" id="accountFilterCount">全部账号</span>
+      <button type="button" class="sec mini" onclick="clearAccountFilters()">清除筛选</button>
+      <span style="font-size:11px;color:var(--dim)">筛选仅影响显示，批量操作仍按原账号范围执行</span>
+    </div>
     <div class="toolbar">
     <button onclick="openLoginModal()">添加</button>
     <!-- 静态 API Key 是另一条并行入口：CodeBuddy 的登录页不支持企业微信扫码，
@@ -4844,9 +5341,9 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     </section>
 
     <section>
-      <h2>顶部页签显示 <em id="setPagesState"></em></h2>
+      <h2>功能菜单显示 <em id="setPagesState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
-        取消勾选就把该页签从顶部收起来，勾回来即恢复；清单按顶部现有的页签现场生成，上游增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。
+        取消勾选就把该功能从左侧菜单收起来，勾回来即恢复；清单按现有页面现场生成，后续增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。
       </div>
       <div id="setPagesList" style="display:flex;flex-wrap:wrap;gap:8px 20px"></div>
     </section>
@@ -5955,6 +6452,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 
   <footer>每 5 秒自动刷新 · 数据来自本机反代 <span class="mono" id="logfile"></span></footer>
 </main>
+</div>
 
 <div class="modal-mask" id="codeartsOauthModal">
   <div class="modal" role="dialog" aria-modal="true" style="width:min(640px,100%)">
@@ -7076,12 +7574,16 @@ function currentModelSelection(){
 function isModelPicked(id){
   return !MODEL_SELECTION_CONFIGURED || AGENT_MODEL_SELECTION.has(id);
 }
-// 批量动作与「把全选态展开成集合」用的全量 id：以表格里画出来的为准
-// （清单会被排序/过滤），表格还没渲染时退回当前视图的目录。
+// 批量动作始终针对当前目录全量 id，不受纯展示筛选隐藏的行影响。
 function allModelPickIds(){
-  const boxes = Array.from(document.querySelectorAll('#modelsTable input.model-pick'));
-  if(boxes.length) return boxes.map(b => (b.dataset ? b.dataset.modelId : '')).filter(Boolean);
   return (MODELS_DATA || []).map(m => String((m && m.id) || '')).filter(Boolean);
+}
+let MODEL_CATALOG_FILTER = '';
+function clearModelCatalogFilter(){
+  MODEL_CATALOG_FILTER = '';
+  const input = document.getElementById('modelCatalogFilter');
+  if(input) input.value = '';
+  renderAvailableModels();
 }
 
 // 计数挂在「网关模型清单」标题后面：共几个 + 已勾选几个。勾选数放在这里而
@@ -7294,11 +7796,24 @@ function renderAvailableModels(){
   const tb = document.querySelector('#modelsTable tbody');
   if(!tb) return;
   updateAvailModelCount();
+  const query = MODEL_CATALOG_FILTER.trim().toLowerCase();
+  const visibleModels = MODELS_DATA.filter(m => !query || [
+    m.id, m.name, m.description, m.credits,
+    m.supports_vision ? '视觉 vision' : '文本 text',
+    m.supports_tool_calls ? '工具 tools' : '',
+    m.supports_reasoning ? '推理 reasoning' : ''
+  ].some(v => String(v || '').toLowerCase().includes(query)));
+  const count = document.getElementById('modelCatalogFilterCount');
+  if(count) count.textContent = query ? ('显示 ' + visibleModels.length + ' / ' + MODELS_DATA.length + ' 个模型') : '';
   if(!MODELS_DATA.length){
     tb.innerHTML = '<tr><td colspan="8" class="empty">暂无可用模型</td></tr>';
     return;
   }
-  tb.innerHTML = MODELS_DATA.map(m => {
+  if(!visibleModels.length){
+    tb.innerHTML = '<tr><td colspan="8"><div class="console-filter-empty"><span>没有符合当前条件的模型</span><button type="button" class="sec mini" onclick="clearModelCatalogFilter()">清除筛选</button></div></td></tr>';
+    return;
+  }
+  tb.innerHTML = visibleModels.map(m => {
     // 1. 倍率与折扣 —— 一律以 /v1/models 取回的 credits 为准（活目录优先、
     //    内置快照兜底）。以前这里还按模型 id 写死了 hy3 / hy4-preview-f /
     //    国际版 deepseek-v4.1-flash 三个"限时免费"，与 credits 值是 OR 关系，
@@ -9352,6 +9867,32 @@ function accountsInView(){
   return (window.ACCOUNTS || []).filter(a => !a.realm || a.realm === view);
 }
 
+// 纯展示筛选：账号池、禁用汇总和批量操作的输入仍使用 accountsInView()。
+function accountIsHealthy(a){
+  return !!a.enabled && !(a.tokenExpired || a.expiresIn === 'expired')
+    && !a.inCooldown && !a.breakerFor && !a.degradeFor
+    && !a.reserveBlocked && !a.dailyLimitBlocked && !a.creditLimitReached;
+}
+const ACCOUNT_FILTERS = {query: '', status: ''};
+function accountMatchesFilters(a){
+  const q = ACCOUNT_FILTERS.query.trim().toLowerCase();
+  if(q && ![a.nickname, a.note, a.uid].some(v => String(v || '').toLowerCase().includes(q))) return false;
+  if(ACCOUNT_FILTERS.status === 'disabled') return !a.enabled;
+  const attention = !accountIsHealthy(a);
+  if(ACCOUNT_FILTERS.status === 'healthy') return !attention;
+  if(ACCOUNT_FILTERS.status === 'attention') return !!attention;
+  return true;
+}
+function clearAccountFilters(){
+  ACCOUNT_FILTERS.query = '';
+  ACCOUNT_FILTERS.status = '';
+  const q = document.getElementById('accountSearchFilter');
+  const s = document.getElementById('accountStatusFilter');
+  if(q) q.value = '';
+  if(s) s.value = '';
+  renderAccounts();
+}
+
 // 当前禁用总览：把散落在账号卡片上的停用/限流状态汇总成一张表。
 // 四类来源：①面板手动停用 ②上游账号级冷却 ③上游模型级冷却 ④本地日限额/积分护栏。
 // 全部读 window.ACCOUNTS，不额外发请求；数据与账号卡片同源，不会互相矛盾。
@@ -9621,6 +10162,10 @@ function renderAccounts(){
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
+  const unfilteredCount = list.length;
+  list = list.filter(accountMatchesFilters);
+  const filterCount = document.getElementById('accountFilterCount');
+  if(filterCount) filterCount.textContent = '显示 ' + list.length + ' / ' + unfilteredCount + ' 个账号';
   // 排序：停用的永远沉底（备注/权重再高也一样）→ 备注是启用组内的加分项
   // （有备注的账号只在同权重时排前面，不再全局置顶）→ 权重高的在前 →
   // 同权重保持服务端顺序稳定，表格不乱跳。
@@ -9639,6 +10184,10 @@ function renderAccounts(){
   document.getElementById('acctCount').textContent =
     list.length ? ('（' + viewName + '共 ' + list.length + ' 个，启用 ' + usable + ' 个）') : '';
   if(!list.length){
+    if(unfilteredCount){
+      box.innerHTML = '<div class="console-filter-empty"><span>没有符合当前条件的账号</span><button type="button" class="sec mini" onclick="clearAccountFilters()">清除筛选</button></div>';
+      return;
+    }
     box.innerHTML =
       '<div style="text-align:center;padding:30px 16px">'
       + '<div style="font-size:15px;margin-bottom:8px">当前' + viewName + '还没有账号</div>'
@@ -9682,6 +10231,7 @@ async function loadAccounts(){
     (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
     await loadProxySlots();
     renderAccounts();
+    renderConsoleAccountHealth(window.ACCOUNTS || []);
     updateUI();
     // 昵称刚到位，补画一次积分扣减历史：它和本请求是并行的，先渲染的那次只有 uid。
     if(LAST_CREDIT_DATA) renderCreditHistory();
@@ -11055,6 +11605,102 @@ async function doImportDesktop(btn, path, realm){
   }
 }
 
+/* 概览附加图只读当前已加载的数据，不新增请求，也不把当前页分布冒充历史趋势。 */
+let CONSOLE_INSIGHT_ROWS = [];
+function renderConsoleAccountHealth(accts){
+  const box = document.getElementById('consoleAccountHealth');
+  if(!box) return;
+  const isCodearts = window.VIEW_REALM === 'codearts';
+  const all = isCodearts ? [] : accountsInView();
+  const groups = isCodearts ? (() => {
+    const st = (window.CODEARTS_OVERVIEW || {}).stats || {};
+    return [
+      {label: 'CodeArts', total: Number(st.total || 0), ok: Number(st.healthy || 0)}
+    ];
+  })() : [
+    {label: '国际版', total: (accts || []).filter(a => a.realm === 'intl').length, ok: (accts || []).filter(a => a.realm === 'intl' && accountIsHealthy(a)).length},
+    {label: '国内版', total: (accts || []).filter(a => a.realm === 'cn').length, ok: (accts || []).filter(a => a.realm === 'cn' && accountIsHealthy(a)).length}
+  ];
+  const total = groups.reduce((n, g) => n + g.total, 0);
+  const healthy = groups.reduce((n, g) => n + g.ok, 0);
+  const summary = document.getElementById('consoleHealthSummary');
+  if(summary) summary.textContent = healthy + ' / ' + total + ' 可用';
+  box.innerHTML = groups.map(g => {
+    const ratio = g.total ? Math.max(0, Math.min(100, g.ok / g.total * 100)) : 0;
+    return '<div class="console-health-row"><span>' + esc(g.label) + '</span>'
+      + '<div class="console-health-track" role="progressbar" aria-label="' + esc(g.label) + '账号可用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + ratio.toFixed(1) + '"><span class="console-health-fill" style="width:' + ratio + '%"></span></div>'
+      + '<strong>' + g.ok + ' / ' + g.total + '</strong></div>';
+  }).join('');
+}
+function renderConsoleUsageChart(rows){
+  const cv = document.getElementById('consoleUsageChart');
+  if(!cv) return;
+  const host = cv.parentElement;
+  if(!host) return;
+  const W = Math.max(260, host.clientWidth || 600), H = 168;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const ctx = cv.getContext('2d');
+  if(!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement);
+  const ink = css.getPropertyValue('--dim').trim() || '#4e5969';
+  const grid = css.getPropertyValue('--line').trim() || '#e3e8ef';
+  const color = css.getPropertyValue('--think').trim() || '#1677ff';
+  const pad = {l: 44, r: 10, t: 8, b: 30};
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const vals = rows.map(r => Number(r.total_tokens || 0));
+  const max = Math.max(1, ...vals);
+  ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+  ctx.textBaseline = 'middle'; ctx.fillStyle = ink;
+  for(let i = 0; i <= 4; i++){
+    const y = pad.t + ih - ih * i / 4;
+    ctx.strokeStyle = grid; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.fillText(fmtCompact(max * i / 4), 4, y);
+  }
+  if(!rows.length){
+    ctx.textAlign = 'center'; ctx.fillText('当前页暂无请求，等待真实调用数据', W / 2, H / 2); ctx.textAlign = 'left';
+    return;
+  }
+  const step = iw / rows.length, bw = Math.max(2, Math.min(24, step * .62));
+  rows.forEach((r, i) => {
+    const h = Number(r.total_tokens || 0) / max * ih;
+    const x = pad.l + i * step + (step - bw) / 2;
+    ctx.fillStyle = color;
+    if(h > 0) ctx.fillRect(x, pad.t + ih - h, bw, h);
+    if(rows.length <= 12 || i % Math.ceil(rows.length / 6) === 0){
+      const label = String(r.model || '—');
+      ctx.fillStyle = ink; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(label.length > 11 ? label.slice(0, 10) + '…' : label, Math.max(pad.l + 25, Math.min(W - 30, x + bw / 2)), H - 20);
+    }
+  });
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+}
+function renderConsoleInsights(rows, accts){
+  CONSOLE_INSIGHT_ROWS = rows || [];
+  renderConsoleUsageChart(CONSOLE_INSIGHT_ROWS);
+  const totals = {};
+  CONSOLE_INSIGHT_ROWS.forEach(r => {
+    const id = String(r.model || '未命名模型');
+    totals[id] = (totals[id] || 0) + Number(r.total_tokens || 0);
+  });
+  const ranked = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const total = ranked.reduce((n, row) => n + row[1], 0);
+  const note = document.getElementById('consoleUsageNote');
+  if(note) note.textContent = '当前页 ' + CONSOLE_INSIGHT_ROWS.length + ' 条请求 · 非时间序列';
+  const share = document.getElementById('consoleModelShare');
+  if(share) share.innerHTML = ranked.length ? ranked.map(([id, tokens]) => {
+    const ratio = total ? tokens / total * 100 : 0;
+    return '<div class="console-share-row"><span class="console-share-name" title="' + esc(id) + '">' + esc(id) + '</span>'
+      + '<span class="console-share-track"><span class="console-share-fill" style="display:block;width:' + ratio + '%"></span></span>'
+      + '<span class="console-share-value">' + fmtCompact(tokens) + ' · ' + ratio.toFixed(1) + '%</span></div>';
+  }).join('') : '<div style="padding:8px 0;color:var(--dim);font-size:12px">暂无模型用量分布</div>';
+  renderConsoleAccountHealth(accts || []);
+}
+
 /* ------------------------------- dashboard ------------------------------ */
 let REFRESH_RUNNING = false;
 let REFRESH_QUEUED = false;
@@ -11173,6 +11819,7 @@ async function refreshInner(gen){
   }
 
   const rows = recent.rows || [];
+  renderConsoleInsights(rows, accts);
   // Terminal state of a request. Rows written before the outcome field only
   // carry error/status, so fall back to that; a client cancellation is shown
   // apart from a real failure because the gateway did nothing wrong.
@@ -11211,9 +11858,9 @@ async function refreshInner(gen){
   if(recentFp === lastRecentFp) return;
   lastRecentFp = recentFp;
   COST_TIP_ROWS.clear();
-  document.getElementById('recent').innerHTML = rows.length ?
+  const buildRecentTable = tableRows => tableRows.length ?
     '<table class="data-cards"><thead><tr><th>时间</th><th>模型</th><th>推理强度</th><th>账号</th><th>API Key</th><th>模式</th><th>结果</th><th>耗时</th><th>首字</th><th>速度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存</th><th>总 token</th><th>积分</th><th class="pricing-col" style="color:var(--warn)">估算价格</th></tr></thead><tbody>'
-    + rows.map((r, i) => {
+    + tableRows.map((r, i) => {
         // 关闭时不登记悬停明细，也不挂 data-cost-key：列还在（观感不变），
         // 但没有任何可解释的价格，省掉整张表的明细构建与 hover 开销。
         const costKey = PRICING_ON ? costRowKey(r, i) : '';
@@ -11243,6 +11890,8 @@ async function refreshInner(gen){
       + '</tr>';
       }).join('') + '</tbody></table>'
     : '<div class="empty">还没有请求记录</div>';
+  RECENT_RENDER = {rows: rows, acctName: acctName, buildTable: buildRecentTable};
+  renderRecentView();
   reanchorCostTip();
 }
 
@@ -11268,6 +11917,36 @@ let RECENT_TOTAL_PAGES = 1;
 // 最近请求表上次真正画进 DOM 的内容指纹（见 refreshInner 里的 recentFp）。
 // 5 秒一轮的重画代价几乎全在布局（100 行实测 50~65ms），数据没变就不该重画。
 let lastRecentFp = null;
+let RECENT_RENDER = null;
+const RECENT_FILTERS = {query: '', outcome: ''};
+function clearRecentFilters(){
+  RECENT_FILTERS.query = '';
+  RECENT_FILTERS.outcome = '';
+  const q = document.getElementById('recentModelFilter');
+  const s = document.getElementById('recentOutcomeFilter');
+  if(q) q.value = '';
+  if(s) s.value = '';
+  renderRecentView();
+}
+function renderRecentView(){
+  if(!RECENT_RENDER) return;
+  const rows = RECENT_RENDER.rows.filter(r => {
+    const q = RECENT_FILTERS.query.trim().toLowerCase();
+    const outcome = r.outcome || (r.error ? 'failed' : 'completed');
+    if(RECENT_FILTERS.outcome && outcome !== RECENT_FILTERS.outcome) return false;
+    return !q || [r.model, RECENT_RENDER.acctName(r.account), r.account, r.key_name].some(v => String(v || '').toLowerCase().includes(q));
+  });
+  const count = document.getElementById('recentFilterCount');
+  if(count) count.textContent = (RECENT_FILTERS.query || RECENT_FILTERS.outcome)
+    ? ('当前页显示 ' + rows.length + ' / ' + RECENT_RENDER.rows.length + ' 条') : ('当前页 ' + RECENT_RENDER.rows.length + ' 条');
+  const box = document.getElementById('recent');
+  if(!rows.length){
+    box.innerHTML = '<div class="console-filter-empty"><span>当前页没有符合筛选条件的请求</span><button type="button" class="sec mini" onclick="clearRecentFilters()">清除筛选</button></div>';
+  } else {
+    box.innerHTML = RECENT_RENDER.buildTable(rows);
+  }
+  renderConsoleInsights(RECENT_RENDER.rows, window.ACCOUNTS || []);
+}
 
 function updateRecentLimitButtons(){
   [10, 20, 50, 100].forEach(n => {
@@ -12118,7 +12797,7 @@ function applyAccountsTabLayout(separate){
   if(btnAccounts) btnAccounts.style.display = _accountsSeparateTab ? '' : 'none';
   // 名字跟着走：账号已经不在这一页了，就不能再叫「网关与账号」。
   const gatewayLabel = document.getElementById('navGatewayLabel');
-  if(gatewayLabel) gatewayLabel.textContent = _accountsSeparateTab ? '网关' : '网关与账号';
+  if(gatewayLabel) gatewayLabel.textContent = '运行概览';
   // 页头（标题 + 一行说明）跟着走：账号在不在这一页，名字与说明都得对得上。
   const pageTitle = document.getElementById('gatewayPageTitle');
   if(pageTitle) pageTitle.textContent = _accountsSeparateTab ? '网关' : '网关与账号';
@@ -12151,6 +12830,118 @@ async function saveAccountsSeparateTab(btn){
   }
 }
 // ==== 账号页签模式结束 ====
+
+// ==== 全局控制台导航开始 ====
+const CONSOLE_COLLAPSE_KEY = 'wb-console-nav-collapsed';
+const CONSOLE_PAGE_LABELS = {
+  gateway: '运行概览', accounts: '账号管理', tasks: '任务与福利',
+  analytics: '数据看板', logs: '运行日志', settings: '网关设置', agents: '智能体接入'
+};
+function consoleNavIsMobile(){
+  return !!(window.matchMedia && window.matchMedia('(max-width:760px)').matches);
+}
+function syncConsoleCollapseButton(){
+  const collapsed = document.body.classList.contains('console-collapsed');
+  const btn = document.getElementById('btnConsoleCollapse');
+  if(!btn) return;
+  const label = collapsed ? '展开功能导航' : '收起功能导航';
+  btn.textContent = collapsed ? '»' : '«';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  document.querySelectorAll('.console-sidebar .main-nav-btn,.console-sidebar .console-nav-link').forEach(function(item){
+    item.title = collapsed ? item.textContent.trim() : '';
+  });
+}
+function toggleConsoleCollapse(){
+  if(consoleNavIsMobile()){ setConsoleNavOpen(false); return; }
+  const collapsed = document.body.classList.toggle('console-collapsed');
+  try { localStorage.setItem(CONSOLE_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch(e){}
+  syncConsoleCollapseButton();
+  if(typeof syncPageNavOffset === 'function') syncPageNavOffset();
+  requestAnimationFrame(function(){ window.dispatchEvent(new Event('resize')); });
+}
+function setConsoleNavOpen(open){
+  const on = !!open && consoleNavIsMobile();
+  document.body.classList.toggle('console-nav-open', on);
+  const btn = document.getElementById('btnConsoleNav');
+  if(btn){
+    btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? '关闭功能导航' : '打开功能导航');
+  }
+  const sidebar = document.getElementById('consoleSidebar');
+  if(sidebar){
+    if(consoleNavIsMobile()) sidebar.setAttribute('aria-hidden', on ? 'false' : 'true');
+    else sidebar.removeAttribute('aria-hidden');
+  }
+  if(on && sidebar){
+    const active = sidebar.querySelector('.main-nav-btn.active,.console-nav-link.active');
+    if(active) active.focus();
+  } else if(consoleNavIsMobile() && document.activeElement && sidebar && sidebar.contains(document.activeElement)){
+    if(btn) btn.focus();
+  }
+}
+function toggleConsoleNav(){ setConsoleNavOpen(!document.body.classList.contains('console-nav-open')); }
+function initConsoleShell(){
+  // 端口按实际访问地址显示：默认 8788，但部署在别的端口上时不该写死。
+  const portEl = document.getElementById('consolePort');
+  const port = (window.location && window.location.port) || '8788';
+  if(portEl) portEl.textContent = port;
+  const footPort = document.getElementById('consoleFootPort');
+  if(footPort) footPort.textContent = ':' + port;
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(CONSOLE_COLLAPSE_KEY) === '1'; } catch(e){}
+  document.body.classList.toggle('console-collapsed', collapsed && !consoleNavIsMobile());
+  window.addEventListener('resize', function(){
+    if(!document.body.classList.contains('console-nav-open')) renderConsoleUsageChart(CONSOLE_INSIGHT_ROWS);
+  });
+  syncConsoleCollapseButton();
+  setConsoleNavOpen(false);
+  document.addEventListener('keydown', function(ev){
+    if(ev.key === 'Escape' && document.body.classList.contains('console-nav-open')) setConsoleNavOpen(false);
+  });
+  document.addEventListener('click', function(ev){
+    if(consoleNavIsMobile() && document.body.classList.contains('console-nav-open')
+       && ev.target && ev.target.closest && ev.target.closest('.console-sidebar .main-nav-btn,.console-sidebar .console-nav-link')){
+      setConsoleNavOpen(false);
+    }
+  });
+  if(window.matchMedia){
+    const media = window.matchMedia('(max-width:760px)');
+    const changed = function(){
+      if(!media.matches) setConsoleNavOpen(false);
+      syncConsoleCollapseButton();
+    };
+    if(media.addEventListener) media.addEventListener('change', changed);
+    else if(media.addListener) media.addListener(changed);
+  }
+}
+function syncConsoleContext(tab){
+  const label = document.getElementById('consoleCurrentPage');
+  if(label) label.textContent = CONSOLE_PAGE_LABELS[tab] || '控制台';
+  document.querySelectorAll('.console-nav-link').forEach(function(item){ item.classList.remove('active'); });
+}
+function openModelCatalog(){
+  switchMainTab('gateway');
+  const target = document.getElementById('gatewayModelsSection');
+  const link = document.getElementById('btnNavModels');
+  if(link) link.classList.add('active');
+  if(target){
+    const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
+    window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+  }
+}
+function openRecentRequests(){
+  switchMainTab('gateway');
+  const target = document.getElementById('recentRequestsSection');
+  const link = document.getElementById('btnNavRequests');
+  if(link) link.classList.add('active');
+  if(target){
+    const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
+    window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+  }
+}
+// ==== 全局控制台导航结束 ====
 
 // ==== 面板窗口限高开始 ====
 // 每个窗口（区块 + 日志终端）超过限高时在窗口内部滚动、标题行吸顶，整页不再被
@@ -15181,6 +15972,7 @@ function switchMainTab(tab){
   // ?tab=accounts 的书签与上次停留的页签都退回「网关与账号」页——区块就在那一页里。
   if(tab === 'accounts' && !_accountsSeparateTab) tab = 'gateway';
   currentMainTab = tab;
+  syncConsoleContext(tab);
   // Remember the page across reloads. The URL is updated so the address bar
   // matches what is on screen and a copied link reopens the same page;
   // storage covers a plain reload and the ?key= link, which strips the
@@ -17490,9 +18282,7 @@ function drawSeries(){
     const h = v / maxV * ih;
     const x = padL + gap * i + (gap - bw) / 2;
     const y = padT + ih - h;
-    const grd = ctx.createLinearGradient(0, y, 0, padT + ih);
-    grd.addColorStop(0, barC);
-    grd.addColorStop(1, seriesColor('--chart-bar-soft'));
+    const grd = barC;
     ctx.fillStyle = i === n - 1 ? barC : grd;
     if (h >= 0.5){
       const r = Math.min(3, bw / 2);
