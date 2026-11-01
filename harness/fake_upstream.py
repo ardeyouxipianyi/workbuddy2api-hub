@@ -196,6 +196,9 @@ def bootstrap(directory):
         json.dump(account, fh, ensure_ascii=False, indent=2)
     settings = {"api_keys": [], "panel_password_default": True,
                 "log_db_enabled": False, "update_check_enabled": False,
+                # 关掉计价自动刷新：两侧都别去 models.dev 抓一份回来，
+                # 否则「抓完了没有」取决于网络快慢，/pricing 的对拍会变成看运气。
+                "pricing_refresh_minutes": 0,
                 # Anthropic 兼容面默认是关的；对拍要真走一次翻译，所以这里打开。
                 "enable_anthropic_messages": True,
                 "daily_chat_web": False, "schedule": {"checkin": [23], "travel": [23],
