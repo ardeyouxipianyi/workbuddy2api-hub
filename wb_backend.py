@@ -358,6 +358,11 @@ class Supervisor(object):
         return {"ok": False, "error": "unknown command: %r" % (cmd,)}
 
     def serve_control(self):
+        # Windows 的 Python 没有 AF_UNIX：控制面只在 POSIX 上存在，后端切换也一样。
+        # 明确说一句就走，别让线程抛 traceback（后端照样跑，只是切不了）。
+        if not hasattr(socket, "AF_UNIX"):
+            log("control socket 不可用（没有 AF_UNIX）：本平台不支持后端热切换")
+            return
         path = os.path.join(self.accounts_dir, SOCK_FILE)
         try:
             os.unlink(path)

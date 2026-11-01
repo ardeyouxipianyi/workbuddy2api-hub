@@ -99,6 +99,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: wb-backend
+      - name: musl toolchain
+        # ring 的构建脚本要 x86_64-linux-musl-gcc，runner 上只有 glibc 的 gcc。
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: cargo test
         run: cargo test --manifest-path wb-backend/Cargo.toml
       - name: Build the release binary

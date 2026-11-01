@@ -258,7 +258,13 @@ class CapabilitiesTests(unittest.TestCase):
             self.assertEqual(json.load(fh)["reason"], "test")
 
 
+@unittest.skipUnless(hasattr(socket, "AF_UNIX"), "launcher 控制面用 unix socket，Windows 上不存在")
 class SwitchTests(unittest.TestCase):
+    """这些都靠 launcher 的控制面：AF_UNIX + POSIX 的 `#!/bin/sh` 桩二进制。
+
+    Windows 两个前提都没有，产品本身也不支持后端热切换（launcher 会记一行
+    「control socket 不可用」），所以整类跳过而不是逐个挑。
+    """
     def setUp(self):
         self.case = Case()
         self.addCleanup(self.case.cleanup)
