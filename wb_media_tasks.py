@@ -124,14 +124,17 @@ class MediaTaskStore(object):
         return self._client
 
     def _account_for(self, uid):
-        if self._resolve_account is not None:
-            return self._resolve_account(uid)
-        try:
-            import wb_proxy
-            pool = getattr(wb_proxy, "POOL", None)
-            return pool.get(uid) if pool is not None else None
-        except Exception:
+        """把 uid 变成账号对象。**必须由调用方注入**，这里绝不去 import wb_proxy。
+
+        踩过的坑：wb_proxy 以脚本方式运行时模块名是 `__main__`，`import wb_proxy` 会
+        把模块代码再执行一遍、拿到一个 `POOL is None` 的影子模块。后果是任务提交成功
+        （上游已受理、可能已扣费）却在 0.8 秒内被标成失败——报「提交该任务的账号已不可
+        用」，而账号其实好好的。
+        """
+        if self._resolve_account is None:
+            self._log("media tasks: 没有注入 account_resolver，无法轮询")
             return None
+        return self._resolve_account(uid)
 
     def _log(self, message):
         if self._logger is not None:
@@ -321,8 +324,11 @@ class MediaTaskStore(object):
             return
         account = self._account_for(task.get("account"))
         if account is None:
-            # 账号在排队期间被删/停用：轮询必须用它，所以只能如实记失败。
-            self._finish(task_id, "failed", error="提交该任务的账号已不可用")
+            # 轮询必须用提交它的那个账号，取不到就只能停。但**不能记 failed**：
+            # 上游任务很可能已经受理并扣了费，记 failed 会让「钱花了没产物」查不到
+            # 原因。lost 的语义正是「本地丢了线索、上游可能已经花过钱」。
+            self._finish(task_id, "lost",
+                         error="提交该任务的账号当前不可用，上游任务可能仍在进行且已扣费")
             return
         self._update(task_id, status="running", started_at=int(self._clock()))
         try:

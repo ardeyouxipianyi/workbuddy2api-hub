@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMP = tempfile.TemporaryDirectory(prefix="wb-media-routes-")
 os.environ["ACCOUNTS_DIR"] = os.path.join(_TMP.name, "accounts")
 os.environ["WB_PROXY_USAGE_DIR"] = os.path.join(_TMP.name, "usage")
+os.environ["WB_MEDIA_DIR"] = os.path.join(_TMP.name, "media")
 os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
 import wb_accounts
@@ -106,6 +107,7 @@ class FakeHandler(P.Handler):
         self._allowed = allowed
         self.sent = None
         self.sent_kind = None
+        self.path = "/v1/images/generations"
 
     # --- 被覆盖的出口
     def _json(self, code, obj):
@@ -607,6 +609,62 @@ class VideoSubmitTests(MediaRouteCases):
         self.assertEqual(body["tasks"][0]["object"], "video")
         self.assertEqual(body["stats"]["total"], 1)
 
+    def test_wait_flag_on_the_query_blocks_until_done(self):
+        """`?wait=1` 写在 query 上时必须真的等——曾经只读 body，于是静默失效。"""
+        handler = FakeHandler()
+        handler.path = "/v1/videos?wait=1"
+        with mock.patch.object(wb_media_client, "submit_video",
+                               return_value={"taskId": "up-1"}),                 mock.patch.object(self.store, "wait",
+                                  return_value={"id": "vid_x", "status": "completed",
+                                                "model": "kling", "videos": [],
+                                                "credit": 57.14}) as wait:
+            handler._media_video_submit({"prompt": "海边日落", "seconds": 5})
+        wait.assert_called_once()
+        self.assertEqual(handler.sent[0], 202)
+        self.assertEqual(handler.sent[1]["status"], "completed")
+
+    def test_without_the_wait_flag_it_returns_immediately(self):
+        handler = FakeHandler()
+        handler.path = "/v1/videos"
+        with mock.patch.object(wb_media_client, "submit_video",
+                               return_value={"taskId": "up-1"}),                 mock.patch.object(self.store, "wait") as wait:
+            handler._media_video_submit({"prompt": "海边日落", "seconds": 5})
+        wait.assert_not_called()
+        self.assertEqual(handler.sent[1]["status"], "queued")
+
+    def test_signed_content_url_downloads_without_an_api_key(self):
+        """签名 URL 必须能不带 Authorization 头打开。
+
+        浏览器与播放器带不上这个头，所以 content 分支不能走 `_authorized()`。
+        曾经的顺序错误让"下载地址明明是对的、客户端却拿到 401"。
+        """
+        out_dir = os.path.join(_TMP.name, "content-%d" % _STORE_SEQ[0])
+        _STORE_SEQ[0] += 1
+        os.makedirs(out_dir, exist_ok=True)
+        payload = bytes([0, 0, 0, 0x18]) + b"ftypmp42FAKE"
+        path = os.path.join(out_dir, "fake.mp4")
+        with open(path, "wb") as handle:
+            handle.write(payload)
+        task = self.store.create("kling-video-v3", {"seconds": 4}, "u-1",
+                                 {"prompt": "x"}, "up-1")
+        self.store._finish(task["id"], "completed", credit=57.14, videos=[path])
+
+        handler = FakeHandler()
+        handler._authorized = lambda: False              # 没有 API Key
+        handler.send_response = mock.MagicMock()         # _send_bytes 走真实写出路径
+        handler.send_header = mock.MagicMock()
+        handler.end_headers = mock.MagicMock()
+        handler.wfile = mock.MagicMock()
+        handler._get_media_video(
+            "/v1/videos/%s/content" % task["id"], {"t": [self.store.sign(task["id"], 0)]})
+        handler.wfile.write.assert_called_once_with(payload)
+
+    def test_content_without_token_and_without_key_is_401(self):
+        handler = FakeHandler()
+        handler._authorized = lambda: False
+        handler._get_media_video("/v1/videos/vid_x/content", {})
+        self.assertEqual(handler.sent[0], 401)
+
     def test_unknown_video_get_is_404(self):
         handler = FakeHandler()
         handler._get_media_video("/v1/videos/vid_nope", {})
@@ -635,6 +693,25 @@ class IsolationTests(unittest.TestCase):
         account.note_error("account level", cooldown=60)
         self.assertFalse(account.ready(model="hunyuan-image-alpha"))
         self.assertFalse(account.ready(model="glm-5.3"))
+
+    def test_the_singleton_injects_an_account_resolver(self):
+        """`media_tasks()` 造出来的任务表必须带 resolver。
+
+        少了它，worker 永远找不到账号，任务会在提交成功后立刻变 lost——
+        而提交的那一下**已经扣过钱**了。这个 bug 真出现过（见
+        `wb_media_tasks._account_for` 的注释）。
+        """
+        saved = P._MEDIA_TASKS
+        try:
+            P._MEDIA_TASKS = None
+            store = P.media_tasks()
+            self.assertIs(P._MEDIA_TASKS, store)
+            self.assertIsNotNone(store._resolve_account)
+            self.assertIs(P.media_account_by_uid, store._resolve_account)
+        finally:
+            if P._MEDIA_TASKS is not None:
+                P._MEDIA_TASKS.stop()
+            P._MEDIA_TASKS = saved
 
     def test_media_slots_are_an_independent_pool(self):
         """媒体槽是一组独立的信号量：拿满 `MEDIA_SLOTS` 个之后第 N+1 个就失败。

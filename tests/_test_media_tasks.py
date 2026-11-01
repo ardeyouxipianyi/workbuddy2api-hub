@@ -150,16 +150,33 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(done["videos"], ["https://cos/a.mp4"])
         store.stop()
 
-    def test_missing_account_fails_without_retrying(self):
-        """账号没了不能换号轮询：task id 属于那个账号，换号只会 404。"""
+    def test_missing_account_marks_lost_not_failed(self):
+        """账号取不到时标 `lost` 而不是 `failed`。
+
+        task id 属于那个账号，换号轮询只会 404，所以要停；但上游任务**可能已经受理
+        并扣了费**——记 failed 会让「钱花了没产物」查不到原因，而 lost 的语义正是
+        「本地丢了线索、上游可能已花过钱」。
+        """
         client = FakeClient()
         store = make_store(client, accounts={})
         task = store.create("m", PARAMS, "u-9", BODY, "up-1")
         store._run_task(task["id"])
         done = store.get(task["id"])
-        self.assertEqual(done["status"], "failed")
-        self.assertIn("账号已不可用", done["error"])
+        self.assertEqual(done["status"], "lost")
+        self.assertIn("可能仍在进行且已扣费", done["error"])
         self.assertEqual(client.polls, [])
+        store.stop()
+
+    def test_resolver_is_required_and_never_imports_wb_proxy(self):
+        """没有注入 resolver 时返回 None，绝不 `import wb_proxy`。
+
+        踩过的坑：wb_proxy 以脚本方式运行时模块名是 `__main__`，`import wb_proxy`
+        会再执行一遍模块代码、拿到 `POOL is None` 的影子模块——任务提交成功却立刻
+        「账号已不可用」。这条钉住的就是"再也不许自己 import"。
+        """
+        store = T.MediaTaskStore(out_dir=os.path.join(_TMP.name, "noresolver"),
+                                 client=FakeClient(), autostart=False)
+        self.assertIsNone(store._account_for("u-1"))
         store.stop()
 
     def test_worker_survives_client_exception(self):

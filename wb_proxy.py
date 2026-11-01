@@ -487,6 +487,23 @@ def media_task_finished(task):
                  key=task.get("key"), realm=task.get("realm"), kind="video")
 
 
+def media_account_by_uid(uid):
+    """任务表轮询时按 uid 找账号。
+
+    这个函数必须定义在 wb_proxy 里、并被**注入**给任务表：任务表不能自己
+    `import wb_proxy`——wb_proxy 以脚本方式运行时模块名是 `__main__`，
+    `import wb_proxy` 会把模块代码再跑一遍，拿到一个 `POOL is None` 的影子模块。
+    后果是提交成功却立刻 "账号已不可用"。这里读的是本模块自己的 POOL 全局量。
+    """
+    pool = POOL
+    if pool is None:
+        return None
+    try:
+        return pool.get(uid)
+    except Exception:
+        return None
+
+
 def media_tasks():
     """生视频任务表的懒单例。"""
     global _MEDIA_TASKS
@@ -496,6 +513,7 @@ def media_tasks():
                 _MEDIA_TASKS = wb_media_tasks.MediaTaskStore(
                     out_dir=wb_media_tasks.default_out_dir(),
                     on_finish=media_task_finished,
+                    resolve_account=media_account_by_uid,
                     logger=lambda message: log(message, tag="media"),
                 )
     return _MEDIA_TASKS
@@ -20516,7 +20534,10 @@ class Handler(BaseHTTPRequestHandler):
                 % (task["id"], model["id"], params["seconds"], cost_hint,
                    time.time() - started_at), tag="media")
             public = self._media_task_public(task)
-            wait = str(_as_text(payload.get("wait")) or "").lower()
+            # `?wait=1` 在 query 上（这是 OpenAI 客户端最自然的写法），body 里也认。
+            # 曾经只读 body，于是 `?wait=1` 静默失效、客户端拿到 202 却没在等。
+            query_wait = (parse_qs(urlparse(self.path).query).get("wait") or [""])[0]
+            wait = str(query_wait or _as_text(payload.get("wait")) or "").lower()
             if wait in ("1", "true", "yes"):
                 # 阻塞式：给不会轮询的客户端。最长等到轮询上限，仍没完成就返回当前状态
                 # （status 仍是 in_progress，客户端可以继续轮询）。
@@ -20538,12 +20559,18 @@ class Handler(BaseHTTPRequestHandler):
         return wb_media.public_task(task, content_url=url)
 
     def _get_media_video(self, path, query):
-        """`GET /v1/videos/{id}`：查一个任务的状态。"""
+        """`GET /v1/videos/{id}`：查任务状态；`…/content` 走下载分支。
+
+        鉴权顺序在这里很关键：**content 分支必须在要求 API Key 之前分出去**。
+        它有自己的鉴权（签名令牌），而浏览器与播放器根本带不上 Authorization 头。
+        曾经把 `_authorized()` 放在最前面，结果签名 URL 一打开就是 401——下载地址
+        明明是对的，客户端却拿不到产物。
+        """
         rest = path[len("/v1/videos/"):].strip("/")
-        if not self._authorized():
-            return
         if rest.endswith("/content"):
             return self._get_media_content(rest[:-len("/content")].strip("/"), query)
+        if not self._authorized():
+            return
         task_id = rest.split("/")[0]
         task = media_tasks().get(task_id)
         if task is None:
@@ -20564,7 +20591,9 @@ class Handler(BaseHTTPRequestHandler):
         token = (query.get("t") or [""])[0]
         if not store.verify(task_id, index, token):
             if not self._authorized():
-                return
+                # 明确的 401，而不是"什么都不发"——空响应会让客户端挂到超时。
+                return self._error(401, "missing or invalid download token",
+                                   "authentication_error")
         path = store.content_path(task_id, index)
         if path is None:
             return self._error(404, "no content for this task (yet)",
