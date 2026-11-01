@@ -520,6 +520,207 @@ def learned_video_seconds(realm, model_id):
         return _MEDIA_LEARNED_SECONDS.get((realm, model_id))
 
 
+#: 实测单价账本：`(模型, 分辨率) → 积分/秒`。
+#:
+#: 上游目录**没有价格字段**，价格只在结算时以 `credit` 返回，所以真实单价只能从
+#: "实扣 ÷ 秒数"反推。为什么要单独记：原来的估算用一个一刀切的 26 积分/秒，
+#: 对 minimax（实测 14.29/秒）高估 82%——余额紧时会把本来跑得起的调用挡掉；
+#: 对高分辨率档位又可能低估，而低估的后果是账号被一次调用打穿。
+_MEDIA_PRICES = {}
+_MEDIA_PRICES_LOCK = threading.Lock()
+_MEDIA_PRICES_PATH = None
+#: 生图实测单价（积分/张），键 = 模型 id。与视频分开记：一个是按秒、一个是按张，
+#: 混在一张表里迟早会把单位搞错。
+_MEDIA_IMAGE_PRICES = {}
+_MEDIA_IMAGE_PRICES_PATH = None
+
+
+def media_prices_path():
+    """账本落盘位置（与任务表同目录，重启后仍然有效）。"""
+    return os.path.join(wb_media_tasks.default_out_dir(), "video-prices.json")
+
+
+def media_image_prices_path():
+    return os.path.join(wb_media_tasks.default_out_dir(), "image-prices.json")
+
+
+def learn_image_price(model, credit):
+    """记下一次生图的实扣（积分/张）。没有 credit 就不记，绝不猜。"""
+    model = (model or "").strip()
+    if not model:
+        return None
+    try:
+        credit = float(credit)
+    except (TypeError, ValueError):
+        return None
+    if credit <= 0:
+        return None
+    price = round(credit, 4)
+    with _MEDIA_PRICES_LOCK:
+        _MEDIA_IMAGE_PRICES[model] = price
+        try:
+            with open(_MEDIA_IMAGE_PRICES_PATH, "w", encoding="utf-8") as handle:
+                json.dump(_MEDIA_IMAGE_PRICES, handle, ensure_ascii=False,
+                          indent=2, sort_keys=True)
+        except Exception:                                # noqa: BLE001
+            pass
+    return price
+
+
+def media_image_price(model):
+    """实测单张价格；没有观测值返回 None。"""
+    with _MEDIA_PRICES_LOCK:
+        return _MEDIA_IMAGE_PRICES.get((model or "").strip())
+
+
+def media_image_cost_hint(model):
+    """生图派发前的估计：有实测价按实测，否则用 6.0（保守上界）。"""
+    price = media_image_price(model)
+    return price if price else wb_media.COST_IMAGE_ESTIMATE
+
+
+def load_media_prices():
+    """读回账本；文件不存在或坏了都当空账本，不影响派发。"""
+    global _MEDIA_PRICES_PATH
+    path = media_prices_path()
+    _MEDIA_PRICES_PATH = path
+    global _MEDIA_IMAGE_PRICES_PATH
+    _MEDIA_IMAGE_PRICES_PATH = media_image_prices_path()
+    try:
+        with open(_MEDIA_IMAGE_PRICES_PATH, encoding="utf-8") as handle:
+            image_payload = json.load(handle)
+        if isinstance(image_payload, dict):
+            with _MEDIA_PRICES_LOCK:
+                for model, value in image_payload.items():
+                    try:
+                        _MEDIA_IMAGE_PRICES[model] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:                                    # noqa: BLE001
+        return
+    if not isinstance(payload, dict):
+        return
+    with _MEDIA_PRICES_LOCK:
+        for key, value in payload.items():
+            model, _, resolution = key.partition("|")
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if model and price > 0:
+                _MEDIA_PRICES[(model, resolution)] = price
+
+
+def _save_media_prices_locked():
+    path = _MEDIA_PRICES_PATH
+    if not path:
+        return
+    payload = {"%s|%s" % (model, resolution): price
+               for (model, resolution), price in _MEDIA_PRICES.items()}
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:                                    # noqa: BLE001
+        pass                                             # 落盘失败不影响派发
+
+
+def learn_media_price(model, resolution, credit, seconds):
+    """用一次已完成任务的实扣反推单价。
+
+    三个输入缺一不可：`credit` 为空说明上游没给结算值（failed / lost），
+    `seconds` 缺失就无法换算成单价。**绝不按猜测补一个数**——错的价格比没有价格
+    更坏，它会悄悄改变"付得起吗"的判断。
+    """
+    model = (model or "").strip()
+    if not model:
+        return None
+    try:
+        credit = float(credit)
+        span = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if credit <= 0 or span <= 0:
+        return None
+    price = round(credit / span, 4)
+    with _MEDIA_PRICES_LOCK:
+        _MEDIA_PRICES[(model, (resolution or "").strip())] = price
+        _save_media_prices_locked()
+    return price
+
+
+def media_price_per_second(model, resolution=None):
+    """实测单价；没有观测值返回 None。
+
+    精确匹配 `(模型, 分辨率)` 优先；只有别的分辨率的观测值时取该模型**最大值**
+    ——估算宁可往高报：高估只是可能少派一次，低估会把账号打穿。
+    """
+    model = (model or "").strip()
+    if not model:
+        return None
+    with _MEDIA_PRICES_LOCK:
+        exact = _MEDIA_PRICES.get((model, (resolution or "").strip()))
+        if exact:
+            return exact
+        same_model = [price for (name, _res), price in _MEDIA_PRICES.items()
+                      if name == model]
+    return max(same_model) if same_model else None
+
+
+def backfill_media_prices():
+    """从任务历史里回填单价账本（**只用有过实扣的已完成任务**）。
+
+    为什么要回填：账本是我在功能上线后才加的，之前跑过的任务已经在 `tasks.json`
+    里留下了"实扣 + 秒数 + 分辨率"，这些是真实结算数据，比任何估算都可信。
+    不做这一步，网关会一直用 26/秒的上界，直到下一次真跑视频。
+    """
+    try:
+        with open(os.path.join(wb_media_tasks.default_out_dir(), "tasks.json"),
+                  encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:                                    # noqa: BLE001
+        return 0
+    tasks = payload.get("tasks") if isinstance(payload, dict) else None
+    if not isinstance(tasks, list):
+        return 0
+    learned = 0
+    for task in tasks:
+        if not isinstance(task, dict) or task.get("status") != "completed":
+            continue
+        if learn_media_price(task.get("model"), task.get("resolution"),
+                             task.get("credit"), task.get("seconds")) is not None:
+            learned += 1
+    # 生图没有任务表（同步调用），实扣只落在 usage.jsonl 里，也从那儿回填。
+    try:
+        with open(USAGE_LOG, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue                     # 半行/坏行跳过，不因此中断回填
+                if row.get("kind") == "image" and row.get("credit"):
+                    if learn_image_price(row.get("model"), row.get("credit")) is not None:
+                        learned += 1
+    except Exception:                                    # noqa: BLE001
+        pass
+    if learned:
+        log("media: 从历史记录回填 %d 条实测单价" % learned, tag="media")
+    return learned
+
+
+def media_cost_hint(model, seconds, resolution=None):
+    """派发前的积分估计：有实测价按实测算，没有才退回 26/秒的上界。"""
+    return wb_media.estimate_cost("video", seconds,
+                                  price_per_second=media_price_per_second(model, resolution))
+
+
 def media_task_finished(task):
     """任务到终态时补一笔 usage。
 
@@ -533,9 +734,22 @@ def media_task_finished(task):
     if credit is None:
         return
     media_key_spend_add(task.get("key"), credit)
+    # 用实扣反推单价，下次估算就不必再用一刀切的 26/秒。
+    learned = learn_media_price(task.get("model"), task.get("resolution"),
+                                credit, task.get("seconds"))
+    if learned is not None:
+        log("media: 学到 %s（%s）单价 %.4f 积分/秒（实扣 %.2f ÷ %s 秒）"
+            % (task.get("model"), task.get("resolution") or "默认", learned,
+               float(credit), task.get("seconds")), tag="media")
     record_usage(task.get("model") or "video", {"credit": credit}, stream=False,
                  account=task.get("account"), outcome="completed",
-                 key=task.get("key"), realm=task.get("realm"), kind="video")
+                 key=task.get("key"), realm=task.get("realm"), kind="video",
+                 # 参数必须落到账上：否则同一行只有 credit，事后无法解释
+                 # "为什么这次 57.14、那次 128.57"（模型/秒数/分辨率都丢了）。
+                 media={"seconds": task.get("seconds"),
+                        "resolution": task.get("resolution"),
+                        "aspect_ratio": task.get("aspect_ratio"),
+                        "image_to_video": task.get("image_to_video")})
 
 
 def media_account_by_uid(uid):
@@ -636,7 +850,9 @@ def submit_queued_video_task(task):
     def pick(avoid):
         config = wb_settings.media_config(ACCOUNTS_DIR)
         try:
-            cost_hint = wb_media.estimate_cost("video", (task.get("seconds") or 5))
+            cost_hint = media_cost_hint(task.get("model"),
+                                        task.get("seconds") or 5,
+                                        task.get("resolution"))
         except Exception:
             cost_hint = 0
         return _pick_media_account_for(realm, model_id, cost_hint, avoid, config)
@@ -1219,7 +1435,7 @@ def _best_cached_tokens(usage):
 
 def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_ms=None, fp=None,
                 account=None, outcome="completed", key=None, effort=None,
-                requested_model=None, realm=None, kind="chat"):
+                requested_model=None, realm=None, kind="chat", media=None):
     """Record one finished request as exactly one JSONL row.
 
     A request without a usage block still gets a row (flagged usage_missing):
@@ -1291,6 +1507,12 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
     # the field, and a model without reasoning controls has nothing to report.
     if effort:
         row["reasoning_effort"] = effort
+    # 媒体调用的计费参数：**只记有值的**，不给 chat 行塞一堆 null。
+    # 没有这一块，一行 usage 只剩一个 credit 数值，事后无法解释它怎么算出来的。
+    if isinstance(media, dict):
+        for field in ("seconds", "resolution", "aspect_ratio", "image_to_video"):
+            if media.get(field) is not None:
+                row[field] = media[field]
     # Derived per-request rates (None-safe).
     if gen_ms and gen_ms > 0:
         row["tokens_per_sec"] = round(fields.get("completion_tokens", 0) / (gen_ms / 1000.0), 2)
@@ -20513,6 +20735,9 @@ class Handler(BaseHTTPRequestHandler):
     def _media_note_success(self, account, model_id, credit, kind, started_at, realm):
         account.note_success(model=model_id)
         media_key_spend_add(self._key_id(), credit)
+        if kind == "image" and credit is not None:
+            # 学到之后，生图的"付得起吗"就用实价，而不是 6.0 这个上界。
+            learn_image_price(model_id, credit)
         record_usage(
             model_id,
             {"credit": credit} if credit is not None else {},
@@ -20540,7 +20765,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(
                 503, "media slots busy (%d in flight); retry shortly" % MEDIA_SLOTS,
                 "server_error")
-        cost_hint = wb_media.estimate_cost("image")
+        cost_hint = media_image_cost_hint(prepared["model"]["id"])
         spend_ok, spend_why = media_key_spend_allow(
             self._key_id(), cost_hint, int(config.get("daily_credits_per_key") or 0))
         if not spend_ok:
@@ -20694,7 +20919,8 @@ class Handler(BaseHTTPRequestHandler):
                     "本网关的媒体设置把视频时长限制在 %d 秒以内（给定 %d 秒）"
                     % (cap, params["seconds"]))
             body = wb_media.build_video_body(model["id"], request, params)
-            cost_hint = wb_media.estimate_cost("video", params["seconds"])
+            cost_hint = media_cost_hint(model["id"], params["seconds"],
+                                    params.get("resolution"))
         except wb_media.MediaError as exc:
             return self._media_error(exc)
 
@@ -20915,6 +21141,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._media_error(exc)
         if tag:
             models = [model for model in models if tag in model.get("tags", ())]
+        # 带上**实测单价**：调用方要预估花费时不该再自己硬编码一张价格表
+        # （那张表一旦与实扣不符，报出来的数就是错的，而且没人会发现）。
+        # 没观测过的模型如实返回 null，不要编一个数。
+        for model in models:
+            tags = model.get("tags") or []
+            if not any(tag in tags for tag in (wb_media.TAG_TEXT_TO_VIDEO,
+                                               wb_media.TAG_IMAGE_TO_VIDEO)):
+                # 生图按张计费，挂"每秒"价格只会误导；单独给张价。
+                image_price = media_image_price(model.get("id"))
+                model["creditPerImage"] = (image_price if image_price
+                                           else wb_media.COST_IMAGE_ESTIMATE)
+                model["creditPerImageMeasured"] = image_price is not None
+                continue
+            generation = model.get("videoGeneration") or {}
+            model["creditPerSecond"] = media_price_per_second(
+                model.get("id"), generation.get("defaultResolution"))
+            if model["creditPerSecond"] is None:
+                # 如实说明现在的估算依据是上界，而不是装作知道价格。
+                model["creditPerSecondCeiling"] = wb_media.COST_VIDEO_PER_SECOND_CEILING
         return self._json(200, {
             "realm": realm,
             "enabled": config["enabled"],
@@ -24678,6 +24923,10 @@ def _bootstrap_runtime(args):
             raise SystemExit("Cannot start: the requested panel password could not be set.") from exc
     elif wb_settings.panel_password_is_default(ACCOUNTS_DIR):
         log("panel      : password is still the default 'admin' - change it in the panel")
+    # 实测单价账本：读回来才能让"付得起吗"用真实价格判断，而不是每次都从
+    # 26 积分/秒的上界起算。
+    load_media_prices()
+    backfill_media_prices()
     POOL = wb_accounts.AccountPool(ACCOUNTS_DIR, log=log)
     POOL.load()
     POOL.apply_proxy_slots()

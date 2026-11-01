@@ -718,6 +718,25 @@ class CostAndShapeTests(unittest.TestCase):
     def test_video_cost_defaults_to_five_seconds(self):
         self.assertEqual(M.estimate_cost("video"), 130.0)
 
+    def test_estimate_prefers_measured_price(self):
+        """有实测单价就按实测算，别用那个一刀切的 26/秒。
+
+        minimax 实测 14.2857/秒：用上界算 4 秒是 104，虚高 82%，余额紧时会把
+        本来跑得起的调用挡掉。
+        """
+        self.assertEqual(M.estimate_cost("video", 4, price_per_second=14.2857), 57.14)
+        self.assertEqual(M.estimate_cost("video", 5, price_per_second=25.7143), 128.57)
+
+    def test_estimate_falls_back_to_ceiling_without_price(self):
+        # 没有观测价时必须退回保守上界——低估会让账号被一次调用打穿。
+        self.assertEqual(M.estimate_cost("video", 4), 104.0)
+        self.assertEqual(M.estimate_cost("video", 4, price_per_second=0), 104.0)
+        self.assertEqual(M.estimate_cost("video", 4, price_per_second=None), 104.0)
+
+    def test_estimate_ignores_bad_price(self):
+        for bad in ("abc", -1, 0, "", None):
+            self.assertEqual(M.estimate_cost("video", 4, price_per_second=bad), 104.0)
+
     def test_unknown_kind_is_free(self):
         self.assertEqual(M.estimate_cost("audio"), 0.0)
 

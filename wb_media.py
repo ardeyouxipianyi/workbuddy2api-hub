@@ -968,12 +968,14 @@ def assert_input_image_bytes(byte_length, source="输入图"):
 
 # ---------------------------------------------------------------- 计费与对外形状
 
-def estimate_cost(kind, seconds=None):
-    """一次调用的积分上界估计，**只用于派发前的「付得起吗」**，不用于报价。
+def estimate_cost(kind, seconds=None, price_per_second=None):
+    """一次调用的积分估计，**只用于派发前的「付得起吗」**，不用于对外报价。
 
-    目录条目里没有价格字段，价格只在结算时以 `usage.credit` 返回；所以这里取
-    dsh 实测最贵的那条当上界（kling 文生 25.71 积分/秒 → 26），宁可少派一次号，
-    也不要在任务成功后排干一个账号的余额。
+    价格由调用方传入（`price_per_second`）：这一层是纯逻辑，不持有账本、不读文件。
+    服务层用**实测单价**填它（实扣 ÷ 秒数），拿不到就传 None。
+
+    拿不到实测价时退回一刀切的 26 积分/秒——那是"不知道价格时"的保守上界，
+    不是价格：它高估 minimax（14.29/秒）约 82%，余额紧时会把跑得起的调用挡掉。
     """
     if kind == "image":
         return COST_IMAGE_ESTIMATE
@@ -982,6 +984,12 @@ def estimate_cost(kind, seconds=None):
             span = float(seconds or DEFAULT_VIDEO_SECONDS)
         except (TypeError, ValueError):
             span = float(DEFAULT_VIDEO_SECONDS)
+        try:
+            price = float(price_per_second) if price_per_second else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+        if price > 0:
+            return round(price * span, 2)
         return COST_VIDEO_PER_SECOND_CEILING * span
     return 0.0
 

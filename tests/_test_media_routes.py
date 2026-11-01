@@ -897,6 +897,101 @@ class ReferenceValidationOrderTests(MediaRouteCases):
         self.assertIn("互斥", json.dumps(message, ensure_ascii=False) if not isinstance(message, str) else message)
 
 
+class PriceLedgerTests(unittest.TestCase):
+    """实测单价账本：只从"实扣 ÷ 秒数"学，学不到就不用。"""
+
+    def setUp(self):
+        self.saved = dict(P._MEDIA_PRICES)
+        self.saved_path = P._MEDIA_PRICES_PATH
+        P._MEDIA_PRICES.clear()
+        # 用例不落盘：路径设 None，_save 会直接返回
+        P._MEDIA_PRICES_PATH = None
+
+    def tearDown(self):
+        P._MEDIA_PRICES.clear()
+        P._MEDIA_PRICES.update(self.saved)
+        P._MEDIA_PRICES_PATH = self.saved_path
+
+    def test_learns_from_actual_charge(self):
+        price = P.learn_media_price("minimax-video-h3", "768P", 57.14, 4)
+        self.assertAlmostEqual(price, 14.285, places=3)
+        self.assertAlmostEqual(P.media_price_per_second("minimax-video-h3", "768P"), 14.285, places=3)
+        # 学到之后估算就该按实测价，而不是 26/秒
+        self.assertAlmostEqual(P.media_cost_hint("minimax-video-h3", 4, "768P"), 57.14, places=2)
+
+    def test_refuses_to_guess(self):
+        """缺 credit 或秒数就不记——错的价格比没有价格更坏。"""
+        for credit, seconds in ((None, 4), (0, 4), (57.14, None), (57.14, 0), ("x", 4)):
+            self.assertIsNone(P.learn_media_price("m", "768P", credit, seconds))
+        self.assertIsNone(P.media_price_per_second("m", "768P"))
+
+    def test_other_resolution_uses_model_max(self):
+        """同模型别的分辨率：取最大值。高估只是少派一次，低估会把账号打穿。"""
+        P.learn_media_price("kling-video-v3", "720P", 128.57, 5)      # 25.714/秒
+        P.learn_media_price("kling-video-v3", "4K", 257.14, 5)        # 51.428/秒
+        self.assertAlmostEqual(P.media_price_per_second("kling-video-v3", "1080P"), 51.428, places=3)
+
+    def test_unknown_model_has_no_price(self):
+        self.assertIsNone(P.media_price_per_second("never-seen", "720P"))
+        # 于是估算退回上界
+        self.assertEqual(P.media_cost_hint("never-seen", 5), 130.0)
+
+    def test_price_survives_restart(self):
+        """账本要落盘，否则每次重启都退回 26/秒的上界。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "video-prices.json")
+            P._MEDIA_PRICES_PATH = path
+            P.learn_media_price("minimax-video-h3", "768P", 57.14, 4)
+            P._MEDIA_PRICES.clear()
+            P._MEDIA_PRICES_PATH = path
+            # 模拟重启：清空内存后重新读文件
+            P._MEDIA_PRICES.clear()
+            saved = P.media_prices_path
+            P.media_prices_path = lambda: path
+            try:
+                P.load_media_prices()
+            finally:
+                P.media_prices_path = saved
+            self.assertAlmostEqual(P.media_price_per_second("minimax-video-h3", "768P"),
+                                   14.285, places=3)
+
+
+class ImagePriceTests(unittest.TestCase):
+    """生图也是"用一个上界当价格"，同样要学实测值。"""
+
+    def setUp(self):
+        self.saved = dict(P._MEDIA_IMAGE_PRICES)
+        self.saved_path = P._MEDIA_IMAGE_PRICES_PATH
+        P._MEDIA_IMAGE_PRICES.clear()
+        P._MEDIA_IMAGE_PRICES_PATH = None
+
+    def tearDown(self):
+        P._MEDIA_IMAGE_PRICES.clear()
+        P._MEDIA_IMAGE_PRICES.update(self.saved)
+        P._MEDIA_IMAGE_PRICES_PATH = self.saved_path
+
+    def test_learns_actual_image_charge(self):
+        self.assertIsNone(P.media_image_price("hunyuan-image-alpha"))
+        # 观测前用 6.0 上界，观测后用实扣
+        self.assertEqual(P.media_image_cost_hint("hunyuan-image-alpha"), 6.0)
+        P.learn_image_price("hunyuan-image-alpha", 5.71)
+        self.assertAlmostEqual(P.media_image_price("hunyuan-image-alpha"), 5.71)
+        self.assertAlmostEqual(P.media_image_cost_hint("hunyuan-image-alpha"), 5.71)
+
+    def test_never_guesses(self):
+        for bad in (None, 0, -1, "x"):
+            self.assertIsNone(P.learn_image_price("m", bad))
+        self.assertIsNone(P.media_image_price("m"))
+
+    def test_video_and_image_ledgers_do_not_mix(self):
+        """一个按秒、一个按张，混表迟早把单位搞错。"""
+        P.learn_image_price("minimax-video-h3", 5.71)
+        self.assertIsNone(P.media_price_per_second("minimax-video-h3", "768P"))
+        P.learn_media_price("minimax-video-h3", "768P", 57.14, 4)
+        self.assertAlmostEqual(P.media_image_price("minimax-video-h3"), 5.71)
+
+
 class VideoConcurrencyTests(MediaRouteCases):
     """并发生视频：满了就排队（不提交、不花钱），并行任务摊到不同账号。"""
 

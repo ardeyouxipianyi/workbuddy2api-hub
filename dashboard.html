@@ -4622,6 +4622,56 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
       <div id="mediaTasksList" class="table-wrap"></div>
     </section>
+    <section>
+      <div style="margin-bottom:14px">
+        <h2 style="margin:0">媒体能力（生图 / 生视频） <em id="setMediaState"></em></h2>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">
+          默认关闭。开启后网关才提供 <code>/v1/images/*</code> 与 <code>/v1/videos/*</code>；关闭时这些路由<b>根本不存在</b>（404）。
+          每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。
+        </div>
+      </div>
+      <div id="mediaSettingsRow" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:58px">
+          <input id="setMediaEnabled" type="checkbox" style="width:16px;height:16px">
+          开启生图 / 生视频路由
+        </label>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">媒体出口</div>
+          <select id="setMediaRealm" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            <option value="cn">国内版</option>
+            <option value="intl">国际版</option>
+          </select>
+        </div>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">出站身份</div>
+          <select id="setMediaIdentity" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            <option value="desktop">桌面身份</option>
+            <option value="cli">CLI 身份</option>
+          </select>
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每分钟生图上限</div>
+          <input id="setMediaImageRate" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">视频时长上限（秒）</div>
+          <input id="setMediaVideoSeconds" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">生视频并发</div>
+          <input id="setMediaVideoConcurrency" type="number" min="1" max="8" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每 Key 每日积分上限</div>
+          <input id="setMediaDailyCredits" type="number" min="0" max="100000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <button onclick="saveMediaConfig(this)" style="height:38px;margin-top:20px">保存</button>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:10px">
+        每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
+        生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
+      </div>
+    </section>
   </div>
 
   <div id="pageAnalytics" class="main-page">
@@ -5919,56 +5969,6 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 
   </div>
 
-    <section>
-      <div style="margin-bottom:14px">
-        <h2 style="margin:0">媒体能力（生图 / 生视频） <em id="setMediaState"></em></h2>
-        <div style="font-size:12px;color:var(--dim);margin-top:4px">
-          默认关闭。开启后网关才提供 <code>/v1/images/*</code> 与 <code>/v1/videos/*</code>；关闭时这些路由<b>根本不存在</b>（404）。
-          每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。
-        </div>
-      </div>
-      <div id="mediaSettingsRow" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:58px">
-          <input id="setMediaEnabled" type="checkbox" style="width:16px;height:16px">
-          开启生图 / 生视频路由
-        </label>
-        <div style="min-width:150px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">媒体出口</div>
-          <select id="setMediaRealm" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            <option value="cn">国内版</option>
-            <option value="intl">国际版</option>
-          </select>
-        </div>
-        <div style="min-width:150px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">出站身份</div>
-          <select id="setMediaIdentity" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-            <option value="desktop">桌面身份</option>
-            <option value="cli">CLI 身份</option>
-          </select>
-        </div>
-        <div style="min-width:130px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每分钟生图上限</div>
-          <input id="setMediaImageRate" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-        </div>
-        <div style="min-width:130px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">视频时长上限（秒）</div>
-          <input id="setMediaVideoSeconds" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-        </div>
-        <div style="min-width:130px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">生视频并发</div>
-          <input id="setMediaVideoConcurrency" type="number" min="1" max="8" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-        </div>
-        <div style="min-width:150px">
-          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每 Key 每日积分上限</div>
-          <input id="setMediaDailyCredits" type="number" min="0" max="100000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
-        </div>
-        <button onclick="saveMediaConfig(this)" style="height:38px;margin-top:20px">保存</button>
-      </div>
-      <div style="font-size:12px;color:var(--dim);margin-top:10px">
-        每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
-        生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
-      </div>
-    </section>
 
   <div id="pageAgents" class="main-page">
     <div style="margin-bottom:16px">
