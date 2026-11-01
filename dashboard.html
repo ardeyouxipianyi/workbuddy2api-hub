@@ -1261,6 +1261,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   padding:5px 9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.35;
   text-align:left;cursor:pointer;transition:border-color .14s ease,background .14s ease,box-shadow .14s ease}
 .cs-trigger:hover{border-color:var(--line-hover);background:var(--panel3)}
+/* 媒体设置行：自定义下拉的触发器默认比数字输入框矮一截（28 vs 39），底对齐时
+   两列的小标签会差 11px。统一成 38px 后四条标签落在同一条线上。 */
+#mediaSettingsRow .cs-trigger,
+#mediaSettingsRow input[type="number"]{height:38px;box-sizing:border-box}
 .cs-trigger:focus-visible{outline:none;border-color:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft)}
 .cs-wrap.cs-open .cs-trigger{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
@@ -1525,7 +1529,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '视频时长上限（秒）': 'Video length cap (seconds)',
     '每 Key 每日积分上限': 'Daily credits per key',
     '生视频并发': 'Concurrent videos',
-    '生视频并发超过上限时新任务**先排队**（不提交上游、不扣积分），并行任务会尽量分到不同账号上。': 'When the concurrent-video cap is reached, new tasks **queue locally** (not submitted upstream, no credits spent). Parallel tasks are spread across different accounts.',
+    '生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。': 'When the concurrent-video cap is reached, new tasks queue locally (not submitted upstream, no credits spent). Parallel tasks are spread across different accounts.',
     '每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。': 'A daily credit cap of 0 means unlimited. The video length cap is combined with each model\'s own limit, whichever is smaller. The outbound identity decides which client the request imitates; desktop accounts usually need no change.',
     '能力': 'Capability',
     '比例': 'Aspect',
@@ -5923,8 +5927,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
           每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。
         </div>
       </div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
+      <div id="mediaSettingsRow" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:58px">
           <input id="setMediaEnabled" type="checkbox" style="width:16px;height:16px">
           开启生图 / 生视频路由
         </label>
@@ -5958,11 +5962,11 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每 Key 每日积分上限</div>
           <input id="setMediaDailyCredits" type="number" min="0" max="100000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
         </div>
-        <button onclick="saveMediaConfig(this)">保存</button>
+        <button onclick="saveMediaConfig(this)" style="height:38px;margin-top:20px">保存</button>
       </div>
       <div style="font-size:12px;color:var(--dim);margin-top:10px">
         每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
-        生视频并发超过上限时新任务**先排队**（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
+        生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
       </div>
     </section>
 
@@ -12318,7 +12322,7 @@ async function saveMediaConfig(btn){
       identity: (document.getElementById('setMediaIdentity') || {}).value || 'desktop',
       image_max_per_minute: num('setMediaImageRate', 6),
       video_max_seconds: num('setMediaVideoSeconds', 15),
-      daily_credits_per_key: num('setMediaDailyCredits', 200),
+      daily_credits_per_key: num('setMediaDailyCredits', 0),
       video_concurrency: num('setMediaVideoConcurrency', 3)
     }
   };

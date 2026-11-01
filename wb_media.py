@@ -1000,6 +1000,9 @@ _STATUS_OUT = {
     "rejected": "failed",
     "failed": "failed",
     "lost": "failed",
+    # 取消：对外是 failed（OpenAI 没有 cancelled 这个 status），但 error.code 会
+    # 单独给出 cancelled，让客户端知道"没扣费，可以直接重试"。
+    "cancelled": "failed",
 }
 
 
@@ -1020,6 +1023,8 @@ def error_code_for(status):
         return "invalid_request"
     if status == "lost":
         return "task_lost"
+    if status == "cancelled":
+        return "cancelled"
     if status == "failed":
         return "upstream_error"
     return None

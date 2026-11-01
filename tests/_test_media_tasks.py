@@ -342,7 +342,9 @@ class CancelTests(unittest.TestCase):
         task = store.create("m", PARAMS, "u-1", BODY, "up-1")
         self.assertTrue(store.cancel(task["id"]))
         done = store.get(task["id"])
-        self.assertEqual(done["status"], "failed")
+        # 取消用独立状态，不再混进 failed：对外 error.code 给出 cancelled，
+        # 客户端据此知道"没扣费、可重试"；failed 意味着"上游可能已扣费"。
+        self.assertEqual(done["status"], "cancelled")
         self.assertIn("cancelled", done["error"])
         store.stop()
 

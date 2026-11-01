@@ -392,7 +392,9 @@ class MediaTaskStore(object):
             status = task["status"]
             if status == "waiting":
                 # 排队中：还没花过钱，可以干净地摘掉。
-                task["status"] = "failed"
+                # 单独用 `cancelled` 而不是 `failed`：对外契约里 `failed` 意味着
+                # "上游可能已扣费"，而这条**根本没到过上游**，可以放心重试。
+                task["status"] = "cancelled"
                 task["error"] = "cancelled while queued (未提交到上游，未扣费)"
                 task["completed_at"] = int(self._clock())
                 self._waiting_bodies.pop(task_id, None)
@@ -400,8 +402,8 @@ class MediaTaskStore(object):
                 return True
             if status != "queued":
                 return False
-            task["status"] = "failed"
-            task["error"] = "cancelled before polling"
+            task["status"] = "cancelled"
+            task["error"] = "cancelled before polling（上游已受理，仍会跑完并计费）"
             task["completed_at"] = int(self._clock())
             self._persist_locked()
             return True
@@ -582,7 +584,7 @@ class MediaTaskStore(object):
             if task is None:
                 self._order.remove(task_id)
                 continue
-            if task["status"] in ("completed", "failed", "rejected", "lost"):
+            if task["status"] in ("completed", "failed", "rejected", "lost", "cancelled"):
                 self._order.remove(task_id)
                 self._tasks.pop(task_id, None)
 
