@@ -30,10 +30,15 @@ os.environ["ACCOUNTS_DIR"] = os.path.join(_TMP.name, "accounts")
 os.environ["WB_PROXY_USAGE_DIR"] = os.path.join(_TMP.name, "usage")
 os.makedirs(os.environ["ACCOUNTS_DIR"], exist_ok=True)
 
+import wb_accounts
 import wb_media as M
 import wb_media_client
+import wb_media_tasks as T
 import wb_proxy as P
 import wb_settings
+
+#: 给每个任务表一个独立目录（共用会让上一条用例落盘的 tasks.json 被下一条读回来）。
+_STORE_SEQ = [0]
 
 
 # ---------------------------------------------------------------- 替身
@@ -476,6 +481,194 @@ class ErrorMappingTests(unittest.TestCase):
         handler = FakeHandler()
         handler._media_error(M.MediaError("UPSTREAM", "boom"))
         self.assertNotIn("未扣积分", handler.sent[1])
+
+
+
+
+# ---------------------------------------------------------------- 生视频（提交与学区间）
+
+class VideoSubmitTests(MediaRouteCases):
+    """/v1/videos 的提交流程。
+
+    注意这一层**不测轮询**：轮询在后台 worker 里，已由 `_test_media_tasks` 覆盖；
+    这里只测"提交之前的每一道闸"和提交之后的登记。
+    """
+
+    def setUp(self):
+        super(VideoSubmitTests, self).setUp()
+        self.saved_tasks = P._MEDIA_TASKS
+        self.saved_learned = dict(P._MEDIA_LEARNED_SECONDS)
+        P._MEDIA_LEARNED_SECONDS.clear()
+        _STORE_SEQ[0] += 1
+        self.store = T.MediaTaskStore(
+            out_dir=os.path.join(_TMP.name, "video-%d" % _STORE_SEQ[0]),
+            client=object(), resolve_account=lambda uid: FakeAccount(uid),
+            autostart=False)
+        P._MEDIA_TASKS = self.store
+        # 目录里增加一个**没有 videoGeneration** 的视频模型：用来验证「拿不到区间
+        # 就不拦、让上游先拒一次、再把区间学下来」这条路径。
+        models = P._catalog_raw["cn"]["data"]["models"]
+        if not any(m["id"] == "kling-noconfig" for m in models):
+            models.append({"id": "kling-noconfig", "name": "Kling NoConfig",
+                           "tags": ["text-to-video", "image-to-video"]})
+
+    def tearDown(self):
+        P._MEDIA_TASKS = self.saved_tasks
+        P._MEDIA_LEARNED_SECONDS.clear()
+        P._MEDIA_LEARNED_SECONDS.update(self.saved_learned)
+        self.store.stop()
+        models = P._catalog_raw["cn"]["data"]["models"]
+        P._catalog_raw["cn"]["data"]["models"] = [
+            m for m in models if m["id"] != "kling-noconfig"]
+        super(VideoSubmitTests, self).tearDown()
+
+    def submit(self, payload=None, handler=None):
+        handler = handler or FakeHandler()
+        body = {"prompt": "海边日落", "seconds": 5}
+        body.update(payload or {})
+        handler._media_video_submit(body)
+        return handler
+
+    def test_submit_returns_202_and_registers_the_task(self):
+        with mock.patch.object(wb_media_client, "submit_video",
+                               return_value={"taskId": "up-1"}) as submit:
+            handler = self.submit()
+        code, body = handler.sent
+        self.assertEqual(code, 202)
+        self.assertTrue(body["id"].startswith("vid_"))
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["seconds"], "5")           # OpenAI 侧是字符串
+        self.assertEqual(len(self.store.list()), 1)
+        # 提交用的是该区的账号，且 body 带 watermark
+        self.assertTrue(submit.call_args[0][1]["watermark"])
+
+    def test_queue_full_is_429_and_costs_nothing(self):
+        self.store.max_pending = 1
+        self.store.create("m", {}, "u-1", {"prompt": "x"}, "up-0")
+        with mock.patch.object(wb_media_client, "submit_video") as submit:
+            handler = self.submit()
+        self.assertEqual(handler.sent[0], 429)
+        self.assertIn("队列已满", handler.sent[1])
+        submit.assert_not_called()
+
+    def test_seconds_over_the_gateway_cap(self):
+        self.set_media({"video_max_seconds": 4})
+        with mock.patch.object(wb_media_client, "submit_video") as submit:
+            handler = self.submit({"seconds": 5})
+        self.assertEqual(handler.sent[0], 400)
+        self.assertIn("4 秒", handler.sent[1])
+        submit.assert_not_called()
+
+    def test_missing_prompt_is_400(self):
+        with mock.patch.object(wb_media_client, "submit_video") as submit:
+            handler = self.submit({"prompt": "  "})
+        self.assertEqual(handler.sent[0], 400)
+        submit.assert_not_called()
+
+    def test_rejected_learns_the_range_then_blocks_locally(self):
+        """上游拒一次之后，同一个越界值第二次在本地就被拦下（零请求、零冷却）。"""
+        error = M.MediaError(
+            "REJECTED",
+            "上游拒绝了参数（未扣积分）：unsupported video duration: 1 seconds, "
+            "supported range: 4-15 seconds",
+            status=400,
+            detail="unsupported video duration: 1 seconds, supported range: 4-15 seconds")
+        with mock.patch.object(wb_media_client, "submit_video", side_effect=error) as submit:
+            first = self.submit({"model": "kling-noconfig", "seconds": 1})
+        self.assertEqual(first.sent[0], 400)
+        self.assertEqual(submit.call_count, 1)
+        self.assertEqual(P.learned_video_seconds("cn", "kling-noconfig"), (4, 15))
+
+        # 第二次：本地直接拦，submit 一次都不再调用
+        with mock.patch.object(wb_media_client, "submit_video") as submit2:
+            second = self.submit({"model": "kling-noconfig", "seconds": 1})
+        self.assertEqual(second.sent[0], 400)
+        self.assertIn("4", second.sent[1])
+        submit2.assert_not_called()
+
+    def test_image_to_video_sends_image_url_and_drops_aspect_ratio(self):
+        """图生视频：输入图归一后进 image_url，且**不带** aspect_ratio（比例由图决定）。"""
+        with mock.patch.object(wb_media_client, "submit_video",
+                               return_value={"taskId": "up-2"}) as submit:
+            handler = self.submit({"input_reference": "data:image/png;base64,AAA"})
+        self.assertEqual(handler.sent[0], 202)
+        body = submit.call_args[0][1]
+        self.assertTrue(body["image_url"].startswith("data:image/png;base64,"))
+        self.assertNotIn("aspect_ratio", body["extra_parameters"])
+
+    def test_video_tasks_endpoint_returns_public_shape(self):
+        self.store.create("kling-video-v3", {"seconds": 5, "resolution": "720P"},
+                          "u-1", {"prompt": "x"}, "up-9")
+        handler = FakeHandler()
+        handler._get_media_tasks({})
+        code, body = handler.sent
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body["tasks"]), 1)
+        self.assertEqual(body["tasks"][0]["object"], "video")
+        self.assertEqual(body["stats"]["total"], 1)
+
+    def test_unknown_video_get_is_404(self):
+        handler = FakeHandler()
+        handler._get_media_video("/v1/videos/vid_nope", {})
+        self.assertEqual(handler.sent[0], 404)
+
+
+# ---------------------------------------------------------------- 两条设计承诺
+
+class IsolationTests(unittest.TestCase):
+    """整个设计里最大的两个承诺，各要一条能失败的证据。"""
+
+    def test_media_failure_does_not_park_the_account_for_chat(self):
+        """画图失败只让「这个账号的这个图像模型」冷却，同账号的 chat 照常可用。
+
+        这条靠的是 `note_error(model=…)` 命中那个分支后**直接 return**，不碰账号级
+        `cooldown_until`。改掉那个 return 这条就会红。
+        """
+        account = _real_account()
+        account.note_error("image failed", cooldown=60, model="hunyuan-image-alpha")
+        self.assertFalse(account.ready(model="hunyuan-image-alpha"))
+        self.assertTrue(account.ready(model="glm-5.3"))
+
+    def test_chat_level_cooldown_still_parks_media_too(self):
+        """反过来：账号级冷却（chat 那儿真出问题）本来就该连媒体一起挡住。"""
+        account = _real_account()
+        account.note_error("account level", cooldown=60)
+        self.assertFalse(account.ready(model="hunyuan-image-alpha"))
+        self.assertFalse(account.ready(model="glm-5.3"))
+
+    def test_media_slots_are_an_independent_pool(self):
+        """媒体槽是一组独立的信号量：拿满 `MEDIA_SLOTS` 个之后第 N+1 个就失败。
+
+        这条不能证明"chat 的槽没被动"（那要读 CHAT 的信号量），但它证明媒体**用的是
+        自己的一组槽**——`_CHAT_SLOTS_SEM` 与 `_MEDIA_SLOTS_SEM` 是两个对象，媒体这边
+        没有一行代码碰前者。
+        """
+        taken = 0
+        try:
+            while P.acquire_media_slot():
+                taken += 1
+                if taken > 100:
+                    break
+            self.assertEqual(taken, P.MEDIA_SLOTS)
+            self.assertFalse(P.acquire_media_slot())         # 满了就是拿不到
+            self.assertEqual(P.media_inflight(), P.MEDIA_SLOTS)
+        finally:
+            for _ in range(taken):
+                P.release_media_slot()
+        self.assertEqual(P.media_inflight(), 0)
+        self.assertTrue(P.acquire_media_slot())              # 释放之后能再拿到
+        P.release_media_slot()
+
+
+def _real_account(uid="u-real-1"):
+    """真的 Account 对象（隔离目录）：`note_error` 的模型级隔离要用真实实现才准。"""
+    return wb_accounts.Account({
+        "accessToken": "isolation-test-token",
+        "uid": uid,
+        "realm": "cn",
+        "product": "workbuddy",
+        "domain": "copilot.tencent.com",
+    })
 
 
 if __name__ == "__main__":

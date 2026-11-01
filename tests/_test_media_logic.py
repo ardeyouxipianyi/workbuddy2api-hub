@@ -339,6 +339,11 @@ class VideoParamTests(unittest.TestCase):
     def resolve(self, request, generation):
         return M.resolve_video_params(request, generation)
 
+    def test_prompt_is_required(self):
+        for bad in (None, "", "   "):
+            self.assertEqual(
+                error_code_of(self.resolve, {"prompt": bad}, self.kling()), "INVALID_ARGS")
+
     def test_defaults_from_model(self):
         params = self.resolve({"prompt": "海边日落"}, self.kling())
         self.assertEqual(params["seconds"], 5)              # defaultSeconds

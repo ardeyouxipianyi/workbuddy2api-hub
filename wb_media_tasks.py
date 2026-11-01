@@ -88,7 +88,7 @@ class MediaTaskStore(object):
                  max_pending=DEFAULT_MAX_PENDING, max_tasks=DEFAULT_MAX_TASKS,
                  max_disk_mb=DEFAULT_MAX_DISK_MB, ttl_days=DEFAULT_TTL_DAYS,
                  client=None, resolve_account=None, logger=None, clock=None,
-                 autostart=True):
+                 autostart=True, on_finish=None):
         self.out_dir = out_dir or default_out_dir()
         self.state_path = os.path.join(self.out_dir, "tasks.json")
         self.workers = max(1, int(workers))
@@ -109,6 +109,9 @@ class MediaTaskStore(object):
         self._stopping = False
         self._secret = secrets.token_bytes(32)
         self.autostart = bool(autostart)
+        # 任务到终态时的回调（记账用）。放在注入而不是 import 里：记账属于
+        # wb_proxy 的事，本模块不能反过来依赖它（那会成环）。
+        self._on_finish = on_finish
         self._load()
 
     # ------------------------------------------------------------ 依赖注入
@@ -365,6 +368,14 @@ class MediaTaskStore(object):
         if videos is not None:
             fields["videos"] = list(videos)
         self._update(task_id, **fields)
+        if self._on_finish is not None:
+            task = self.get(task_id)
+            if task is not None:
+                try:
+                    # 锁外调用：回调里会写 usage、碰账号池，不能在持锁时进另一个锁域。
+                    self._on_finish(task)
+                except Exception as exc:
+                    self._log("media task %s: 完成回调失败 %s" % (task_id, exc))
         self._prune_outputs()
 
     def _evict_locked(self):

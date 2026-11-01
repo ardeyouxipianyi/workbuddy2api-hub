@@ -464,6 +464,9 @@ def resolve_video_params(request, generation=None):
 
     prompt = request.get("prompt")
     prompt = prompt if isinstance(prompt, str) else ""
+    if prompt.strip() == "":
+        # 必填检查放在长度检查之前：空 prompt 不是"太短"，是根本没给。
+        raise MediaError("INVALID_ARGS", "prompt 必填，且必须是非空字符串")
     limit = generation.get("maxPromptLength") or PROMPT_LIMIT_DEFAULT
     if len(prompt) > limit:
         raise MediaError(

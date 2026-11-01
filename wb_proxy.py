@@ -76,6 +76,7 @@ import wb_ipintel
 import wb_logstore
 import wb_media
 import wb_media_client
+import wb_media_tasks
 import wb_pricing
 import wb_settings
 import wb_webprompts
@@ -299,6 +300,7 @@ CHAT_PATH = "/v2/chat/completions"
 MEDIA_POST_PATHS = (
     "/v1/images/generations", "/images/generations",
     "/v1/images/edits", "/images/edits",
+    "/v1/videos", "/videos",
 )
 #: 媒体请求体上限。改图的输入图是 data URL：8 MB 原图编码后约 10.7 MB，再包一层
 #: JSON 就逼近通用上限（默认 16 MB，还可能被 max_payload_mb 调小），而那条上限是
@@ -341,6 +343,11 @@ class MediaRateLimited(Exception):
         self.message = ("媒体请求太频繁：每 Key 每分钟的生图上限已用尽，请 %d 秒后再试"
                         % self.wait)
         self.detail = ""
+
+
+def _as_text(value):
+    """非空字符串才算数（`None` / 空串 / 非字符串一律视为"没给"）。"""
+    return value if isinstance(value, str) and value.strip() != "" else ""
 
 
 def acquire_media_slot():
@@ -429,6 +436,69 @@ def media_budget_ok(account, cost):
                 return False, ("今日额度剩 %g 积分 < 本次预估 %g"
                                % (max(0.0, headroom), cost))
     return True, ""
+
+
+# ---------------------------------------------------------------- 生视频的任务表与学区间
+#
+# 任务表是懒单例：模块导入时不建目录、不起线程——测试里 import wb_proxy 是常事，
+# 不该顺带在磁盘上留一个 media/ 目录。
+_MEDIA_TASKS = None
+_MEDIA_TASKS_LOCK = threading.Lock()
+#: 上游在拒绝文案里自报的时长区间，按 (区, 模型 id) 记。目录没给 videoGeneration 的
+#: 账号本地无从校验，只能让上游先拒一次；学到之后第二次同样的越界值就能在本地拦下
+#: （零请求、零冷却）。键带上区域名，因为模型 id 不跨区。
+_MEDIA_LEARNED_SECONDS = {}
+_MEDIA_LEARNED_LOCK = threading.Lock()
+
+
+def learn_video_seconds(realm, model_id, text):
+    """从上游的拒绝文案里学「这个模型支持几秒」，返回 (min, max) 或 None。
+
+    读不出区间就什么都不记——**绝不猜**。实测文案形如
+    `unsupported video duration: 1 seconds, supported range: 4-15 seconds`。
+    """
+    span = wb_media.parse_supported_seconds_range(text or "")
+    if span is None:
+        return None
+    with _MEDIA_LEARNED_LOCK:
+        _MEDIA_LEARNED_SECONDS[(realm, model_id)] = span
+    return span
+
+
+def learned_video_seconds(realm, model_id):
+    with _MEDIA_LEARNED_LOCK:
+        return _MEDIA_LEARNED_SECONDS.get((realm, model_id))
+
+
+def media_task_finished(task):
+    """任务到终态时补一笔 usage。
+
+    生图的 credit 在响应里就有，视频的只在轮询完成时才给——所以视频的记账挂在任务表
+    的完成回调上，而不是提交流程里（提交时还不知道花了多少）。
+
+    `failed` / `lost` 也可能已经扣过费，但上游没给数值。这里**不编一个 0** 进去：
+    那会让账面上看起来这些任务是免费的。
+    """
+    credit = (task or {}).get("credit")
+    if credit is None:
+        return
+    record_usage(task.get("model") or "video", {"credit": credit}, stream=False,
+                 account=task.get("account"), outcome="completed",
+                 key=task.get("key"), realm=task.get("realm"), kind="video")
+
+
+def media_tasks():
+    """生视频任务表的懒单例。"""
+    global _MEDIA_TASKS
+    if _MEDIA_TASKS is None:
+        with _MEDIA_TASKS_LOCK:
+            if _MEDIA_TASKS is None:
+                _MEDIA_TASKS = wb_media_tasks.MediaTaskStore(
+                    out_dir=wb_media_tasks.default_out_dir(),
+                    on_finish=media_task_finished,
+                    logger=lambda message: log(message, tag="media"),
+                )
+    return _MEDIA_TASKS
 
 
 def read_catalog_dump(realm):
@@ -19237,6 +19307,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_v1_balance_summary()
         if path in ("/v1/models", "/models"):
             return self._get_v1_models()
+        if path == "/v1/media/tasks":
+            return self._get_media_tasks(query)
+        if path.startswith("/v1/videos/"):
+            return self._get_media_video(path, query)
         if path in ("/v1/media/models", "/media/models"):
             # 媒体模型清单（含 videoGeneration 原样）。**不进 /v1/models**：
             # 那个清单是给聊天客户端用的，塞进媒体模型会让客户端拿它去对话。
@@ -19391,6 +19465,9 @@ class Handler(BaseHTTPRequestHandler):
             "slots": MEDIA_SLOTS,
             "inflight": media_inflight(),
         }
+        if _MEDIA_TASKS is not None:
+            # 只有任务表真的被创建过才报（否则 health 会顺带建目录、起线程）。
+            info["media"]["tasks"] = _MEDIA_TASKS.stats()
         if self._key_ok():
             info.update({
                 "uid": rep.uid if rep else None,
@@ -20097,6 +20174,7 @@ class Handler(BaseHTTPRequestHandler):
             "UPSTREAM": (502, "server_error"),
             "EMPTY_RESULT": (502, "server_error"),
             "COOLDOWN": (429, "rate_limit_error"),
+            "QUEUE_FULL": (429, "rate_limit_error"),
         }
         status, err_type = mapping.get(exc.code, (502, "server_error"))
         message = exc.message or exc.code
@@ -20283,6 +20361,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_media_post(self, path, payload):
         """媒体 POST 的入口：开关 → 参数 → 限流 → 并发槽 → 选号 → 发请求 → 记账。"""
+        if path in ("/v1/videos", "/videos"):
+            # 生视频是异步任务，流程与生图完全不同（提交 / 轮询 / 下载），单独一条。
+            return self._media_video_submit(payload)
         config = self._media_config()
         try:
             prepared = self._media_prepare(path, payload, config)
@@ -20356,6 +20437,174 @@ class Handler(BaseHTTPRequestHandler):
         if item.get("url") is not None:
             body["hint"] = "COS 签名 URL 约 24 小时失效；要长期保留请及时下载。"
         return body
+
+    # ------------------------------------------------------------ 生视频（异步任务）
+
+    def _media_video_submit(self, payload):
+        """`POST /v1/videos`：提交一个生视频任务，立刻返回 202 + task id。
+
+        与生图最大的不同是「钱在提交时就花了，产物要等」。所以：队列上限在**提交之前**
+        检查（提交之后队列满，任务已经花了钱，丢掉就是丢钱）；上游在建任务之前退回的
+        4xx 一律 REJECTED，可以立刻重试。
+        """
+        config = self._media_config()
+        if not config["enabled"]:
+            return self._media_error(wb_media.MediaError("NO_ROUTE", "not found"))
+        store = media_tasks()
+        if store.pending_count() >= store.max_pending:
+            # 还没花钱：让客户端看到 429，比让它排队几十分钟好。
+            return self._media_error(wb_media.MediaError(
+                "QUEUE_FULL",
+                "生视频队列已满（%d 条在排队）；等一会儿再试，或先减少并发"
+                % store.pending_count()))
+        try:
+            realm = self._media_realm(config)
+            models = self._media_catalog(realm)
+            wants_image = bool(_as_text(payload.get("image"))
+                               or _as_text(payload.get("input_reference")))
+            tag = (wb_media.TAG_IMAGE_TO_VIDEO if wants_image
+                   else wb_media.TAG_TEXT_TO_VIDEO)
+            model = wb_media.pick_model(models, payload.get("model"), tag)
+            request = dict(payload)
+            if wants_image:
+                # 输入图只接受 data URL 与公网 http(s)：本地路径在 classify 阶段就被拒，
+                # 公网 URL 由 client 层校验公网地址并禁掉 3xx 跟随。
+                raw_image = _as_text(request.get("image")) or _as_text(request.get("input_reference"))
+                request["image"] = wb_media_client.resolve_input_image(raw_image)
+            generation = dict(model.get("videoGeneration") or {})
+            learned = learned_video_seconds(realm, model["id"])
+            if learned is not None:
+                # 上游上一次拒绝时自报的区间比目录更晚、更真。
+                generation["minSeconds"], generation["maxSeconds"] = learned
+            params = wb_media.resolve_video_params(request, generation)
+            cap = int(config.get("video_max_seconds") or 0)
+            if cap and params["seconds"] > cap:
+                raise wb_media.MediaError(
+                    "INVALID_ARGS",
+                    "本网关的媒体设置把视频时长限制在 %d 秒以内（给定 %d 秒）"
+                    % (cap, params["seconds"]))
+            body = wb_media.build_video_body(model["id"], request, params)
+            cost_hint = wb_media.estimate_cost("video", params["seconds"])
+        except wb_media.MediaError as exc:
+            return self._media_error(exc)
+
+        if not acquire_media_slot():
+            return self._error(503, "media slots busy (%d in flight); retry shortly"
+                               % MEDIA_SLOTS, "server_error")
+        try:
+            try:
+                account = self._pick_media_account(realm, model["id"], cost_hint, set())
+            except wb_media.MediaError as exc:
+                return self._media_error(exc)
+            started_at = time.time()
+            try:
+                submission = wb_media_client.submit_video(account, body)
+            except wb_media.MediaError as exc:
+                self._media_note_failure(account, exc, model["id"])
+                if exc.code == "REJECTED":
+                    # 学一次区间：同一个越界值下次在本地就被拦下。
+                    learned = learn_video_seconds(realm, model["id"], exc.detail or exc.message)
+                    if learned is not None:
+                        log("media: 学到 %s 的时长区间 %s 秒（来自上游拒绝文案）"
+                            % (model["id"], learned), tag="media")
+                return self._media_error(exc)
+            account.note_success(model=model["id"])
+            task = store.create(model["id"], params, account.uid, body,
+                                submission["taskId"], realm=realm,
+                                key=self._key_id())
+            log("media: 已提交生视频任务 %s（%s，%d 秒，预估 %.0f 积分，%.1f 秒）"
+                % (task["id"], model["id"], params["seconds"], cost_hint,
+                   time.time() - started_at), tag="media")
+            public = self._media_task_public(task)
+            wait = str(_as_text(payload.get("wait")) or "").lower()
+            if wait in ("1", "true", "yes"):
+                # 阻塞式：给不会轮询的客户端。最长等到轮询上限，仍没完成就返回当前状态
+                # （status 仍是 in_progress，客户端可以继续轮询）。
+                done = store.wait(task["id"],
+                                  timeout=wb_media_client.VIDEO_POLL_TIMEOUT_SECONDS)
+                public = self._media_task_public(done or task)
+            return self._json(202, public)
+        finally:
+            release_media_slot()
+
+    def _media_task_public(self, task):
+        """任务行 → 对外形状（含签名的下载地址）。签名只在服务端算。"""
+        if not task:
+            return {}
+        url = None
+        if task.get("videos"):
+            token = media_tasks().sign(task["id"], 0)
+            url = "/v1/videos/%s/content?i=0&t=%s" % (task["id"], token)
+        return wb_media.public_task(task, content_url=url)
+
+    def _get_media_video(self, path, query):
+        """`GET /v1/videos/{id}`：查一个任务的状态。"""
+        rest = path[len("/v1/videos/"):].strip("/")
+        if not self._authorized():
+            return
+        if rest.endswith("/content"):
+            return self._get_media_content(rest[:-len("/content")].strip("/"), query)
+        task_id = rest.split("/")[0]
+        task = media_tasks().get(task_id)
+        if task is None:
+            return self._error(404, "no such task: %s" % task_id, "invalid_request_error")
+        return self._json(200, self._media_task_public(task))
+
+    def _get_media_content(self, task_id, query):
+        """`GET /v1/videos/{id}/content?i=0&t=…`：下载 mp4。
+
+        鉴权有两条路：签名令牌（浏览器 / 播放器没有 Authorization 头）或 API Key
+        （命令行客户端带得起头）。签名覆盖 task + index + 过期时刻，换索引也要换令牌。
+        """
+        store = media_tasks()
+        try:
+            index = int((query.get("i") or ["0"])[0])
+        except (TypeError, ValueError):
+            index = 0
+        token = (query.get("t") or [""])[0]
+        if not store.verify(task_id, index, token):
+            if not self._authorized():
+                return
+        path = store.content_path(task_id, index)
+        if path is None:
+            return self._error(404, "no content for this task (yet)",
+                               "invalid_request_error")
+        try:
+            with open(path, "rb") as handle:
+                payload = handle.read()
+        except OSError as exc:
+            return self._error(500, "cannot read artifact: %s" % exc, "server_error")
+        safe = re.sub(r"[^0-9A-Za-z_-]+", "-", str(task_id))[:48] or "video"
+        return self._send_bytes(payload, "video/mp4",
+                                filename="%s-%d.mp4" % (safe, index))
+
+    def _get_media_tasks(self, query):
+        """`GET /v1/media/tasks`：最近的任务（面板用）。"""
+        if not self._authorized():
+            return
+        try:
+            limit = int((query.get("limit") or ["50"])[0])
+        except (TypeError, ValueError):
+            limit = 50
+        store = media_tasks()
+        return self._json(200, {
+            "tasks": [self._media_task_public(task) for task in store.list(limit)],
+            "stats": store.stats(),
+        })
+
+    def _send_bytes(self, payload, content_type, filename=None):
+        """发一段二进制（产物下载）。与 `_download()` 同一套头，只是不是 JSON。"""
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        if filename:
+            safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(filename))[:120] or "file"
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % safe)
+        self.send_header("Cache-Control", "no-store")
+        if cors_origin_allowed(self.path):
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _get_media_models(self, query):
         """`GET /v1/media/models`：该区有哪些媒体模型、各自约束是什么。
