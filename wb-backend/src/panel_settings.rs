@@ -61,6 +61,20 @@ fn is_deleted(entry: &Value) -> bool {
     }
 }
 
+/// 既没有 id 也没有密钥的行是旧版覆盖写留下的碎屑：它没法被面板删（前端只按 id
+/// 提交删除名单，空 id 的行永远被重新提交），也不可能是凭据。列表里不画、保存时丢掉。
+fn is_debris(entry: &Value) -> bool {
+    let text = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    };
+    text("id") && text("key") && !is_deleted(entry)
+}
+
 fn api_keys(settings: &Map<String, Value>, deleted: bool) -> Vec<Value> {
     settings
         .get("api_keys")
@@ -68,6 +82,7 @@ fn api_keys(settings: &Map<String, Value>, deleted: bool) -> Vec<Value> {
         .map(|rows| {
             rows.iter()
                 .filter(|entry| is_deleted(entry) == deleted)
+                .filter(|entry| !is_debris(entry))
                 .map(|entry| {
                     let raw = entry.get("key").and_then(Value::as_str).unwrap_or("");
                     if deleted {
@@ -238,6 +253,9 @@ pub(crate) fn merge_api_keys(
     }
     // 已存但这次没提交的键：点名的软删除，没点名的一字不动。
     for old in &stored {
+        if is_debris(old) {
+            continue;
+        }
         let id = text(old, "id");
         if used.iter().any(|seen| seen == &id) {
             continue;

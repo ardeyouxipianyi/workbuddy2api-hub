@@ -64,6 +64,26 @@ fn new_rows_get_ids() {
     assert!(merge_api_keys(&mut settings, &json!([{"id": "", "name": "C", "key": ""}]), None).is_err());
 }
 
+/// 旧版留下的「空 id + 空密钥」行既不能鉴权也删不掉（前端只按 id 提交删除），
+/// 列表里不出现，保存时一并丢掉。
+#[test]
+fn empty_id_rows_are_dropped_not_shown() {
+    let mut settings = Map::new();
+    settings.insert(
+        "api_keys".into(),
+        json!([
+            {"id": "k1", "name": "Hermes", "key": "secret-1"},
+            {"id": "", "name": "ZCode", "key": "", "realm": "cn", "enabled": true},
+        ]),
+    );
+    assert_eq!(api_keys(&settings, false).len(), 1);
+    let submitted = json!([{"id": "k1", "name": "Hermes", "key": ""}]);
+    merge_api_keys(&mut settings, &submitted, Some(&json!([]))).unwrap();
+    let rows = settings["api_keys"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["key"], json!("secret-1"));
+}
+
 #[test]
 fn limits_fill_every_scope() {
     let mut settings = Map::new();
