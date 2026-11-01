@@ -1067,7 +1067,7 @@ LiteLLM 与官方 Python SDK 都实现了，形状是：
 | 运行日志按 kind 打 tag | ✅ 已做 | `image done:` / `video done:`，不再冒充 `chat done` |
 | `/health` 反映媒体状态 | ✅ 已做 | `media: {enabled, realm, identity, slots, inflight, tasks?}` |
 | perf 统计不污染 chat | ✅ 已核对 | `_perf_payload` 按模型分桶，媒体自成一列 |
-| `scripts/probe_media.py` | ⬜ 未做 | L4 目前靠一次性脚本（`tmp/media_acceptance.py`），还没沉淀进仓库 |
+| `scripts/probe_media.py` | ✅ 已补 | L4 端到端探针：默认 dry-run、`--yes` 才花钱；`--models` 与 `--video-reject` 零成本 |
 | 面板 UI | ⬜ 未做 | 见 §12 |
 | 幂等（`Idempotency-Key`） | ⬜ 未做 | 已知缺口，README 里明确写了"不幂等、勿自动重试" |
 

@@ -156,7 +156,7 @@ V4   HTTP 202 · task id · 轮询次数与耗时 · completed 时的 credit · 
      · moov 解析出的真实时长/分辨率（请求 4 秒应得 4.0–4.5 秒）
 ```
 
-### 6.3 验收脚本（`scripts/probe_media.py`，不进 PR 的测试集）
+### 6.3 验收脚本（`scripts/probe_media.py`）
 
 ```
 python scripts/probe_media.py --image            # V1
@@ -166,8 +166,8 @@ python scripts/probe_media.py --video 4          # V4
 python scripts/probe_media.py --all --yes        # 明确提示预估成本后开跑
 ```
 
-要求：
-- 默认 `--dry-run`，不加 `--yes` 不花钱
+实现要点（已落地）：
+- 默认 dry-run，不加 `--yes` 不花钱，且会先打印预估消耗
 - 每次打印 `credit` 与累计消耗
 - 只读 `wb_accounts` 的凭据，不落盘、不打印 token
 - 结论写成 JSON（贴进 PR）
