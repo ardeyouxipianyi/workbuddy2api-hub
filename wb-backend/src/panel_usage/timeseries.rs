@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// 一格累加器。原来是 BTreeMap<i64, Value>：每行对每个字段都要
+/// `integer(entry, k) + integer(row, k)` 再塞回 Value，等于每行十几次装箱/取箱。
+/// 都是加法，与逐行口径等价，所以先攒成结构、最后一次性序列化。
+#[derive(Default)]
+struct Slot {
+    requests: i64,
+    errors: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    reasoning_tokens: i64,
+    cached_tokens: i64,
+    total_tokens: i64,
+    credit: f64,
+}
+
+impl Slot {
+    fn json(&self, at: i64) -> Value {
+        json!({
+            "at": at, "requests": self.requests, "errors": self.errors,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cached_tokens": self.cached_tokens,
+            "total_tokens": self.total_tokens, "credit": self.credit,
+        })
+    }
+}
+
 fn bucket_at(row: &Row, origin: f64, step: i64) -> i64 {
     let at = number(row, "at").max(origin);
     origin as i64 + (((at - origin) / step as f64).floor() as i64) * step
@@ -36,37 +64,26 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
                 86_400
             }
         });
-    let mut buckets: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut buckets: BTreeMap<i64, Slot> = BTreeMap::new();
     let mut credits: Vec<Value> = Vec::new();
     for row in selected {
         let at = number(row, "at");
         if at < since || at > until {
             continue;
         }
-        let slot = bucket_at(row, since, step);
-        let entry = buckets.entry(slot).or_insert_with(|| {
-            json!({
-                "at": slot, "requests": 0, "errors": 0, "prompt_tokens": 0,
-                "completion_tokens": 0, "reasoning_tokens": 0, "cached_tokens": 0,
-                "total_tokens": 0, "credit": 0.0,
-            })
-        });
+        let slot = buckets.entry(bucket_at(row, since, step)).or_default();
         if outcome(row) == "completed" {
-            entry["requests"] = json!(integer(entry, "requests") + 1);
-            for key in [
-                "prompt_tokens",
-                "completion_tokens",
-                "reasoning_tokens",
-                "cached_tokens",
-                "total_tokens",
-            ] {
-                entry[key] = json!(integer(entry, key) + integer(row, key));
-            }
+            slot.requests += 1;
+            slot.prompt_tokens += integer(row, "prompt_tokens");
+            slot.completion_tokens += integer(row, "completion_tokens");
+            slot.reasoning_tokens += integer(row, "reasoning_tokens");
+            slot.cached_tokens += integer(row, "cached_tokens");
+            slot.total_tokens += integer(row, "total_tokens");
         } else {
-            entry["errors"] = json!(integer(entry, "errors") + 1);
+            slot.errors += 1;
         }
         if outcome(row) != "client_aborted" {
-            entry["credit"] = json!(number(entry, "credit") + number(row, "credit"));
+            slot.credit += number(row, "credit");
         }
         // 「最近计费行」：Python 只收 credit > 0 的行，倒序留 50 条（面板的悬停明细）。
         if number(row, "credit") > 0.0 {
@@ -94,7 +111,7 @@ pub fn timeseries(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
             "bucket_seconds": step,
             "since": since,
             "until": until,
-            "series": buckets.into_values().collect::<Vec<_>>(),
+            "series": buckets.iter().map(|(at, slot)| slot.json(*at)).collect::<Vec<_>>(),
             "credits": credits,
         }),
     )

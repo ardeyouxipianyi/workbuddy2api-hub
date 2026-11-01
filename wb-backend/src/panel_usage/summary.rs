@@ -9,7 +9,6 @@ fn overview_bucket(
     rows: &[&Row],
     costs: &[RowCost],
     indices: &[usize],
-    current: &str,
 ) -> Value {
     let mut accounts: BTreeMap<String, i64> = BTreeMap::new();
     let mut out = json!({
@@ -136,14 +135,14 @@ fn overview_maps(
     let (by_model, realm_models, account_models) = group_overview_maps(rows, realms, current);
     let by_model: Map<String, Value> = by_model
         .into_iter()
-        .map(|(model, items)| (model, overview_bucket(rows, costs, &items, current)))
+        .map(|(model, items)| (model, overview_bucket(rows, costs, &items)))
         .collect();
     let by_realm = realm_models
         .into_iter()
         .map(|(model, realms)| {
             let realms: Map<String, Value> = realms
                 .into_iter()
-                .map(|(realm, items)| (realm, overview_bucket(rows, costs, &items, current)))
+                .map(|(realm, items)| (realm, overview_bucket(rows, costs, &items)))
                 .collect();
             (model, Value::Object(realms))
         })
@@ -156,7 +155,7 @@ fn overview_maps(
                 .map(|(realm, accounts)| {
                     let accounts: Map<String, Value> = accounts
                         .into_iter()
-                        .map(|(account, items)| (account, overview_bucket(rows, costs, &items, current)))
+                        .map(|(account, items)| (account, overview_bucket(rows, costs, &items)))
                         .collect();
                     (realm, Value::Object(accounts))
                 })
