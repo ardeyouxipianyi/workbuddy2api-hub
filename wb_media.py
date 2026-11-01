@@ -199,10 +199,20 @@ def read_video_generation(raw):
         text = _as_string(raw.get(key))
         if text is not None:
             config[key] = text
-    for key in ("defaultSeconds", "minSeconds", "maxSeconds", "maxPromptLength"):
+    for key in ("defaultSeconds", "minSeconds", "maxSeconds", "maxPromptLength",
+                "maxReferenceImages", "maxReferenceVideos", "maxReferenceAudios",
+                "maxReferenceMaterials"):
         number = _as_int(raw.get(key))
         if number is not None:
             config[key] = number
+    # 素材相关的能力开关。**只有上游明确写 true 才算 true**：缺省时按"不支持"处理，
+    # 因为多送素材比少送更容易被上游拒（首尾帧与参考素材可能互斥）。
+    for key in ("allowMixedReferenceMaterials", "framesExclusiveWithReferenceMaterials",
+                "supportsFirstFrame", "supportsFirstLastFrame",
+                "lastFrameRequiresFirstFrame", "referenceAudioRequiresVisualMaterial"):
+        flag = raw.get(key)
+        if isinstance(flag, bool):
+            config[key] = flag
     aspect_ratios = _string_list(raw.get("aspectRatios"))
     if aspect_ratios:
         config["aspectRatios"] = aspect_ratios
@@ -482,6 +492,12 @@ def resolve_video_params(request, generation=None):
 
     warnings = []
     has_image = bool(_as_string(request.get("image")) or _as_string(request.get("input_reference")))
+    # 参考图同样是"有输入图"：选模型要按 image-to-video 那一组走。
+    # 这里用 try 是因为 read_reference_materials 会做数量校验并抛 MediaError——
+    # 校验失败要在**估算花费之前**抛出去，不能等到提交才发现。
+    references = read_reference_materials(request, generation)
+    if references.get("reference_images"):
+        has_image = True
     image_to_video = has_image
 
     # ---- 时长
@@ -567,7 +583,103 @@ def resolve_video_params(request, generation=None):
         "enable_audio": enable_audio,
         "image_to_video": image_to_video,
         "warnings": warnings,
+        # 目录能力（含各类参考素材上限）：build_video_body 要用它做第二道校验，
+        # 顺手带出来省得调用方再传一遍。
+        "generation": generation,
+        "references": references,
     }
+
+
+#: 参考素材的三种类别：对外字段名 → (上游字段名, 数量上限键, 单项 URL 键, 中文名)
+REFERENCE_KINDS = (
+    ("reference_images", "reference_images", "maxReferenceImages", "image_url", "参考图"),
+    ("reference_videos", "reference_videos", "maxReferenceVideos", "video_url", "参考视频"),
+    ("reference_audios", "reference_audios", "maxReferenceAudios", "audio_url", "参考音频"),
+)
+
+
+def _reference_list(request, key):
+    """把请求里的参考素材读成 `[url, …]`。
+
+    容忍三种写法，因为客户端各有各的习惯：`["url"]`、`[{"image_url": "url"}]`
+    （上游原始形状）、以及 OpenAI Video API 的 `input_reference` 数组。读不出来
+    的条目直接跳过——宁可少一条素材，也不要因为一个字段形态猜错就整单失败。
+    """
+    raw = request.get(key)
+    if raw is None and key == "reference_images":
+        raw = request.get("images")
+    if raw is None:
+        return []
+    if isinstance(raw, (str, bytes)):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise MediaError("INVALID_ARGS", "%s 要是数组（给定 %s）" % (key, type(raw).__name__))
+    out = []
+    url_key = {k: uk for k, _, _, uk, _ in REFERENCE_KINDS}[key]
+    for item in raw:
+        if isinstance(item, str):
+            text = _as_string(item)
+        elif isinstance(item, dict):
+            text = _as_string(item.get(url_key)) or _as_string(item.get("url"))
+        else:
+            text = None
+        if text:
+            out.append(text)
+    return out
+
+
+def read_reference_materials(request, generation):
+    """校验并整理参考素材，返回 `{上游字段名: [url, …]}`（空 dict 表示没有素材）。
+
+    三条约束逐条对着目录声明检查，不猜：
+
+    1. 每个类别的数量不得超过 `maxReferenceXxx`；
+    2. 总数不得超过 `maxReferenceMaterials`（minimax 是 12，各类上限加起来是 15，
+       所以真的有"合计"这道闸）；
+    3. `framesExclusiveWithReferenceMaterials` 为真时，**首/尾帧与参考素材互斥**
+       —— minimax 就是这样，同时发等于让上游在两套控制方式之间挑。
+
+    上游没声明的上限不校验（缺省代表"上游没说"，把判断交给它）。
+    """
+    generation = generation or {}
+    request = request or {}
+    found = {}
+    for key, upstream_key, cap_key, _url_key, label in REFERENCE_KINDS:
+        items = _reference_list(request, key)
+        if not items:
+            continue
+        cap = generation.get(cap_key)
+        if cap is not None and len(items) > cap:
+            if cap == 0:
+                raise MediaError(
+                    "INVALID_ARGS",
+                    "该模型不支持%s（%s = 0）；去掉 %s 再提交" % (label, cap_key, key))
+            raise MediaError(
+                "INVALID_ARGS",
+                "%s最多 %d 个（给定 %d 个）" % (label, cap, len(items)))
+        found[upstream_key] = items
+
+    if found:
+        total = sum(len(v) for v in found.values())
+        total_cap = generation.get("maxReferenceMaterials")
+        if total_cap is not None and total > total_cap:
+            raise MediaError(
+                "INVALID_ARGS",
+                "参考素材合计最多 %d 个（给定 %d 个）" % (total_cap, total))
+
+        has_frame = bool(_as_string(request.get("image"))
+                         or _as_string(request.get("input_reference"))
+                         or _as_string(request.get("last_image")))
+        if has_frame and generation.get("framesExclusiveWithReferenceMaterials"):
+            raise MediaError(
+                "INVALID_ARGS",
+                "该模型的首/尾帧与参考素材互斥：要么给首帧（image / input_reference），"
+                "要么给参考图（%s），不要同时给" % "、".join(sorted(found)))
+        if not generation.get("allowMixedReferenceMaterials") and len(found) > 1:
+            raise MediaError(
+                "INVALID_ARGS",
+                "该模型不允许混用多类参考素材（同时给了 %s）" % "、".join(sorted(found)))
+    return found
 
 
 def build_video_body(model_id, request, params):
@@ -595,6 +707,12 @@ def build_video_body(model_id, request, params):
     last_image = _as_string(request.get("last_image"))
     if last_image is not None:
         body["last_image_url"] = last_image
+    # 参考素材：上游形状是对象数组（`[]*v2.ReferenceImages`），不是字符串数组。
+    # 字段名与内层键都是实测出来的，见 docs/MEDIA-IMPL.md §16。
+    references = read_reference_materials(request, params.get("generation") or {})
+    for upstream_key, items in (references or {}).items():
+        inner = {k: uk for k, _, _, uk, _ in REFERENCE_KINDS}[upstream_key]
+        body[upstream_key] = [{inner: url} for url in items]
     extra = {
         "resolution": params.get("resolution"),
         "enable_audio": params.get("enable_audio"),

@@ -20560,17 +20560,36 @@ class Handler(BaseHTTPRequestHandler):
         try:
             realm = self._media_realm(config)
             models = self._media_catalog(realm)
+            # 参考素材也算"有输入图"：选模型要按 image-to-video 那一组走。
+            ref_images = wb_media._reference_list(payload, "reference_images")
             wants_image = bool(_as_text(payload.get("image"))
-                               or _as_text(payload.get("input_reference")))
+                               or _as_text(payload.get("input_reference"))
+                               or ref_images)
             tag = (wb_media.TAG_IMAGE_TO_VIDEO if wants_image
                    else wb_media.TAG_TEXT_TO_VIDEO)
             model = wb_media.pick_model(models, payload.get("model"), tag)
             request = dict(payload)
-            if wants_image:
+            if _as_text(request.get("image")) or _as_text(request.get("input_reference")):
                 # 输入图只接受 data URL 与公网 http(s)：本地路径在 classify 阶段就被拒，
                 # 公网 URL 由 client 层校验公网地址并禁掉 3xx 跟随。
                 raw_image = _as_text(request.get("image")) or _as_text(request.get("input_reference"))
                 request["image"] = wb_media_client.resolve_input_image(raw_image)
+            if ref_images:
+                # 逐张归一：data URL 原样通过，公网地址过公网判据（禁 3xx 跟随），
+                # 本地路径直接 400——与首帧同一套规则，不能因为"是参考图"就放宽。
+                request["reference_images"] = [
+                    wb_media_client.resolve_input_image(_as_text(item))
+                    if _as_text(item) else item
+                    for item in ref_images]
+            for kind in ("reference_videos", "reference_audios"):
+                items = wb_media._reference_list(payload, kind)
+                if not items:
+                    continue
+                # 参考视频/音频只能给公网地址：data URL 对这两类没有意义，
+                # 而本地路径放进来就是任意文件读取。
+                for item in items:
+                    wb_media_client.assert_public_url(_as_text(item) or "")
+                request[kind] = items
             generation = dict(model.get("videoGeneration") or {})
             learned = learned_video_seconds(realm, model["id"])
             if learned is not None:

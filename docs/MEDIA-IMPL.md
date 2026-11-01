@@ -1323,3 +1323,53 @@ if head is not None and head < cost_hint:
 
 第 0 步仍然建议做：issue 被否的话，同样是这 6 个 commit，改成堆在自己分支上（路线 A），
 代码一行都不用改——这正是把接线点压到 5 处的好处。
+
+
+## 16. 参考素材：字段形状是实测出来的，不是猜的
+
+2026-11-01 晚补。此前网关只映射单个首帧 `image_url`，**误以为云端不支持参考图**——
+实际上 `minimax-video-h3` 的目录声明是 `maxReferenceImages: 9`、`maxReferenceVideos: 3`、
+`maxReferenceAudios: 3`、`maxReferenceMaterials: 12`、`allowMixedReferenceMaterials: true`。
+能力一直都在，缺的是网关侧的映射。
+
+### 16.1 字段形状
+
+上游 `/v2/videos/generations` 的提交体（全部由零成本探针实测，见 §16.3）：
+
+| 字段 | 类型 | 内层键 | 说明 |
+| --- | --- | --- | --- |
+| `image_url` | string | — | 首帧 |
+| `last_image_url` | string | — | 尾帧 |
+| `reference_images` | `[]*v2.ReferenceImages` | `image_url` | 参考图，最多 9 |
+| `reference_videos` | `[]*v2.ReferenceVideos` | `video_url` | 参考视频，最多 3 |
+| `reference_audios` | `[]*v2.ReferenceAudios` | `audio_url` | 参考音频，最多 3 |
+| `reference_materials` | **不存在** | — | 传了会被静默忽略，别用 |
+
+所以正确写法是**对象数组**，不是字符串数组：
+
+```json
+"reference_images": [{"image_url": "https://…"}, {"image_url": "https://…"}]
+```
+
+### 16.2 三条互相牵连的约束
+
+1. **分类上限**：`maxReferenceImages` / `maxReferenceVideos` / `maxReferenceAudios`。
+   值为 `0` 代表"不支持"（kling 就是 0），报错要说"不支持"而不是"最多 0 个"。
+2. **合计上限**：`maxReferenceMaterials`。minimax 各类加起来是 15、合计只有 12，
+   所以真的有这道闸。
+3. **首尾帧与参考素材互斥**：minimax 的 `framesExclusiveWithReferenceMaterials: true`
+   ——同时发等于让上游在两套控制方式之间挑。
+
+### 16.3 怎么在零成本下验出字段名
+
+`seconds=0` **不能**当"必定被拒"的保险：实测上游会接受它并真的建任务（这次因此误提交
+了 2~3 个任务）。可靠的护栏是**一个不存在的模型名**：
+
+- Go 的 json unmarshal 在业务校验之前执行，所以构造 `reference_images: "字符串"`
+  会先抛 `cannot unmarshal string into Go struct field CreateVideoRequest.reference_images
+  of type []*v2.ReferenceImages`；
+- 内层键用"类型错位"识别：给候选键喂 `123`，若该键存在且是 string，报错会点名字段
+  （`ReferenceImages.reference_images.image_url : string`）；键不存在则被静默忽略。
+- 模型名不存在 → 最后一定被 `14407 route config` 拒掉，全程不建任务、不扣费。
+
+探针脚本必须记录 taskId 并设花费上限，否则"探针"会变成"烧钱"。

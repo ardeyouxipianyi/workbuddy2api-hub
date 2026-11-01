@@ -763,5 +763,115 @@ class CostAndShapeTests(unittest.TestCase):
         self.assertEqual(out["credit"], 57.14)
 
 
+class ReferenceMaterialTests(unittest.TestCase):
+    """参考素材：数量上限、首尾帧互斥、上游字段形状。
+
+    这些断言钉的都是**实测出来的上游契约**（见 docs/MEDIA-IMPL.md §16）：
+    `reference_images` 是 `[{image_url}]` 对象数组，不是字符串数组；数量上限来自
+    目录的 `maxReferenceImages` 等字段；minimax 的首尾帧与参考素材互斥。
+    """
+
+    GENERATION = {
+        "minSeconds": 4, "maxSeconds": 15, "defaultSeconds": 5,
+        "resolutions": ["768P"], "aspectRatios": ["16:9"], "maxPromptLength": 2000,
+        "maxReferenceImages": 9, "maxReferenceVideos": 3, "maxReferenceAudios": 3,
+        "maxReferenceMaterials": 12, "allowMixedReferenceMaterials": True,
+        "framesExclusiveWithReferenceMaterials": True, "supportsFirstFrame": True,
+    }
+
+    def body(self, request, generation=None):
+        gen = dict(self.GENERATION if generation is None else generation)
+        params = M.resolve_video_params(request, gen)
+        return M.build_video_body("minimax-video-h3", request, params)
+
+    def test_images_become_object_array(self):
+        """上游要 `[{"image_url": …}]`。发成字符串数组会被 11101 拒掉。"""
+        body = self.body({"prompt": "x", "reference_images": ["https://a/1.png"]})
+        self.assertEqual(body["reference_images"], [{"image_url": "https://a/1.png"}])
+
+    def test_accepts_the_upstream_shape_too(self):
+        """客户端直接把上游形状贴过来也要认（省一层转换）。"""
+        body = self.body({"prompt": "x",
+                          "reference_images": [{"image_url": "https://a/1.png"}]})
+        self.assertEqual(body["reference_images"], [{"image_url": "https://a/1.png"}])
+
+    def test_images_alias(self):
+        """`images` 是同一件事的顺口写法。"""
+        body = self.body({"prompt": "x", "images": ["https://a/1.png"]})
+        self.assertEqual(body["reference_images"], [{"image_url": "https://a/1.png"}])
+
+    def test_videos_and_audios_use_their_own_url_keys(self):
+        body = self.body({"prompt": "x",
+                          "reference_videos": ["https://a/v.mp4"],
+                          "reference_audios": ["https://a/a.mp3"]})
+        self.assertEqual(body["reference_videos"], [{"video_url": "https://a/v.mp4"}])
+        self.assertEqual(body["reference_audios"], [{"audio_url": "https://a/a.mp3"}])
+
+    def test_over_the_category_cap_is_refused(self):
+        with self.assertRaises(M.MediaError) as ctx:
+            self.body({"prompt": "x", "reference_images": ["https://a/%d.png" % i
+                                                           for i in range(10)]})
+        self.assertIn("9", ctx.exception.message)
+
+    def test_cap_of_zero_says_unsupported(self):
+        """kling 的 maxReferenceImages 是 0：要提示"不支持"，不是"最多 0 个"。"""
+        gen = dict(self.GENERATION, maxReferenceImages=0)
+        with self.assertRaises(M.MediaError) as ctx:
+            self.body({"prompt": "x", "reference_images": ["https://a/1.png"]}, gen)
+        self.assertIn("不支持", ctx.exception.message)
+
+    def test_total_cap_counts_every_kind(self):
+        """三类加起来 13 > maxReferenceMaterials 12。"""
+        request = {"prompt": "x",
+                   "reference_images": ["https://a/%d.png" % i for i in range(9)],
+                   "reference_videos": ["https://a/%d.mp4" % i for i in range(3)],
+                   "reference_audios": ["https://a/0.mp3"]}
+        with self.assertRaises(M.MediaError) as ctx:
+            self.body(request)
+        self.assertIn("12", ctx.exception.message)
+
+    def test_frame_and_references_are_mutually_exclusive(self):
+        """minimax 的 framesExclusiveWithReferenceMaterials 就是这条。"""
+        with self.assertRaises(M.MediaError) as ctx:
+            self.body({"prompt": "x", "image": "https://a/f.png",
+                       "reference_images": ["https://a/1.png"]})
+        self.assertIn("互斥", ctx.exception.message)
+
+    def test_mixing_kinds_needs_permission(self):
+        gen = dict(self.GENERATION, allowMixedReferenceMaterials=False,
+                   framesExclusiveWithReferenceMaterials=False)
+        with self.assertRaises(M.MediaError) as ctx:
+            self.body({"prompt": "x", "reference_images": ["https://a/1.png"],
+                       "reference_videos": ["https://a/v.mp4"]}, gen)
+        self.assertIn("混用", ctx.exception.message)
+
+    def test_mixing_is_fine_when_allowed(self):
+        gen = dict(self.GENERATION, framesExclusiveWithReferenceMaterials=False)
+        body = self.body({"prompt": "x", "reference_images": ["https://a/1.png"],
+                          "reference_videos": ["https://a/v.mp4"]}, gen)
+        self.assertIn("reference_images", body)
+        self.assertIn("reference_videos", body)
+
+    def test_missing_caps_mean_no_check(self):
+        """目录没说上限就不拦——把判断交给上游。"""
+        gen = {"minSeconds": 4, "maxSeconds": 15, "maxPromptLength": 2000}
+        body = self.body({"prompt": "x",
+                          "reference_images": ["https://a/%d.png" % i for i in range(30)]}, gen)
+        self.assertEqual(len(body["reference_images"]), 30)
+
+    def test_reference_images_switch_the_model_group(self):
+        """有参考图＝有输入图：选模型要按 image-to-video 走。"""
+        params = M.resolve_video_params(
+            {"prompt": "x", "reference_images": ["https://a/1.png"]}, dict(self.GENERATION))
+        self.assertTrue(params["image_to_video"])
+
+    def test_reference_list_tolerates_junk_items(self):
+        """一条读不出来的素材只丢它自己，不要让整单失败。"""
+        params = M.resolve_video_params(
+            {"prompt": "x", "reference_images": ["https://a/1.png", 42, {}]},
+            dict(self.GENERATION))
+        self.assertEqual(params["references"]["reference_images"], ["https://a/1.png"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
