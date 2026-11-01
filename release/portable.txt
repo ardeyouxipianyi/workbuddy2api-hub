@@ -73,6 +73,7 @@ wb_quota_scan.py
 wb_scheduler.py
 wb_settings.py
 wb_tasks.py
+wb_usage_io.py
 wb_tiers.py
 wb_updates.py
 wb_update_apply.py
