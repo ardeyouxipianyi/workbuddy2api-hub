@@ -1261,6 +1261,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   padding:5px 9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.35;
   text-align:left;cursor:pointer;transition:border-color .14s ease,background .14s ease,box-shadow .14s ease}
 .cs-trigger:hover{border-color:var(--line-hover);background:var(--panel3)}
+/* 媒体设置行：自定义下拉的触发器默认比数字输入框矮一截（28 vs 39），底对齐时
+   两列的小标签会差 11px。统一成 38px 后四条标签落在同一条线上。 */
+#mediaSettingsRow .cs-trigger,
+#mediaSettingsRow input[type="number"]{height:38px;box-sizing:border-box}
 .cs-trigger:focus-visible{outline:none;border-color:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft)}
 .cs-wrap.cs-open .cs-trigger{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
@@ -1504,6 +1508,60 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   var ATTRS = ['title', 'placeholder', 'aria-label', 'data-label', 'alt'];
   var SKIP = {SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1};
   var DICT = {
+    '媒体': 'Media',
+    '媒体生成': 'Media generation',
+    '生图 / 生视频的开关在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。': 'The image / video switches live on the Settings page; this page shows model limits and recent tasks. Every generation really spends account credits.',
+    '可用媒体模型': 'Available media models',
+    '该区目录里带媒体标签的模型，以及各自的时长与分辨率约束。只读，不发上游。': 'Media-tagged models in this realm\'s catalogue, with their duration and resolution limits. Read-only; no upstream request.',
+    '最近任务': 'Recent tasks',
+    '生视频是异步任务：提交后在这里看进度、失败原因与产物。每个 API Key 只看得到自己提交的任务。': 'Video generation is asynchronous: submission returns immediately, progress, failure reasons and artifacts show up here. Each API key only sees its own tasks.',
+    '媒体能力（生图 / 生视频）': 'Media (image / video generation)',
+    '默认关闭。开启后网关才提供': 'Off by default. Only when enabled does the gateway serve',
+    '；关闭时这些路由': '; when disabled these routes',
+    '根本不存在': 'do not exist at all',
+    '每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。': 'About 5.71 credits per image and 57-129 per 5-second video, deducted from account credits directly — not billed per token.',
+    '开启生图 / 生视频路由': 'Enable image / video routes',
+    '媒体出口': 'Media exit',
+    '出站身份': 'Outbound identity',
+    '桌面身份': 'Desktop',
+    'CLI 身份': 'CLI',
+    '每分钟生图上限': 'Images per minute',
+    '视频时长上限（秒）': 'Video length cap (seconds)',
+    '每 Key 每日积分上限': 'Daily credits per key',
+    '生视频并发': 'Concurrent videos',
+    '生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。': 'When the concurrent-video cap is reached, new tasks queue locally (not submitted upstream, no credits spent). Parallel tasks are spread across different accounts.',
+    '每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。': 'A daily credit cap of 0 means unlimited. The video length cap is combined with each model\'s own limit, whichever is smaller. The outbound identity decides which client the request imitates; desktop accounts usually need no change.',
+    '能力': 'Capability',
+    '比例': 'Aspect',
+    'prompt 上限': 'Prompt limit',
+    '文生图': 'Text-to-image',
+    '改图': 'Image edit',
+    '文生视频': 'Text-to-video',
+    '图生视频': 'Image-to-video',
+    '排队中': 'Queued',
+    '生成中': 'Generating',
+    '已完成': 'Completed',
+    '失败': 'Failed',
+    '该区目录里没有媒体模型——账号可能没有生图 / 生视频权限。': 'No media models in this realm\'s catalogue — the account may lack image / video permission.',
+    '还没有任务。生视频提交成功后会出现在这里。': 'No tasks yet. A video task shows up here once its submission succeeds.',
+    '花费': 'Credits',
+    '提交时间': 'Submitted',
+    '下载': 'Download',
+    '取消': 'Cancel',
+    '已开启：媒体路由可用': 'Enabled: media routes are live',
+    '已关闭：媒体路由不再存在': 'Disabled: media routes no longer exist',
+    '已取消（本地轮询已停止）': 'Cancelled (local polling stopped)',
+    '取消请求已发送': 'Cancel request sent',
+    '取消失败: ': 'Cancel failed: ',
+    '缺少任务 id': 'Missing task id',
+    '字符': 'chars',
+    '该区目录里没有媒体模型': 'No media models in this realm',
+    '排队 ': 'queued ',
+    ' 条 · 进行中 ': ' · in progress ',
+    ' 条 · 共持有 ': ' · held ',
+    '失败的任务请展开看原因：「invalid_request」没扣积分可以改参数重试，「upstream_error / task_lost」可能已经扣过费。': 'Hover a failed task for its reason: "invalid_request" spent nothing and can be retried with fixed parameters; "upstream_error / task_lost" may already have been charged.',
+    '媒体路由可用': 'media routes are live',
+    '媒体路由不再存在': 'media routes no longer exist',
     '添加 API Key 账号': 'Add an API Key account',
     '粘贴 CodeBuddy API 管理页签发的静态 Key': 'Paste the static key issued by the CodeBuddy API console',
     '前缀。': 'prefix.',
@@ -3993,6 +4051,9 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <button class="main-nav-btn" id="btnNavTasks" onclick="switchMainTab('tasks')">
         任务与福利
       </button>
+      <button class="main-nav-btn" id="btnNavMedia" onclick="switchMainTab('media')">
+        媒体
+      </button>
       <button class="main-nav-btn" id="btnNavAnalytics" onclick="switchMainTab('analytics')">
         数据看板
       </button>
@@ -4534,6 +4595,85 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   <!-- 账号页（issue #176）：账号多起来之后，网关页的卡片与最近请求被一长串账号
        挤到下面，所以账号列表与「当前禁用总览」单独成一个菜单，签到/活跃记录也
        放在这里——它回答的正是「这个账号昨天到底签成了没有」。 -->
+  <div id="pageMedia" class="main-page">
+    <div style="margin-bottom:16px">
+      <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">媒体生成</h2>
+      <div style="font-size:12px;color:var(--dim);margin-top:4px">生图 / 生视频的开关在「设置」页；这里看模型约束和最近任务。每次生成都会真实扣账号积分。</div>
+    </div>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">可用媒体模型 <em id="mediaModelsState"></em></h2>
+          <div style="font-size:12px;color:var(--dim)">该区目录里带媒体标签的模型，以及各自的时长与分辨率约束。只读，不发上游。</div>
+        </div>
+        <button class="sec mini" onclick="loadMediaModels(true)">重新读取</button>
+      </div>
+      <div id="mediaModelsList" class="table-wrap"></div>
+    </section>
+
+    <section>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">最近任务 <em id="mediaTasksState"></em></h2>
+          <div style="font-size:12px;color:var(--dim)">生视频是异步任务：提交后在这里看进度、失败原因与产物。每个 API Key 只看得到自己提交的任务。</div>
+        </div>
+        <button class="sec mini" onclick="loadMediaTasks(true)">刷新</button>
+      </div>
+      <div id="mediaTasksList" class="table-wrap"></div>
+    </section>
+    <section>
+      <div style="margin-bottom:14px">
+        <h2 style="margin:0">媒体能力（生图 / 生视频） <em id="setMediaState"></em></h2>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">
+          默认关闭。开启后网关才提供 <code>/v1/images/*</code> 与 <code>/v1/videos/*</code>；关闭时这些路由<b>根本不存在</b>（404）。
+          每张图约 5.71 积分、每条 5 秒视频约 57–129 积分，直接从账号积分扣，不经 token 计费。
+        </div>
+      </div>
+      <div id="mediaSettingsRow" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:58px">
+          <input id="setMediaEnabled" type="checkbox" style="width:16px;height:16px">
+          开启生图 / 生视频路由
+        </label>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">媒体出口</div>
+          <select id="setMediaRealm" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            <option value="cn">国内版</option>
+            <option value="intl">国际版</option>
+          </select>
+        </div>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">出站身份</div>
+          <select id="setMediaIdentity" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+            <option value="desktop">桌面身份</option>
+            <option value="cli">CLI 身份</option>
+          </select>
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每分钟生图上限</div>
+          <input id="setMediaImageRate" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">视频时长上限（秒）</div>
+          <input id="setMediaVideoSeconds" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">生视频并发</div>
+          <input id="setMediaVideoConcurrency" type="number" min="1" max="8" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div style="min-width:150px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每 Key 每日积分上限</div>
+          <input id="setMediaDailyCredits" type="number" min="0" max="100000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <button onclick="saveMediaConfig(this)" style="height:38px;margin-top:20px">保存</button>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-top:10px">
+        每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
+        生视频并发超过上限时新任务<b>先排队</b>（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
+      </div>
+    </section>
+  </div>
+
   <div id="pageAnalytics" class="main-page">
     <div class="wrap">
 <!-- ====================== 页头 + 范围 ====================== -->
@@ -5828,6 +5968,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     </section>
 
   </div>
+
 
   <div id="pageAgents" class="main-page">
     <div style="margin-bottom:16px">
@@ -12132,6 +12273,195 @@ function applyAccountsTabLayout(separate){
 }
 
 // 显式选择走既有的 settings save 通道（一个键的 patch，不动别的设置）。
+// ==== 媒体能力（生图 / 生视频）开始 ====
+// 说明：这里只做两件事——把设置回填/提交，以及在「媒体」页画两张只读表。
+// 生图与生视频的**花钱判断全在服务端**（开关、每分钟次数、每日积分、余额、日限额、
+// 队列上限），前端不做任何预估，避免"面板说可以、服务端拒了"这种自相矛盾。
+const MEDIA_STATUS_LABEL = {
+  queued: '排队中', in_progress: '生成中', running: '生成中',
+  completed: '已完成', failed: '失败'
+};
+const MEDIA_STATUS_BADGE = {
+  queued: 's', in_progress: 'warn', running: 'warn',
+  completed: 'ok', failed: 'bad'
+};
+
+function applyMediaSettings(media){
+  const cfg = media || {};
+  const enabled = document.getElementById('setMediaEnabled');
+  if(enabled) enabled.checked = cfg.enabled === true;
+  const realm = document.getElementById('setMediaRealm');
+  if(realm && cfg.realm) realm.value = cfg.realm;
+  const identity = document.getElementById('setMediaIdentity');
+  if(identity && cfg.identity) identity.value = cfg.identity;
+  const rate = document.getElementById('setMediaImageRate');
+  if(rate && cfg.image_max_per_minute != null) rate.value = cfg.image_max_per_minute;
+  const seconds = document.getElementById('setMediaVideoSeconds');
+  if(seconds && cfg.video_max_seconds != null) seconds.value = cfg.video_max_seconds;
+  const credits = document.getElementById('setMediaDailyCredits');
+  if(credits && cfg.daily_credits_per_key != null) credits.value = cfg.daily_credits_per_key;
+  const conc = document.getElementById('setMediaVideoConcurrency');
+  if(conc && cfg.video_concurrency != null) conc.value = cfg.video_concurrency;
+  const state = document.getElementById('setMediaState');
+  if(state){
+    state.textContent = cfg.enabled === true ? '(已开启)' : '(已关闭)';
+    state.style.color = cfg.enabled === true ? 'var(--accent2)' : 'var(--dim)';
+  }
+}
+
+async function saveMediaConfig(btn){
+  const num = (id, fallback) => {
+    const el = document.getElementById(id);
+    const value = el ? Number(el.value) : NaN;
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const payload = {
+    media: {
+      enabled: !!(document.getElementById('setMediaEnabled') || {}).checked,
+      realm: (document.getElementById('setMediaRealm') || {}).value || 'cn',
+      identity: (document.getElementById('setMediaIdentity') || {}).value || 'desktop',
+      image_max_per_minute: num('setMediaImageRate', 6),
+      video_max_seconds: num('setMediaVideoSeconds', 15),
+      daily_credits_per_key: num('setMediaDailyCredits', 0),
+      video_concurrency: num('setMediaVideoConcurrency', 3)
+    }
+  };
+  if(btn) btn.disabled = true;
+  try{
+    const res = await postJSON('/settings/save', payload);
+    if(res && res.media) applyMediaSettings(res.media);
+    toast(payload.media.enabled ? '已开启：媒体路由可用' : '已关闭：媒体路由不再存在');
+    loadSettings();
+  }catch(e){
+    toast('保存失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function loadMediaPage(){
+  loadMediaModels();
+  loadMediaTasks();
+}
+
+async function loadMediaModels(force){
+  const box = document.getElementById('mediaModelsList');
+  const state = document.getElementById('mediaModelsState');
+  if(!box) return;
+  if(state){ state.textContent = '(读取中…)'; state.style.color = 'var(--dim)'; }
+  try{
+    const data = await getJSON('/v1/media/models');
+    const models = (data && data.models) || [];
+    if(state){
+      state.textContent = '(' + models.length + ' 个 · ' + (data.realm || '-')
+        + (data.enabled ? ' · 已开启' : ' · 未开启') + ')';
+      state.style.color = data.enabled ? 'var(--accent2)' : 'var(--warn)';
+    }
+    if(!models.length){
+      box.innerHTML = '<div style="font-size:12px;color:var(--dim)">该区目录里没有媒体模型——账号可能没有生图 / 生视频权限。</div>';
+      return;
+    }
+    box.innerHTML = '<table><thead><tr><th>模型</th><th>能力</th><th>时长</th>'
+      + '<th>分辨率</th><th>比例</th><th>prompt 上限</th></tr></thead><tbody>'
+      + models.map(m => {
+          const g = m.videoGeneration || {};
+          const tags = (m.tags || []).map(t => {
+            const label = {'text-to-image': '文生图', 'image-to-image': '改图',
+                           'text-to-video': '文生视频', 'image-to-video': '图生视频'}[t];
+            return '<span class="badge s mini">' + esc(label || t) + '</span>';
+          }).join(' ');
+          const span = (g.minSeconds != null && g.maxSeconds != null)
+            ? (g.minSeconds + '–' + g.maxSeconds + ' 秒') : '-';
+          const res = (g.resolutions || []).length ? g.resolutions.join(' / ') : '-';
+          const ratios = (g.aspectRatios || []).length ? g.aspectRatios.join(' / ') : '-';
+          const prompt = g.maxPromptLength != null ? (g.maxPromptLength + ' 字符') : '-';
+          return '<tr><td class="mono">' + esc(m.id) + '</td>'
+               + '<td>' + tags + '</td><td>' + esc(span) + '</td>'
+               + '<td class="mono">' + esc(res) + '</td>'
+               + '<td class="mono">' + esc(ratios) + '</td>'
+               + '<td>' + esc(prompt) + '</td></tr>';
+        }).join('')
+      + '</tbody></table>';
+  }catch(e){
+    if(state){ state.textContent = '(读取失败)'; state.style.color = 'var(--bad)'; }
+    box.innerHTML = '<div style="font-size:12px;color:var(--bad)">' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadMediaTasks(force){
+  const box = document.getElementById('mediaTasksList');
+  const state = document.getElementById('mediaTasksState');
+  if(!box) return;
+  if(state){ state.textContent = '(读取中…)'; state.style.color = 'var(--dim)'; }
+  try{
+    const data = await getJSON('/v1/media/tasks?limit=50');
+    const tasks = (data && data.tasks) || [];
+    const stats = (data && data.stats) || {};
+    if(state){
+      const pending = stats.pending || 0;
+      state.textContent = '(' + tasks.length + ' 条' + (pending ? ' · ' + pending + ' 条进行中' : '') + ')';
+      state.style.color = 'var(--dim)';
+    }
+    if(!tasks.length){
+      box.innerHTML = '<div style="font-size:12px;color:var(--dim)">还没有任务。生视频提交成功后会出现在这里。</div>';
+      return;
+    }
+    box.innerHTML = '<table><thead><tr><th>任务</th><th>状态</th><th>模型</th>'
+      + '<th>时长</th><th>花费</th><th>提交时间</th><th>操作</th></tr></thead><tbody>'
+      + tasks.map(t => {
+          const label = MEDIA_STATUS_LABEL[t.status] || t.status;
+          const badge = MEDIA_STATUS_BADGE[t.status] || 's';
+          const when = t.created_at ? new Date(t.created_at * 1000).toLocaleString() : '-';
+          const credit = (t.credit != null) ? (t.credit + ' 积分') : '-';
+          const span = t.seconds ? (t.seconds + ' 秒') : '-';
+          let action = '-';
+          if(t.url){
+            action = '<a href="' + esc(t.url) + '" target="_blank" rel="noopener">下载</a>';
+          }else if(t.status === 'queued'){
+            action = '<a href="#" data-media-task="' + esc(t.id)
+              + '" onclick="cancelMediaTask(this);return false">取消</a>';
+          }
+          let tip = '';
+          if(t.error && (t.error.code || t.error.message)){
+            // 一行省略 + title 看全文：失败原因可能有整段上游原文，
+            // 直接铺开会把整行撑得很高，后面的表格就对不齐了。
+            const full = t.error.message || '';
+            tip = '<div style="font-size:11px;color:var(--dim);margin-top:2px;'
+              + 'max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"'
+              + ' title="' + esc(full) + '">' + esc(full) + '</div>';
+          }
+          return '<tr><td class="mono">' + esc(t.id) + '</td>'
+               + '<td><span class="badge ' + badge + '">' + esc(label) + '</span>' + tip + '</td>'
+               + '<td class="mono">' + esc(t.model || '-') + '</td>'
+               + '<td>' + esc(span) + '</td><td>' + esc(credit) + '</td>'
+               + '<td>' + esc(when) + '</td><td>' + action + '</td></tr>';
+        }).join('')
+      + '</tbody></table>'
+      + '<div style="font-size:12px;color:var(--dim);margin-top:8px">'
+      + '排队 ' + (stats.queue_depth || 0) + ' 条 · 进行中 ' + (stats.pending || 0)
+      + ' 条 · 共持有 ' + (stats.total || 0) + ' 条。失败的任务请展开看原因：'
+      + '「invalid_request」没扣积分可以改参数重试，「upstream_error / task_lost」可能已经扣过费。</div>';
+  }catch(e){
+    if(state){ state.textContent = '(读取失败)'; state.style.color = 'var(--bad)'; }
+    box.innerHTML = '<div style="font-size:12px;color:var(--bad)">' + esc(e.message) + '</div>';
+  }
+}
+
+async function cancelMediaTask(trigger){
+  const taskId = (trigger && trigger.getAttribute)
+    ? trigger.getAttribute('data-media-task') : trigger;
+  if(!taskId){ toast('缺少任务 id', 'bad'); return; }
+  try{
+    const res = await postJSON('/v1/videos/' + encodeURIComponent(taskId) + '/cancel', {});
+    if(res && res.status) toast('已取消（本地轮询已停止）');
+    else toast('取消请求已发送');
+    loadMediaTasks();
+  }catch(e){
+    toast('取消失败: ' + e.message, 'bad');
+  }
+}
+// ==== 媒体能力结束 ====
+
 async function saveAccountsSeparateTab(btn){
   const el = document.getElementById('setAccountsSeparate');
   const value = !!(el && el.checked);
@@ -12223,6 +12553,7 @@ async function loadSettings(showToast){
     // 后端没这个字段）都保持上游那个合并的「网关与账号」页。
     const separateTab = data.accounts_separate_tab === true;
     applyAccountsTabLayout(separateTab);
+    applyMediaSettings(data.media);
     const separateState = document.getElementById('setAccountsSeparateState');
     if(separateState) separateState.textContent = separateTab ? '(已开启)' : '(默认：合并)';
     const separateInput = document.getElementById('setAccountsSeparate');
@@ -15198,6 +15529,7 @@ function switchMainTab(tab){
   const btnLogs = document.getElementById('btnNavLogs');
   const btnSettings = document.getElementById('btnNavSettings');
   const btnAgents = document.getElementById('btnNavAgents');
+  const btnMedia = document.getElementById('btnNavMedia');
   const pageGateway = document.getElementById('pageGateway');
   const pageTasks = document.getElementById('pageTasks');
   const pageAccounts = document.getElementById('pageAccounts');
@@ -15205,6 +15537,7 @@ function switchMainTab(tab){
   const pageLogs = document.getElementById('pageLogs');
   const pageSettings = document.getElementById('pageSettings');
   const pageAgents = document.getElementById('pageAgents');
+  const pageMedia = document.getElementById('pageMedia');
   const tabs = [
     ['gateway', btnGateway, pageGateway],
     ['accounts', btnAccounts, pageAccounts],
@@ -15212,7 +15545,8 @@ function switchMainTab(tab){
     ['analytics', btnAnalytics, pageAnalytics],
     ['logs', btnLogs, pageLogs],
     ['settings', btnSettings, pageSettings],
-    ['agents', btnAgents, pageAgents]
+    ['agents', btnAgents, pageAgents],
+    ['media', btnMedia, pageMedia]
   ];
   tabs.forEach(([name, btn, page]) => {
     if(!btn || !page) return;
@@ -15227,6 +15561,7 @@ function switchMainTab(tab){
   if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
   if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
   if(tab === 'agents'){ loadAgents(); }
+  if(tab === 'media'){ loadMediaPage(); }
   if(tab === 'logs'){
     startLogPolling();
     fetchNewLogs(true);
