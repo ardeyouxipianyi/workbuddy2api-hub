@@ -399,6 +399,56 @@ def media_rate_allow(key_id, per_minute, now=None):
     return True, 0
 
 
+#: (Key, 本地日期) → 当天已花的媒体积分。**只在内存里**：重启清零可接受，
+#: 与「每分钟次数」同一取舍——它是防失控的闸，账本在 usage.jsonl。
+_MEDIA_KEY_SPEND = {}
+_MEDIA_KEY_SPEND_LOCK = threading.Lock()
+
+
+def _media_day_key(key_id):
+    return (key_id or "", time.strftime("%Y-%m-%d"))
+
+
+def media_key_spend(key_id):
+    with _MEDIA_KEY_SPEND_LOCK:
+        return _MEDIA_KEY_SPEND.get(_media_day_key(key_id), 0.0)
+
+
+def media_key_spend_add(key_id, credit):
+    """记一笔媒体花费（实际扣费，不是预估）。"""
+    try:
+        amount = float(credit or 0)
+    except (TypeError, ValueError):
+        return
+    if amount <= 0:
+        return
+    with _MEDIA_KEY_SPEND_LOCK:
+        slot = _media_day_key(key_id)
+        _MEDIA_KEY_SPEND[slot] = _MEDIA_KEY_SPEND.get(slot, 0.0) + amount
+        today = slot[1]
+        for existing in list(_MEDIA_KEY_SPEND):
+            if existing[1] != today:
+                del _MEDIA_KEY_SPEND[existing]
+
+
+def media_key_spend_allow(key_id, cost, limit):
+    """当天这个 Key 还能不能花 `cost` 积分。`limit <= 0` 表示不限。
+
+    这是第二道闸门：**Key 级**防「一个客户端把整个池子烧光」，账号级的
+    `daily_credit_limit` 防「某个账号被烧穿」。两层都过才派发。
+    预检用**预估上界**（图片 6、视频 26/秒），累计用**实际扣费**——保守方向反了就
+    起不到护栏作用。
+    """
+    if not limit or limit <= 0:
+        return True, ""
+    spent = media_key_spend(key_id)
+    projected = spent + max(0.0, float(cost or 0))
+    if projected > float(limit):
+        return False, ("本 Key 今日媒体花费已达 %.2f / %g 积分上限（本次预估 %g）"
+                       % (spent, limit, cost))
+    return True, ""
+
+
 def media_budget_ok(account, cost):
     """派发前的两道预算预检，返回 (是否够, 不够的原因)。
 
@@ -482,6 +532,7 @@ def media_task_finished(task):
     credit = (task or {}).get("credit")
     if credit is None:
         return
+    media_key_spend_add(task.get("key"), credit)
     record_usage(task.get("model") or "video", {"credit": credit}, stream=False,
                  account=task.get("account"), outcome="completed",
                  key=task.get("key"), realm=task.get("realm"), kind="video")
@@ -20206,7 +20257,10 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(status, message, err_type)
 
     def _media_config(self):
-        return wb_settings.media_config(ACCOUNTS_DIR)
+        config = wb_settings.media_config(ACCOUNTS_DIR)
+        # 出站身份形状同步给 client（后台 worker 轮询时用的也是这个值）。
+        wb_media_client.set_identity(config.get("identity"))
+        return config
 
     def _media_realm(self, config):
         """这次媒体请求走哪个出口：Key 绑定的出口优先，其次面板配置。"""
@@ -20256,8 +20310,13 @@ class Handler(BaseHTTPRequestHandler):
         else:
             body = wb_media.build_image_body(model["id"], prompt, size, count)
             mode = "generate"
-        return {"realm": realm, "kind": kind, "mode": mode,
-                "model": model, "body": body, "size": size}
+        wanted = _as_text(payload.get("response_format")) or "url"
+        if wanted not in ("url", "b64_json"):
+            raise wb_media.MediaError(
+                "INVALID_ARGS",
+                "response_format 只能是 url 或 b64_json（给定 %r）" % wanted)
+        return {"realm": realm, "kind": kind, "mode": mode, "model": model,
+                "body": body, "size": size, "response_format": wanted}
 
     def _media_images(self, payload):
         """把客户端给的输入图归一成 data URL 数组。
@@ -20369,6 +20428,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _media_note_success(self, account, model_id, credit, kind, started_at, realm):
         account.note_success(model=model_id)
+        media_key_spend_add(self._key_id(), credit)
         record_usage(
             model_id,
             {"credit": credit} if credit is not None else {},
@@ -20397,6 +20457,10 @@ class Handler(BaseHTTPRequestHandler):
                 503, "media slots busy (%d in flight); retry shortly" % MEDIA_SLOTS,
                 "server_error")
         cost_hint = wb_media.estimate_cost("image")
+        spend_ok, spend_why = media_key_spend_allow(
+            self._key_id(), cost_hint, int(config.get("daily_credits_per_key") or 0))
+        if not spend_ok:
+            return self._media_error(wb_media.MediaError("NO_CREDIT", spend_why))
         excluded = set()
         tried = 0
         try:
@@ -20427,23 +20491,39 @@ class Handler(BaseHTTPRequestHandler):
                 self._media_note_success(account, prepared["model"]["id"],
                                          outcome.get("credit"), "image",
                                          started_at, prepared["realm"])
-                return self._json(200, self._media_image_body(outcome, prepared))
+                return self._json(200, self._media_image_body(outcome, prepared, account))
             return self._error(502, "media request failed on every account",
                                "server_error")
         finally:
             release_media_slot()
 
-    def _media_image_body(self, outcome, prepared):
-        """生图响应按 OpenAI Images 的形状回：`{created, data:[{url|b64_json}]}`。"""
+    def _media_image_body(self, outcome, prepared, account):
+        """生图响应按 OpenAI Images 的形状回：`{created, data:[{url|b64_json}]}`。
+
+        `response_format` 是**客户端要什么**，与上游给什么无关：
+          - `url`（默认）：上游给 COS 签名 URL 就原样转交（24 小时有效）
+          - `b64_json`：上游给 URL 的话，网关自己下载、编码成 base64 再交出去
+            （`fetch_bytes`，不落盘）。拿不到就退回 URL 并在 hint 里说明——
+            宁可给一个能用的链接，也不要因为转码失败丢掉一张已经付过钱的图。
+        """
         item = {}
         if outcome.get("url") is not None:
             item["url"] = outcome["url"]
         if outcome.get("b64") is not None:
-            # 上游在「其它」模型分支上按 b64_json 回：直接以 OpenAI 的 `b64_json`
-            # 转给客户端，不落盘、不把几 MB 的 base64 写进日志。
+            # 上游在「其它」模型分支上按 b64_json 回：直接转给客户端，
+            # 不落盘、不把几 MB 的 base64 写进日志。
             item["b64_json"] = outcome["b64"]
         if outcome.get("revised_prompt") is not None:
             item["revised_prompt"] = outcome["revised_prompt"]
+        degraded = ""
+        if prepared.get("response_format") == "b64_json":
+            if item.get("url") is not None:
+                try:
+                    raw = wb_media_client.fetch_bytes(account, item["url"])
+                    item["b64_json"] = base64.b64encode(raw).decode("ascii")
+                    item.pop("url", None)
+                except wb_media.MediaError as exc:
+                    degraded = "（要 b64_json 但转码失败，已退回 url：%s）" % exc.message
         body = {
             "created": outcome.get("created") or int(time.time()),
             "model": prepared["model"]["id"],
@@ -20453,7 +20533,9 @@ class Handler(BaseHTTPRequestHandler):
         if outcome.get("credit") is not None:
             body["credit"] = outcome["credit"]
         if item.get("url") is not None:
-            body["hint"] = "COS 签名 URL 约 24 小时失效；要长期保留请及时下载。"
+            body["hint"] = "COS 签名 URL 约 24 小时失效；要长期保留请及时下载。" + degraded
+        elif degraded:
+            body["hint"] = degraded
         return body
 
     # ------------------------------------------------------------ 生视频（异步任务）
@@ -20506,6 +20588,10 @@ class Handler(BaseHTTPRequestHandler):
         except wb_media.MediaError as exc:
             return self._media_error(exc)
 
+        spend_ok, spend_why = media_key_spend_allow(
+            self._key_id(), cost_hint, int(config.get("daily_credits_per_key") or 0))
+        if not spend_ok:
+            return self._media_error(wb_media.MediaError("NO_CREDIT", spend_why))
         if not acquire_media_slot():
             return self._error(503, "media slots busy (%d in flight); retry shortly"
                                % MEDIA_SLOTS, "server_error")
@@ -20548,6 +20634,19 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             release_media_slot()
 
+    def _media_task_visible(self, task):
+        """这个任务对当前调用者可见吗？
+
+        **多 Key 部署下的越权口子**：任务行里带着 prompt 头、模型、花费和下载地址，
+        如果不按所有者过滤，Key A 能列出 Key B 的全部任务。面板会话例外——运维本来
+        就该看全部。
+        """
+        if task is None:
+            return False
+        if self._panel_ok():
+            return True
+        return (task.get("key") or "") == (self._key_id() or "")
+
     def _media_task_public(self, task):
         """任务行 → 对外形状（含签名的下载地址）。签名只在服务端算。"""
         if not task:
@@ -20573,7 +20672,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         task_id = rest.split("/")[0]
         task = media_tasks().get(task_id)
-        if task is None:
+        if not self._media_task_visible(task):
+            # 用 404 而不是 403：不向别的 Key 确认"这个 id 存在"。
             return self._error(404, "no such task: %s" % task_id, "invalid_request_error")
         return self._json(200, self._media_task_public(task))
 
@@ -20594,6 +20694,10 @@ class Handler(BaseHTTPRequestHandler):
                 # 明确的 401，而不是"什么都不发"——空响应会让客户端挂到超时。
                 return self._error(401, "missing or invalid download token",
                                    "authentication_error")
+            # 令牌只是"打包好的授权"，持有 Key 时仍要确认这条任务属于该 Key。
+            if not self._media_task_visible(store.get(task_id)):
+                return self._error(404, "no content for this task",
+                                   "invalid_request_error")
         path = store.content_path(task_id, index)
         if path is None:
             return self._error(404, "no content for this task (yet)",
@@ -20607,6 +20711,25 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_bytes(payload, "video/mp4",
                                 filename="%s-%d.mp4" % (safe, index))
 
+    def _media_cancel(self, task_id):
+        """取消一个**还在排队**的生视频任务。
+
+        上游没有 cancel 接口（未证实有），所以这只能停掉本地的轮询。已经交给上游的
+        任务照样会跑完、照样计费——所以只允许取消 `queued`：`running` 必须等它出
+        结果，否则连"钱有没有花、产物在哪"都查不到。
+        """
+        store = media_tasks()
+        task = store.get(task_id)
+        if not self._media_task_visible(task):
+            return self._error(404, "no such task: %s" % task_id, "invalid_request_error")
+        if not store.cancel(task_id):
+            return self._error(
+                409,
+                "只能取消还在排队的任务（当前 %s）。上游没有取消接口，"
+                "已提交的任务会照常跑完并计费。" % task.get("status"),
+                "invalid_request_error")
+        return self._json(200, self._media_task_public(store.get(task_id)))
+
     def _get_media_tasks(self, query):
         """`GET /v1/media/tasks`：最近的任务（面板用）。"""
         if not self._authorized():
@@ -20616,8 +20739,9 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             limit = 50
         store = media_tasks()
+        rows = [task for task in store.list(limit) if self._media_task_visible(task)]
         return self._json(200, {
-            "tasks": [self._media_task_public(task) for task in store.list(limit)],
+            "tasks": [self._media_task_public(task) for task in rows],
             "stats": store.stats(),
         })
 
@@ -23618,6 +23742,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_panel(path)
         if self._is_panel_route(path) and not self._panel_ok():
             return self._error(401, "panel password required", "invalid_request_error")
+        # 生视频的取消：路径里带 task id，进不了 MEDIA_POST_PATHS 的精确匹配。
+        if path.startswith("/v1/videos/") and path.endswith("/cancel"):
+            if not self._authorized():
+                return
+            self._handle_expect_continue()
+            self._discard_body()
+            task_id = path[len("/v1/videos/"):-len("/cancel")].strip("/")
+            return self._media_cancel(task_id)
         is_messages_route = path in (
             "/v1/messages", "/messages",
             "/v1/messages/count_tokens", "/messages/count_tokens",

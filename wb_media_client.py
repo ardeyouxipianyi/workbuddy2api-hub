@@ -60,6 +60,24 @@ INPUT_IMAGE_TIMEOUT_SECONDS = 30
 #: 单个输入图读取的字节上限（多留一点余量给 base64 前的原始流）。
 _INPUT_READ_CEILING = wb_media.MAX_INPUT_IMAGE_BYTES + 1024
 
+#: 出站身份形状（`desktop` / `cli` / None=跟随账号自身）。
+#:
+#: 由调用方在读到媒体配置时同步过来（`set_identity`）。做成模块级而不是逐函数传参，
+#: 是因为后台 worker 轮询时也需要同一个形状，而 worker 手里没有配置上下文。
+#: 同一个进程的媒体出口只有一种形状，所以一个全局量就够。
+_IDENTITY = None
+
+
+def set_identity(value):
+    """设置媒体出站的账号身份形状。`None` / 未知值 = 跟随账号自身。"""
+    global _IDENTITY
+    _IDENTITY = value if value in ("desktop", "cli") else None
+
+
+def current_identity():
+    return _IDENTITY
+
+
 CONFIG_PATH = "/v3/config"
 IMAGE_GENERATIONS_PATH = "/v2/images/generations"
 IMAGE_EDITS_PATH = "/v2/images/edits"
@@ -101,7 +119,7 @@ def _post(account, path, body, timeout, phase):
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url, data=payload, method="POST",
-        headers=account.headers(purpose="media"))
+        headers=account.headers(purpose="media", media_identity=_IDENTITY))
     try:
         with wb_accounts.urlopen(request, timeout=timeout, proxy=account.proxy) as response:
             raw = response.read()
@@ -122,7 +140,7 @@ def _get_json(account, path, timeout):
     """读一次 JSON GET（目录）。只用于冷启动兜底，正常路径走内存缓存。"""
     url = account.chat_base_url() + path
     request = urllib.request.Request(
-        url, method="GET", headers=account.headers(purpose="media"))
+        url, method="GET", headers=account.headers(purpose="media", media_identity=_IDENTITY))
     try:
         with wb_accounts.urlopen(request, timeout=timeout, proxy=account.proxy) as response:
             raw = response.read()
@@ -195,6 +213,26 @@ def poll_video_task(account, task_id, interval=VIDEO_POLL_INTERVAL_SECONDS,
             reason = outcome.get("error") or "上游没有给出原因"
             raise wb_media.MediaError("UPSTREAM", "生视频任务失败：%s" % reason)
         waiter(interval)
+
+
+def fetch_bytes(account, url, timeout=IMAGE_TIMEOUT_SECONDS):
+    """把一个公网地址的字节取回来（客户端要 `b64_json` 时把 COS URL 转成 base64）。
+
+    与 `download_video` 的区别：不落盘。生图产物的签名 URL 只有 24 小时，转成
+    base64 交给客户端由它自己保管，比在网关临时目录里留一份更省事。
+    """
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with wb_accounts.urlopen(request, timeout=timeout, proxy=account.proxy) as response:
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        raise wb_media.MediaError(
+            "UPSTREAM", "读取产物失败（HTTP %d）：%s" % (exc.code, url), status=exc.code)
+    except Exception as exc:
+        raise wb_media.MediaError("UPSTREAM", "读取产物失败：%s" % (exc,))
+    if not data:
+        raise wb_media.MediaError("EMPTY_RESULT", "产物是空的：%s" % url)
+    return data
 
 
 def download_video(account, url, dest_dir, index=0, timeout=VIDEO_DOWNLOAD_TIMEOUT_SECONDS):

@@ -128,6 +128,9 @@ class FakeHandler(P.Handler):
     def _authorized(self):
         return True
 
+    def _panel_ok(self):
+        return False
+
     def _key_id(self):
         return (self.key_entry or {}).get("id")
 
@@ -307,6 +310,37 @@ class SuccessTests(MediaRouteCases):
                                return_value={"url": "u"}):
             self.post()
         self.assertEqual(self.account.successes, ["hunyuan-image-alpha"])
+
+    def test_b64_json_converts_the_upstream_url(self):
+        """客户端要 b64_json 时，上游给的 COS URL 由网关下载转码。"""
+        png = bytes([0x89, 0x50, 0x4E, 0x47]) + b"payload"
+        with mock.patch.object(wb_media_client, "generate_image",
+                               return_value={"url": "https://cos/x.png", "credit": 5.71}),                 mock.patch.object(wb_media_client, "fetch_bytes",
+                                  return_value=png) as fetch:
+            handler = self.post(payload={"response_format": "b64_json"})
+        code, body = handler.sent
+        item = body["data"][0]
+        self.assertIn("b64_json", item)
+        self.assertNotIn("url", item)
+        import base64 as _b64
+        self.assertEqual(_b64.b64decode(item["b64_json"]), png)
+        fetch.assert_called_once()
+
+    def test_b64_json_falls_back_to_url_when_conversion_fails(self):
+        """转码失败不能丢图：退回 url，并在 hint 里说清楚。"""
+        with mock.patch.object(wb_media_client, "generate_image",
+                               return_value={"url": "https://cos/x.png"}),                 mock.patch.object(wb_media_client, "fetch_bytes",
+                                  side_effect=M.MediaError("UPSTREAM", "boom")):
+            handler = self.post(payload={"response_format": "b64_json"})
+        code, body = handler.sent
+        self.assertEqual(body["data"][0]["url"], "https://cos/x.png")
+        self.assertIn("转码失败", body["hint"])
+
+    def test_invalid_response_format_is_rejected(self):
+        with mock.patch.object(wb_media_client, "generate_image") as generate:
+            handler = self.post(payload={"response_format": "png"})
+        self.assertEqual(handler.sent[0], 400)
+        generate.assert_not_called()
 
     def test_slot_is_released_even_when_upstream_fails(self):
         before = P.media_inflight()
@@ -600,7 +634,7 @@ class VideoSubmitTests(MediaRouteCases):
 
     def test_video_tasks_endpoint_returns_public_shape(self):
         self.store.create("kling-video-v3", {"seconds": 5, "resolution": "720P"},
-                          "u-1", {"prompt": "x"}, "up-9")
+                          "u-1", {"prompt": "x"}, "up-9", key="k-1")
         handler = FakeHandler()
         handler._get_media_tasks({})
         code, body = handler.sent
@@ -665,6 +699,29 @@ class VideoSubmitTests(MediaRouteCases):
         handler._get_media_video("/v1/videos/vid_x/content", {})
         self.assertEqual(handler.sent[0], 401)
 
+    def test_cancel_queued_task(self):
+        task = self.store.create("m", {}, "u-1", {"prompt": "x"}, "up-1", key="k-1")
+        handler = FakeHandler(key_id="k-1")
+        handler._media_cancel(task["id"])
+        code, body = handler.sent
+        self.assertEqual(code, 200)
+        self.assertEqual(body["status"], "failed")
+        self.assertIn("cancelled", body["error"]["message"])
+
+    def test_cancel_running_task_is_409(self):
+        task = self.store.create("m", {}, "u-1", {"prompt": "x"}, "up-1", key="k-1")
+        self.store._update(task["id"], status="running")
+        handler = FakeHandler(key_id="k-1")
+        handler._media_cancel(task["id"])
+        self.assertEqual(handler.sent[0], 409)
+        self.assertIn("上游没有取消接口", handler.sent[1])
+
+    def test_cancel_foreign_task_is_404(self):
+        task = self.store.create("m", {}, "u-2", {"prompt": "x"}, "up-2", key="k-2")
+        handler = FakeHandler(key_id="k-1")
+        handler._media_cancel(task["id"])
+        self.assertEqual(handler.sent[0], 404)
+
     def test_unknown_video_get_is_404(self):
         handler = FakeHandler()
         handler._get_media_video("/v1/videos/vid_nope", {})
@@ -672,6 +729,131 @@ class VideoSubmitTests(MediaRouteCases):
 
 
 # ---------------------------------------------------------------- 两条设计承诺
+
+class OwnershipTests(MediaRouteCases):
+    """多 Key 部署下的任务归属：Key A 不该看到 Key B 的任务。"""
+
+    def setUp(self):
+        super(OwnershipTests, self).setUp()
+        self.saved_tasks = P._MEDIA_TASKS
+        _STORE_SEQ[0] += 1
+        self.store = T.MediaTaskStore(
+            out_dir=os.path.join(_TMP.name, "own-%d" % _STORE_SEQ[0]),
+            client=object(), resolve_account=lambda uid: FakeAccount(uid),
+            autostart=False)
+        P._MEDIA_TASKS = self.store
+
+    def tearDown(self):
+        P._MEDIA_TASKS = self.saved_tasks
+        self.store.stop()
+        super(OwnershipTests, self).tearDown()
+
+    def test_list_shows_only_the_callers_tasks(self):
+        self.store.create("m", {}, "u-1", {"prompt": "mine"}, "up-1", key="k-1")
+        self.store.create("m", {}, "u-2", {"prompt": "theirs"}, "up-2", key="k-2")
+        handler = FakeHandler(key_id="k-1")
+        handler._get_media_tasks({})
+        code, body = handler.sent
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body["tasks"]), 1)
+        self.assertEqual(body["stats"]["total"], 2)      # 统计是全局的，可接受
+
+    def test_get_other_key_task_is_404_not_403(self):
+        """用 404 而不是 403：不向别的 Key 确认"这个 id 存在"。"""
+        task = self.store.create("m", {}, "u-2", {"prompt": "x"}, "up-2", key="k-2")
+        handler = FakeHandler(key_id="k-1")
+        handler._get_media_video("/v1/videos/%s" % task["id"], {})
+        self.assertEqual(handler.sent[0], 404)
+
+    def test_own_task_is_visible(self):
+        task = self.store.create("m", {}, "u-1", {"prompt": "x"}, "up-1", key="k-1")
+        handler = FakeHandler(key_id="k-1")
+        handler._get_media_video("/v1/videos/%s" % task["id"], {})
+        self.assertEqual(handler.sent[0], 200)
+
+    def test_panel_session_sees_everything(self):
+        task = self.store.create("m", {}, "u-2", {"prompt": "x"}, "up-2", key="k-2")
+        handler = FakeHandler(key_id="k-1")
+        handler._panel_ok = lambda: True
+        handler._get_media_video("/v1/videos/%s" % task["id"], {})
+        self.assertEqual(handler.sent[0], 200)
+
+    def test_download_with_key_but_foreign_task_is_refused(self):
+        out_dir = os.path.join(_TMP.name, "own-file-%d" % _STORE_SEQ[0])
+        _STORE_SEQ[0] += 1
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, "x.mp4")
+        with open(path, "wb") as handle:
+            handle.write(b"data")
+        task = self.store.create("m", {}, "u-2", {"prompt": "x"}, "up-2", key="k-2")
+        self.store._finish(task["id"], "completed", videos=[path])
+        handler = FakeHandler(key_id="k-1")
+        handler.send_response = mock.MagicMock()
+        handler.send_header = mock.MagicMock()
+        handler.end_headers = mock.MagicMock()
+        handler.wfile = mock.MagicMock()
+        handler._get_media_video("/v1/videos/%s/content" % task["id"], {})
+        self.assertEqual(handler.sent[0], 404)
+        handler.wfile.write.assert_not_called()
+
+
+class KeySpendTests(MediaRouteCases):
+    """Key 级每日额度：第二道钱闸门。"""
+
+    def setUp(self):
+        super(KeySpendTests, self).setUp()
+        P._MEDIA_KEY_SPEND.clear()
+
+    def tearDown(self):
+        P._MEDIA_KEY_SPEND.clear()
+        super(KeySpendTests, self).tearDown()
+
+    def test_limit_allows_then_blocks(self):
+        ok, _ = P.media_key_spend_allow("k", 6.0, 10)
+        self.assertTrue(ok)
+        P.media_key_spend_add("k", 8.0)
+        ok, why = P.media_key_spend_allow("k", 6.0, 10)   # 8 + 6 > 10
+        self.assertFalse(ok)
+        self.assertIn("10", why)
+
+    def test_zero_means_unlimited(self):
+        P.media_key_spend_add("k", 9999)
+        self.assertTrue(P.media_key_spend_allow("k", 9999, 0)[0])
+
+    def test_keys_are_separate(self):
+        P.media_key_spend_add("a", 50)
+        self.assertTrue(P.media_key_spend_allow("b", 6, 60)[0])
+        self.assertFalse(P.media_key_spend_allow("a", 20, 60)[0])
+
+    def test_route_blocks_when_exhausted(self):
+        self.set_media({"daily_credits_per_key": 5})
+        from unittest import mock as _mock
+        with _mock.patch.object(wb_media_client, "generate_image") as generate:
+            handler = self.post()
+        self.assertEqual(handler.sent[0], 402)
+        self.assertIn("积分上限", handler.sent[1])
+        generate.assert_not_called()
+
+    def test_successful_call_accrues(self):
+        from unittest import mock as _mock
+        with _mock.patch.object(wb_media_client, "generate_image",
+                                return_value={"url": "u", "credit": 5.71}):
+            self.post()
+        self.assertAlmostEqual(P.media_key_spend("k-1"), 5.71, places=2)
+
+
+class IdentityWiringTests(unittest.TestCase):
+    def test_identity_reaches_the_wire(self):
+        """`media_identity` 配置必须真的传到出站头——曾经只是存了、没人读。"""
+        saved = wb_media_client.current_identity()
+        try:
+            wb_media_client.set_identity("cli")
+            self.assertEqual(wb_media_client.current_identity(), "cli")
+            wb_media_client.set_identity("nonsense")      # 未知值收敛成 None
+            self.assertIsNone(wb_media_client.current_identity())
+        finally:
+            wb_media_client.set_identity(saved)
+
 
 class IsolationTests(unittest.TestCase):
     """整个设计里最大的两个承诺，各要一条能失败的证据。"""

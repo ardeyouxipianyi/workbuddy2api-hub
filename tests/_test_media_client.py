@@ -260,6 +260,37 @@ class PollTests(unittest.TestCase):
         self.assertEqual(waits, [7])
 
 
+class FetchBytesTests(unittest.TestCase):
+    """`fetch_bytes`：客户端要 b64_json 时把 COS URL 转成 base64 用。"""
+
+    def test_returns_bytes(self):
+        fake = FakeUrlopen(FakeResponse(bytes([0x89]) + b"PNGdata"))
+        with mock.patch.object(C.wb_accounts, "urlopen", fake):
+            self.assertEqual(C.fetch_bytes(FakeAccount(), "https://cos/x.png"), bytes([0x89]) + b"PNGdata")
+        self.assertEqual(fake.calls[0]["url"], "https://cos/x.png")
+
+    def test_empty_body_is_an_error(self):
+        fake = FakeUrlopen(FakeResponse(b""))
+        with mock.patch.object(C.wb_accounts, "urlopen", fake):
+            try:
+                C.fetch_bytes(FakeAccount(), "https://cos/x.png")
+            except M.MediaError as exc:
+                self.assertEqual(exc.code, "EMPTY_RESULT")
+            else:
+                raise AssertionError("应当抛 MediaError")
+
+    def test_http_error_is_upstream(self):
+        fake = FakeUrlopen(http_error(404, "gone"))
+        with mock.patch.object(C.wb_accounts, "urlopen", fake):
+            try:
+                C.fetch_bytes(FakeAccount(), "https://cos/x.png")
+            except M.MediaError as exc:
+                self.assertEqual(exc.code, "UPSTREAM")
+                self.assertEqual(exc.status, 404)
+            else:
+                raise AssertionError("应当抛 MediaError")
+
+
 class DownloadTests(unittest.TestCase):
     def test_writes_mp4(self):
         fake = FakeUrlopen(FakeResponse(b"\x00\x00\x00\x18ftypmp42"))

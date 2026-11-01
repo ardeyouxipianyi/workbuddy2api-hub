@@ -1053,7 +1053,25 @@ LiteLLM 与官方 Python SDK 都实现了，形状是：
 | 19 | **README 的 API 文档** | 现在 README 只讲 chat。用户是程序，必须有一节"媒体接口"（形状、错误码、单价量级、幂等性声明） |
 | 20 | **发现性** | 默认关，用户不知道有这个功能。README 一条 + 设置页那段说明 + 首次开启时的 toast |
 
-### 13.4 三个要你决策的
+### 13.4 复盘：上面这些里已经补齐的（2026-11-01 晚）
+
+第一版实现漏了几项，真实验收后逐条补上，记在这里免得文档与代码不一致：
+
+| 项 | 状态 | 落点 |
+| --- | --- | --- |
+| **任务归属**（#4 安全面） | ✅ 已修 | `_media_task_visible()`：Key 只看得到自己那条，别的 Key 查别人的任务回 404（不确认存在性）；面板会话看全部 |
+| **`daily_credits_per_key` 从未生效** | ✅ 已修 | `media_key_spend_allow()` / `media_key_spend_add()`：Key 级每日媒体积分，预检用预估上界、累计用实际扣费 |
+| **`media_identity` 从未生效** | ✅ 已修 | `wb_media_client.set_identity()`：`_media_config()` 读到配置就同步过去，出站头真的按它换形状 |
+| **`response_format=b64_json` 未实现** | ✅ 已修 | 上游给 COS URL 时由网关 `fetch_bytes()` 下载转码；转码失败退回 url 并在 hint 说明 |
+| **取消任务无路由** | ✅ 已补 | `POST /v1/videos/{id}/cancel`：只对 `queued` 生效，`running` 回 409 并说明上游没有取消接口 |
+| 运行日志按 kind 打 tag | ✅ 已做 | `image done:` / `video done:`，不再冒充 `chat done` |
+| `/health` 反映媒体状态 | ✅ 已做 | `media: {enabled, realm, identity, slots, inflight, tasks?}` |
+| perf 统计不污染 chat | ✅ 已核对 | `_perf_payload` 按模型分桶，媒体自成一列 |
+| `scripts/probe_media.py` | ⬜ 未做 | L4 目前靠一次性脚本（`tmp/media_acceptance.py`），还没沉淀进仓库 |
+| 面板 UI | ⬜ 未做 | 见 §12 |
+| 幂等（`Idempotency-Key`） | ⬜ 未做 | 已知缺口，README 里明确写了"不幂等、勿自动重试" |
+
+### 13.5 三个要你决策的
 
 1. **媒体花费受不受 chat 的日积分上限约束**（#10）—— 我倾向受约束，可预期优先
 2. **更新策略选 A / B / C**（13.2）—— 这件事不定，代码写完可能下次更新就没了
