@@ -372,17 +372,33 @@ class MediaTaskStore(object):
                     "busy_accounts": len(self.busy_accounts())}
 
     def cancel(self, task_id):
-        """本地放弃一个还没开始轮询的任务。
+        """放弃一个还没交到上游的任务：**排队中的取消 = 一分没花**。
 
-        上游没有 cancel 接口（未证实），所以这只能停掉我们这边的轮询；已经交出去的
-        任务照样会跑完、照样计费。所以只对 `queued` 有意义——`running` 的必须等它
-        出结果，否则连"钱有没有花、产物在哪"都查不到。
+        三档语义，区别就是钱：
+
+        | 状态 | 能否取消 | 结果 |
+        | --- | --- | --- |
+        | `waiting`（排队等并发位） | **能** | 从队列摘掉，从未提交、从未扣费 |
+        | `queued`（上游已受理） | 能（仅本地） | 停止轮询；上游照样跑完、照样计费 |
+        | `submitting` / `running` | 不能 | 已经或正在交给上游，必须等结果 |
+
+        上游没有 cancel 接口（未证实），所以 `queued` 的"取消"只是停掉我们这边的轮询。
+        `running` 的必须等它出结果，否则连"钱有没有花、产物在哪"都查不到。
         """
         with self._lock:
             task = self._tasks.get(str(task_id or ""))
             if task is None:
                 return False
-            if task["status"] != "queued":
+            status = task["status"]
+            if status == "waiting":
+                # 排队中：还没花过钱，可以干净地摘掉。
+                task["status"] = "failed"
+                task["error"] = "cancelled while queued (未提交到上游，未扣费)"
+                task["completed_at"] = int(self._clock())
+                self._waiting_bodies.pop(task_id, None)
+                self._persist_locked()
+                return True
+            if status != "queued":
                 return False
             task["status"] = "failed"
             task["error"] = "cancelled before polling"
@@ -396,7 +412,10 @@ class MediaTaskStore(object):
         deadline = self._clock() + max(0, int(timeout))
         while True:
             task = self.get(task_id)
-            if task is None or task["status"] not in ("queued", "running"):
+            # `waiting` / `submitting` 也算"没结束"：它们对外是 queued，客户端用
+            # ?wait=1 就是想等到出片，不能因为还在本地排队就立刻返回。
+            if task is None or task["status"] not in ("waiting", "submitting",
+                                                      "queued", "running"):
                 return task
             if self._clock() >= deadline:
                 return task

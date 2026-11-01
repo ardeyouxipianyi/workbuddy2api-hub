@@ -208,6 +208,47 @@ class QueueTests(unittest.TestCase):
         reloaded.stop()
 
 
+class CancelTests(QueueTests):
+    """取消的三种语义，区别就是钱。"""
+
+    def test_cancel_waiting_task_costs_nothing_and_leaves_queue(self):
+        store = make_store(submitter=lambda task: {"taskId": "up-1", "account": "u-1"})
+        queued = store.create_pending("minimax-video-h3", PARAMS, BODY)
+        self.assertEqual(queued["status"], "waiting")
+        self.assertTrue(store.cancel(queued["id"]))
+        task = store.get(queued["id"])
+        self.assertEqual(task["status"], "failed")
+        self.assertIn("未扣费", task["error"])
+        # 摘掉后不该再被调度
+        self.assertEqual(store.waiting_count(), 0)
+        # 任务体也不能留着（否则 pump 之后还能拿到 prompt）
+        self.assertNotIn(queued["id"], store._waiting_bodies)
+        store.stop()
+
+    def test_cancel_running_is_refused(self):
+        store = make_store()
+        task = store.create("kling-video-v3", PARAMS, "u-1", BODY, "up-1")
+        with store._lock:
+            store._tasks[task["id"]]["status"] = "running"
+        self.assertFalse(store.cancel(task["id"]))
+        self.assertEqual(store.get(task["id"])["status"], "running")
+        store.stop()
+
+    def test_wait_does_not_return_while_still_queued(self):
+        """?wait=1 不能因为"还在本地排队"就立刻返回。"""
+        store = make_store(submitter=None)
+        task = store.create_pending("minimax-video-h3", PARAMS, BODY)
+        seen = []
+        def fake_sleep(_seconds):
+            seen.append(1)
+            with store._lock:               # 第二次"睡"的时候让它完成
+                store._tasks[task["id"]]["status"] = "completed"
+        result = store.wait(task["id"], timeout=30, interval=0, sleep=fake_sleep)
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(seen)
+        store.stop()
+
+
 class WorkerTests(unittest.TestCase):
     def test_completes_and_downloads(self):
         client = FakeClient()
