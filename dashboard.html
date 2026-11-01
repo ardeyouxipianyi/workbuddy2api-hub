@@ -2683,6 +2683,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '请求次数': 'Requests',
     '请确认 WorkBuddy 桌面客户端正在运行并已登录；': 'Make sure the WorkBuddy desktop client is running and signed in;',
     '请确认后端代理服务已重启以加载新代码': 'Restart the backend proxy service to load the new code',
+    '使用 Rust 后端（测试版）': 'Use the Rust backend (beta)',
+    'Rust 后端是测试版：功能对齐 Python 后端，但可能还有没发现的问题，异常时请切回 Python 后端。': 'The Rust backend is a beta: it matches the Python backend feature for feature, but undiscovered problems are still possible — switch back to Python if anything misbehaves.',
+    '(已启用 Rust 后端·测试版)': '(Rust backend enabled · beta)',
+    '正在切换到 Rust 后端（测试版），等旧后端的在飞请求结束（最长约 70 秒）': 'Switching to the Rust backend (beta), waiting for in-flight requests on the old backend (up to ~70s)',
     '请确认已安装并登录 WorkBuddy 客户端后点「重新扫描」。': 'Make sure the WorkBuddy client is installed and signed in, then click Rescan.',
     '请输入面板密码': 'Enter the panel password',
     '请输入面板访问密码': 'Enter the panel access password',
@@ -5129,11 +5133,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
             <h2 style="margin:0">后端实现 <em id="setBackendState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px" id="setBackendDetail"></div>
             <div style="font-size:12px;color:var(--warn);margin-top:4px" id="setBackendMissing"></div>
+            <div style="font-size:12px;color:var(--warn);margin-top:4px">Rust 后端是测试版：功能对齐 Python 后端，但可能还有没发现的问题，异常时请切回 Python 后端。</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
               <input id="setBackendRust" type="checkbox" style="width:16px;height:16px">
-              使用 Rust 后端
+              使用 Rust 后端（测试版）
             </label>
             <button onclick="saveBackend(this)" id="setBackendBtn">切换后端</button>
           </div>
@@ -13075,7 +13080,7 @@ async function loadBackendState(){
   const rust = data.rust || {};
   const current = data.backend || 'python';
   const switchable = data.supervised !== false;
-  stateEl.textContent = current === 'rust' ? '(已启用 Rust 后端)' : '(当前 Python 后端)';
+  stateEl.textContent = current === 'rust' ? '(已启用 Rust 后端·测试版)' : '(当前 Python 后端)';
   stateEl.style.color = current === 'rust' ? 'var(--accent2)' : 'var(--dim)';
   const bits = [];
   if(!switchable) bits.push('没有 launcher 监督：本进程自己占着端口，无法切换');
@@ -13104,7 +13109,9 @@ async function saveBackend(btn){
   if(btn) btn.disabled = true;
   // launcher 会先等在飞请求归零（最长 60 秒）再换进程，这段等待必须说出来，
   // 否则很像"点了没反应"，会有人连点。
-  toast('正在切换，等旧后端的在飞请求结束（最长约 70 秒）', 'warn');
+  toast(target === 'rust'
+    ? '正在切换到 Rust 后端（测试版），等旧后端的在飞请求结束（最长约 70 秒）'
+    : '正在切换，等旧后端的在飞请求结束（最长约 70 秒）', 'warn');
   // 切换会把正在服务这个请求的进程停掉，响应可能收不到，所以「成功」只按
   // 轮询到的最终状态判定，不按这次 POST 的返回。
   try { await postJSON('/admin/backend', {backend: target}); } catch(e) { /* 进程正在易手 */ }
