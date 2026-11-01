@@ -109,8 +109,9 @@ impl KeyPair {
 
     /// ES256 签名，JOSE raw `r||s`（64 字节，低 S）。
     pub fn sign_es256(&self, message: &[u8]) -> Vec<u8> {
-        let mut signature: Signature = self.key.sign(message);
-        signature.normalize_s();
+        let signature: Signature = self.key.sign(message);
+        // ecdsa 默认可能给高 S；JOSE/Go 都要求低 S（等价于 Python 的 s > N/2 → N-s）。
+        let signature = signature.normalize_s().unwrap_or(signature);
         signature.to_bytes().to_vec()
     }
 

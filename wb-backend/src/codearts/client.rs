@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 
 use super::crypto;
 use super::{
-    now_secs, Account, CodeArtsError, Pool, Result, CLIENT_ID, EP_LOGIN_TICKET, EP_OAUTH_TOKENS,
+    Account, CodeArtsError, Pool, Result, CLIENT_ID, EP_LOGIN_TICKET, EP_OAUTH_TOKENS,
     ERROR_BODY_MAX, PLUGIN_NAME, PLUGIN_VERSION, REDIRECT_PATH, REFRESH_SKEW,
 };
 
