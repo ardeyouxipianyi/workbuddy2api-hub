@@ -253,6 +253,15 @@ pub fn write_json_atomic(path: &std::path::Path, value: &Value) -> std::io::Resu
 }
 
 /// 本地时间戳 `YYYY-MM-DD HH:MM:SS`（导出文档的 exportedAt 用这个口径）。
+/// 把空闲的 malloc 页还给系统（glibc）。重建大缓存之后调一次，RSS 才能真的降下来；
+/// 没有分配/几乎没有空闲页时只是一次 `mallinfo` 级别的开销。
+pub fn trim_malloc() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 pub fn local_stamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

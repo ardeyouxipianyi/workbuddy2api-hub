@@ -45,9 +45,9 @@ pub struct Row {
     pub cache_hit_pct: Option<f64>,
     pub error: Option<Value>,
     pub cost_policy: Option<Value>,
-    /// 原行（不含换行）。只在「最近请求」重解析时用。
-    /// shortcut: 这仍是每行 ~600 B 的常驻，日志到 10 万行时约 60 MB；真到那一步
-    /// 再改成「只留行号、由最近请求按需重读」。
+    /// 原行（不含换行）。只给「最近请求」原样输出用，**只有尾部**几行留原文：
+    /// 整份日志每行都留一份要 ~600 B/行（2.7 万行 ≈ 17 MB，10 万行 ≈ 60 MB）。
+    /// 更早的行 `to_value()` 用解析出的字段重建，面板也不会展示它们。
     #[serde(skip)]
     pub raw: Box<str>,
 }
@@ -82,9 +82,92 @@ impl Row {
     }
 
     /// 原行的 Value 形态（只给「最近请求」这类要整行输出的视图）。
+    /// 尾部保留原文的行原样返回；更早的行按字段重建（面板不会展示它们）。
     pub fn to_value(&self) -> Value {
-        serde_json::from_str(&self.raw).unwrap_or_else(|_| Value::Null)
+        if !self.raw.is_empty() {
+            if let Ok(value) = serde_json::from_str(&self.raw) {
+                return value;
+            }
+        }
+        let mut map = serde_json::Map::new();
+        map.insert("at".into(), json!(self.at));
+        for (key, value) in [
+            ("model", &self.model),
+            ("account", &self.account),
+            ("realm", &self.realm),
+            ("key", &self.key),
+            ("outcome", &self.outcome),
+            ("iso", &self.iso),
+        ] {
+            if let Some(value) = value {
+                map.insert(key.into(), json!(value));
+            }
+        }
+        for (key, value) in [
+            ("credit", self.credit),
+            ("prompt_tokens", self.prompt_tokens),
+            ("completion_tokens", self.completion_tokens),
+            ("reasoning_tokens", self.reasoning_tokens),
+            ("cached_tokens", self.cached_tokens),
+            ("total_tokens", self.total_tokens),
+        ] {
+            if value != 0.0 {
+                map.insert(key.into(), json!(value));
+            }
+        }
+        for (key, value) in [
+            ("ttft_ms", self.ttft_ms),
+            ("gen_ms", self.gen_ms),
+            ("elapsed_ms", self.elapsed_ms),
+            ("tokens_per_sec", self.tokens_per_sec),
+            ("cache_hit_pct", self.cache_hit_pct),
+        ] {
+            if let Some(value) = value {
+                map.insert(key.into(), json!(value));
+            }
+        }
+        if let Some(error) = &self.error {
+            map.insert("error".into(), error.clone());
+        }
+        if let Some(policy) = &self.cost_policy {
+            map.insert("cost_policy".into(), policy.clone());
+        }
+        Value::Object(map)
     }
+}
+
+/// 逐行读 + 解析；只有尾部 `RAW_TAIL` 行保留原文（见 `Row::raw`）。
+fn parse_rows_streaming(path: &std::path::Path) -> Vec<Row> {
+    use std::io::BufRead;
+    const RAW_TAIL: usize = 256;
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let meta_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    // 每行约 600 B 估个容量，省掉十几次 realloc（不会超额：只是上界估计）。
+    let mut rows: Vec<Row> = Vec::with_capacity((meta_len / 600).max(64) as usize);
+    let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+    let mut handle = reader;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match handle.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Some(row) = Row::parse(&line) {
+                    rows.push(row);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    // 只留尾部原文：更早的行在「最近请求」里根本不会出现。
+    let cutoff = rows.len().saturating_sub(RAW_TAIL);
+    for row in rows.iter_mut().take(cutoff) {
+        row.raw = "".into();
+    }
+    rows
 }
 
 /// 解析结果按 (路径, mtime, 长度) 缓存一次，所有面板视图共用同一份。
@@ -112,16 +195,12 @@ fn load_rows(path: &std::path::Path) -> Arc<Vec<Row>> {
     if guard.0 == path && guard.1 == stamp.0 && guard.2 == stamp.1 {
         return guard.3.clone();
     }
-    // 只解析需要的字段，原行留一份给「最近请求」重解析（见 Row 的注释）。
-    let rows: Vec<Row> = std::fs::read_to_string(path)
-        .map(|text| {
-            text.lines()
-                .filter(|line| !line.trim().is_empty())
-                .filter_map(Row::parse)
-                .collect()
-        })
-        .unwrap_or_default();
+    // 边读边解析：不再把整份 16 MB 文本读进内存（解析期间原文与结果双份驻留，
+    // 那就是 CT412 内存峰值的大头）。
+    let rows = parse_rows_streaming(path);
     let shared = Arc::new(rows);
+    // 大块重建之后把空闲页还给系统：glibc 默认留着 arena，RSS 会一直悬在高位。
+    crate::state::trim_malloc();
     *guard = (path.to_path_buf(), stamp.0, stamp.1, shared.clone());
     shared
 }
