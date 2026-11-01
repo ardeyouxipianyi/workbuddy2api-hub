@@ -22,7 +22,7 @@ fn read_rows(app: &App) -> Arc<Vec<Row>> {
 /// 115 MB，还随日志线性长（CT412 上一次内存爆掉就是这么来的）。这里只留各视图真正
 /// 读的字段，一级对象每行 ~200 B；`raw` 存原行，给「最近请求」这种要原样输出的
 /// 视图用（它只有一页几十行，重新解析很便宜）。
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Row {
     pub at: f64,
@@ -136,22 +136,28 @@ impl Row {
     }
 }
 
-/// 逐行读 + 解析；只有尾部 `RAW_TAIL` 行保留原文（见 `Row::raw`）。
-fn parse_rows_streaming(path: &std::path::Path) -> Vec<Row> {
+/// 只有尾部这么多行留原文（见 `Row::raw`）。
+const RAW_TAIL: usize = 256;
+
+/// 逐行读 + 解析。返回 (行, 已折到的字节数)——末尾没有换行的半行不算。
+fn parse_rows_streaming(path: &std::path::Path) -> (Vec<Row>, u64) {
     use std::io::BufRead;
-    const RAW_TAIL: usize = 256;
-    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(file) = std::fs::File::open(path) else { return (Vec::new(), 0) };
     let meta_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
     // 每行约 600 B 估个容量，省掉十几次 realloc（不会超额：只是上界估计）。
     let mut rows: Vec<Row> = Vec::with_capacity((meta_len / 600).max(64) as usize);
-    let reader = std::io::BufReader::with_capacity(256 * 1024, file);
-    let mut handle = reader;
+    let mut handle = std::io::BufReader::with_capacity(256 * 1024, file);
+    let mut consumed = 0_u64;
     let mut line = String::new();
     loop {
         line.clear();
         match handle.read_line(&mut line) {
             Ok(0) => break,
-            Ok(_) => {
+            Ok(read) => {
+                if !line.ends_with('\n') {
+                    break; // 半行：留给下次
+                }
+                consumed += read as u64;
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -162,12 +168,61 @@ fn parse_rows_streaming(path: &std::path::Path) -> Vec<Row> {
             Err(_) => break,
         }
     }
-    // 只留尾部原文：更早的行在「最近请求」里根本不会出现。
+    drop_raw_tail(&mut rows);
+    (rows, consumed)
+}
+
+/// 只留尾部原文：更早的行在「最近请求」里根本不会出现。
+fn drop_raw_tail(rows: &mut [Row]) {
     let cutoff = rows.len().saturating_sub(RAW_TAIL);
     for row in rows.iter_mut().take(cutoff) {
         row.raw = "".into();
     }
-    rows
+}
+
+/// 文件只增长时只解析新增的完整行（我们的写端只 append）。
+/// 返回新的「已折到」位置；读不到就原样返回 `from`。
+fn append_rows(path: &std::path::Path, from: u64, rows: &mut Vec<Row>) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return from };
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return from;
+    }
+    let mut tail = Vec::new();
+    if file.read_to_end(&mut tail).is_err() {
+        return from;
+    }
+    let complete = tail
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    if complete == 0 {
+        return from;
+    }
+    let text = String::from_utf8_lossy(&tail[..complete]);
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(row) = Row::parse(line) {
+            rows.push(row);
+        }
+    }
+    drop_raw_tail(rows);
+    from + complete as u64
+}
+
+/// 头部指纹：文件被重写/轮转（同样长度但内容换了）时要整份重建。
+fn head_stamp(path: &std::path::Path) -> u64 {
+    use std::io::Read;
+    use std::hash::{Hash, Hasher};
+    let mut head = [0_u8; 64];
+    let Ok(mut file) = std::fs::File::open(path) else { return 0 };
+    let read = file.read(&mut head).unwrap_or(0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    head[..read].hash(&mut hasher);
+    hasher.finish()
 }
 
 /// 解析结果按 (路径, mtime, 长度) 缓存一次，所有面板视图共用同一份。
@@ -177,31 +232,32 @@ fn parse_rows_streaming(path: &std::path::Path) -> Vec<Row> {
 fn load_rows(path: &std::path::Path) -> Arc<Vec<Row>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::path::PathBuf, u64, u64, Arc<Vec<Row>>)>> =
         std::sync::OnceLock::new();
-    let stamp = std::fs::metadata(path)
-        .map(|meta| {
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            (mtime, meta.len())
-        })
-        .unwrap_or((0, 0));
+    let head = head_stamp(path);
+    let length = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     let cache = CACHE.get_or_init(|| {
         std::sync::Mutex::new((std::path::PathBuf::new(), 0, 0, Arc::new(Vec::new())))
     });
     let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
-    if guard.0 == path && guard.1 == stamp.0 && guard.2 == stamp.1 {
-        return guard.3.clone();
+    // 元组是 (路径, 已折到的字节, 头部指纹, 行)。
+    if guard.0 == path && guard.2 == head {
+        if guard.1 == length {
+            return guard.3.clone();
+        }
+        // 只增长就只解析新增的完整行；文件变短/被重写才整份重建。
+        if length > guard.1 {
+            let from = guard.1;
+            let rows = Arc::make_mut(&mut guard.3);
+            guard.1 = append_rows(path, from, rows);
+            return guard.3.clone();
+        }
     }
     // 边读边解析：不再把整份 16 MB 文本读进内存（解析期间原文与结果双份驻留，
     // 那就是 CT412 内存峰值的大头）。
-    let rows = parse_rows_streaming(path);
+    let (rows, consumed) = parse_rows_streaming(path);
     let shared = Arc::new(rows);
     // 大块重建之后把空闲页还给系统：glibc 默认留着 arena，RSS 会一直悬在高位。
     crate::state::trim_malloc();
-    *guard = (path.to_path_buf(), stamp.0, stamp.1, shared.clone());
+    *guard = (path.to_path_buf(), consumed, head, shared.clone());
     shared
 }
 
@@ -610,12 +666,37 @@ mod tests {
         let again = load_rows(&path);
         assert_eq!(first.len(), 1);
         assert!(Arc::ptr_eq(&first, &again), "缓存命中应复用同一份 Arc");
-        // 文件长大之后必须重新解析，否则面板永远看不到新请求。
+        // 文件长大之后必须看得见新请求（只解析尾部，不整份重来）。
         std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(&path, "{\"at\": 100}\n{\"at\": 200}\n").unwrap();
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"{\"at\": 200}\n").unwrap();
+            file.flush().unwrap();
+        }
         let refreshed = load_rows(&path);
         assert_eq!(refreshed.len(), 2);
         assert!(!Arc::ptr_eq(&first, &refreshed));
+        // 追加了半行（没有换行）时不能把它算进来。
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"{\"at\": 300").unwrap();
+            file.flush().unwrap();
+        }
+        assert_eq!(load_rows(&path).len(), 2, "半行不能计入");
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"}\n").unwrap();
+            file.flush().unwrap();
+        }
+        let grown = load_rows(&path);
+        let ats: Vec<f64> = grown.iter().map(|row| row.at).collect();
+        assert_eq!(ats, vec![100.0, 200.0, 300.0]);
+        // 文件被重写成同样长度以内的内容（轮转）：头部指纹变了就整份重建。
+        std::fs::write(&path, "{\"at\": 900}\n").unwrap();
+        assert_eq!(load_rows(&path).len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 
