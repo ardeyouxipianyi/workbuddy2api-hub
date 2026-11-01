@@ -97,6 +97,239 @@ fn api_keys(settings: &Map<String, Value>, deleted: bool) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// 本地面板显示用的时间戳（与 Python 的 `time.strftime("%Y/%m/%d %H:%M")` 同格式）。
+fn now_label() -> String {
+    let stamp = crate::state::now_epoch() as libc::time_t;
+    let mut value: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&stamp, &mut value) }.is_null() {
+        return String::new();
+    }
+    format!(
+        "{:04}/{:02}/{:02} {:02}:{:02}",
+        value.tm_year + 1900,
+        value.tm_mon + 1,
+        value.tm_mday,
+        value.tm_hour,
+        value.tm_min
+    )
+}
+
+fn unique_id(candidate: String, used: &[String]) -> String {
+    if !candidate.is_empty() && !used.iter().any(|id| id == &candidate) {
+        return candidate;
+    }
+    let mut suffix = 2;
+    loop {
+        let alt = format!("{candidate}-{suffix}");
+        if !used.iter().any(|id| id == &alt) {
+            return alt;
+        }
+        suffix += 1;
+    }
+}
+
+/// 保存面板提交的 API Key 列表（`POST /settings/save` 的 `api_keys` 字段）。
+///
+/// 三条与 Python 一致的规则，缺一条就会丢用户的密钥：
+///
+/// 1. 面板只画打码后的 key，所以这一行的 `key` 留空 = **沿用已存的密钥**，
+///    而不是「把它清空」。早期 Rust 版把提交原样落盘，于是每次在面板上改点
+///    别的设置都会把所有密钥写成空串。
+/// 2. 只有 `deleted_api_key_ids` 里点名的 id 才软删除（保留 id 与 created_at，
+///    清掉密钥、置 `enabled: false`），其余已存的键一律保留——提交的列表可能
+///    是脏的（第二个标签页、保存前的旧快照），不能当成「以这份为准」。
+/// 3. 提交里没有 id 的行是新行，由服务端生成 id；已有 id 的行沿用原 id。
+///
+/// 返回落盘后的行数。
+pub(crate) fn merge_api_keys(
+    settings: &mut Map<String, Value>,
+    submitted: &Value,
+    delete_ids: Option<&Value>,
+) -> Result<usize, String> {
+    let Some(rows) = submitted.as_array() else {
+        return Err("api_keys must be a list".to_string());
+    };
+    let stored: Vec<Value> = settings
+        .get("api_keys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let text = |value: &Value, key: &str| -> String {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let stored_by_id = |id: &str| -> Option<Value> {
+        stored
+            .iter()
+            .find(|entry| text(entry, "id") == id)
+            .cloned()
+    };
+    let drop: Vec<String> = delete_ids
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let stamp = now_label();
+    let mut out: Vec<Value> = Vec::new();
+    let mut used: Vec<String> = Vec::new();
+    for row in rows {
+        let Some(item) = row.as_object() else {
+            return Err("each api key must be an object".to_string());
+        };
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let old = stored_by_id(&id);
+        let mut secret = item.get("key").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if secret.is_empty() {
+            secret = old
+                .as_ref()
+                .map(|entry| text(entry, "key"))
+                .unwrap_or_default();
+        }
+        if secret.is_empty() {
+            return Err("a key entry is empty - fill it in or remove the row".to_string());
+        }
+        // 提交里没提到的字段沿用已存值：旧面板不认识新字段时不能把它清掉。
+        let field = |name: &str| -> Option<Value> {
+            item.get(name)
+                .cloned()
+                .or_else(|| old.as_ref().and_then(|entry| entry.get(name).cloned()))
+        };
+        let final_id = if id.is_empty() {
+            crate::sse::hex_token(6)
+        } else {
+            id.clone()
+        };
+        let final_id = unique_id(final_id, &used);
+        used.push(final_id.clone());
+        let realm = field("realm")
+            .and_then(|value| value.as_str().map(|text| text.trim().to_lowercase()))
+            .unwrap_or_default();
+        let mut entry = Map::new();
+        entry.insert("id".into(), json!(final_id));
+        entry.insert("name".into(), field("name").unwrap_or_else(|| json!("")));
+        entry.insert("key".into(), json!(secret));
+        entry.insert("realm".into(), json!(realm));
+        entry.insert(
+            "models".into(),
+            field("models").unwrap_or_else(|| json!(Vec::<String>::new())),
+        );
+        entry.insert(
+            "accounts".into(),
+            field("accounts").unwrap_or_else(|| json!(Vec::<String>::new())),
+        );
+        entry.insert(
+            "concurrency_limit".into(),
+            field("concurrency_limit").unwrap_or(json!(0)),
+        );
+        entry.insert(
+            "enabled".into(),
+            field("enabled").unwrap_or(json!(true)),
+        );
+        let created = old
+            .as_ref()
+            .map(|old_entry| text(old_entry, "created_at"))
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| stamp.clone());
+        entry.insert("created_at".into(), json!(created));
+        out.push(Value::Object(entry));
+    }
+    // 已存但这次没提交的键：点名的软删除，没点名的一字不动。
+    for old in &stored {
+        let id = text(old, "id");
+        if used.iter().any(|seen| seen == &id) {
+            continue;
+        }
+        used.push(id.clone());
+        if drop.iter().any(|dropped| dropped == &id) && !is_deleted(old) {
+            let mut retired = Map::new();
+            retired.insert("id".into(), json!(id));
+            retired.insert("name".into(), json!(text(old, "name")));
+            retired.insert("key".into(), json!(""));
+            retired.insert("realm".into(), json!(text(old, "realm")));
+            retired.insert(
+                "models".into(),
+                old.get("models").cloned().unwrap_or_else(|| json!(Vec::<String>::new())),
+            );
+            retired.insert("enabled".into(), json!(false));
+            retired.insert("created_at".into(), json!(text(old, "created_at")));
+            retired.insert("deleted_at".into(), json!(stamp));
+            out.push(Value::Object(retired));
+            continue;
+        }
+        out.push(old.clone());
+    }
+    let live = out
+        .iter()
+        .filter(|entry| !is_deleted(entry) && !text(entry, "key").is_empty())
+        .count();
+    settings.insert("api_keys".into(), Value::Array(out));
+    Ok(live)
+}
+
+/// `GET /settings/reveal?id=<id>`：面板要「复制」就只能拿回明文密钥。
+/// 只在面板会话下可用（外层已校验 token），与 Python 的 `_get_settings_reveal` 同形。
+pub(crate) fn reveal(app: &Arc<App>, query: Option<&str>) -> Resp {
+    let wanted = query
+        .unwrap_or("")
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("id="))
+        .map(|value| urldecode(value))
+        .unwrap_or_default();
+    let settings = app.state.settings_snapshot();
+    let found = settings
+        .get("api_keys")
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|entry| {
+                    entry.get("id").and_then(Value::as_str) == Some(wanted.as_str())
+                })
+                .map(|entry| entry.get("key").and_then(Value::as_str).unwrap_or("").to_string())
+        });
+    match found {
+        Some(key) => json_resp(StatusCode::OK, &json!({"id": wanted, "key": key})),
+        None => json_resp(
+            StatusCode::NOT_FOUND,
+            &json!({"error": {"message": "no such key", "code": 404}}),
+        ),
+    }
+}
+
+fn urldecode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
 pub(crate) fn string_list(value: Option<&Value>, limit: usize) -> Vec<String> {
     let Some(items) = value.and_then(Value::as_array) else {
         return Vec::new();

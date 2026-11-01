@@ -334,6 +334,9 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
         (&Method::POST, "/admin/backend") => crate::launcher::switch(app, req).await,
         (&Method::GET, "/accounts") => crate::panel_read::accounts(app, &req),
         (&Method::GET, "/settings") => crate::panel_settings::view(app),
+        (&Method::GET, "/settings/reveal") => {
+            crate::panel_settings::reveal(app, req.uri().query())
+        }
         (&Method::GET, "/usage") => crate::panel_usage::overview(app, &req),
         (&Method::GET, "/usage/timeseries") => crate::panel_usage::timeseries(app, &req),
         (&Method::GET, "/usage/perf") => crate::panel_usage::perf(app, &req),
@@ -756,6 +759,24 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
         if key == "limits" || crate::panel_limits::is_limit_key(key) {
             continue;
         }
+        // API Key 列表要按「新增/改名/留空表示不改」合并，不能整份覆盖写：
+        // 面板只看到打码后的 key，整份写会把所有密钥清成空串（真实丢过密钥）。
+        if key == "api_keys" {
+            match crate::panel_settings::merge_api_keys(&mut settings, value, patch.get("deleted_api_key_ids")) {
+                Ok(saved) => applied.push(format!("api_keys({saved})")),
+                Err(message) => {
+                    return json_resp(
+                        StatusCode::BAD_REQUEST,
+                        &json!({"error": {"message": message, "code": 400}}),
+                    );
+                }
+            }
+            continue;
+        }
+        // 删除名单由 merge_api_keys 消费，别把它当普通设置写进 settings.json。
+        if key == "deleted_api_key_ids" {
+            continue;
+        }
         // CodeArts 出口配置：只收七个已知键，越界回落默认（wb_codearts.save_config）。
         if key == "codearts" {
             let Some(patch) = value.as_object() else {
@@ -816,7 +837,7 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
         let known = settings.contains_key(key)
             || matches!(
                 key.as_str(),
-                "api_keys" | "deleted_api_key_ids" | "panel_password" | "active_realm"
+                "panel_password" | "active_realm"
                     | "update_check_enabled"
                     // 日志落库四键：老配置里没有它们，但面板要能第一次就打开落库。
                     | "log_db_enabled" | "log_db_max_rows" | "log_db_max_days"
