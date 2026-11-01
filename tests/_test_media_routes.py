@@ -157,6 +157,17 @@ def catalog_payload():
                              "resolutions": ["720P", "1080P", "4K"],
                              "defaultResolution": "720P", "defaultSeconds": 5,
                              "maxPromptLength": 2500}},
+        {"id": "minimax-video-h3", "name": "MiniMax-H3",
+         "tags": ["text-to-video", "image-to-video"],
+         "videoGeneration": {"minSeconds": 4, "maxSeconds": 15,
+                             "resolutions": ["768P", "2K"],
+                             "defaultResolution": "768P", "defaultSeconds": 5,
+                             "maxPromptLength": 2000,
+                             "maxReferenceImages": 9, "maxReferenceVideos": 3,
+                             "maxReferenceAudios": 3, "maxReferenceMaterials": 12,
+                             "allowMixedReferenceMaterials": True,
+                             "framesExclusiveWithReferenceMaterials": True,
+                             "supportsFirstFrame": True}},
     ]}}
 
 
@@ -853,6 +864,37 @@ class IdentityWiringTests(unittest.TestCase):
             self.assertIsNone(wb_media_client.current_identity())
         finally:
             wb_media_client.set_identity(saved)
+
+
+class ReferenceValidationOrderTests(MediaRouteCases):
+    """数量/互斥校验必须在**下载之前**发生。
+
+    否则客户端拿十个坏地址就能让我们白下载一轮，才收到"最多 9 个"。
+    断言方式是给一个必然下载失败的地址：只要报的是数量错而不是下载错，
+    就说明顺序对了。
+    """
+
+    def test_count_is_checked_before_any_download(self):
+        with mock.patch.object(wb_media_client, "resolve_input_image",
+                               side_effect=AssertionError("不该走到下载")):
+            handler = self.post(path="/v1/videos",
+                                payload={"prompt": "x", "model": "minimax-video-h3",
+                                         "reference_images":
+                                         ["https://e.com/%d.png" % i for i in range(10)]})
+        code, message = handler.sent[0], handler.sent[1]
+        self.assertEqual(code, 400)
+        self.assertIn("9", json.dumps(message, ensure_ascii=False) if not isinstance(message, str) else message)
+
+    def test_frame_and_reference_conflict_is_checked_first(self):
+        with mock.patch.object(wb_media_client, "resolve_input_image",
+                               side_effect=AssertionError("不该走到下载")):
+            handler = self.post(path="/v1/videos",
+                                payload={"prompt": "x", "model": "minimax-video-h3",
+                                         "image": "https://e.com/f.png",
+                                         "reference_images": ["https://e.com/a.png"]})
+        code, message = handler.sent[0], handler.sent[1]
+        self.assertEqual(code, 400)
+        self.assertIn("互斥", json.dumps(message, ensure_ascii=False) if not isinstance(message, str) else message)
 
 
 class IsolationTests(unittest.TestCase):

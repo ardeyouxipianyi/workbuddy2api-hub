@@ -20568,6 +20568,14 @@ class Handler(BaseHTTPRequestHandler):
             tag = (wb_media.TAG_IMAGE_TO_VIDEO if wants_image
                    else wb_media.TAG_TEXT_TO_VIDEO)
             model = wb_media.pick_model(models, payload.get("model"), tag)
+            # **先只校验、不下载**：数量上限与首尾帧互斥只用字段本身就能判断。
+            # 放在下载之前有两层理由——拒得早（客户端改一行参数就能重试），
+            # 也免得别人拿十个坏地址让我们白下载一轮。
+            generation = dict(model.get("videoGeneration") or {})
+            try:
+                wb_media.read_reference_materials(payload, generation)
+            except wb_media.MediaError as exc:
+                return self._media_error(exc)
             request = dict(payload)
             if _as_text(request.get("image")) or _as_text(request.get("input_reference")):
                 # 输入图只接受 data URL 与公网 http(s)：本地路径在 classify 阶段就被拒，
@@ -20590,7 +20598,6 @@ class Handler(BaseHTTPRequestHandler):
                 for item in items:
                     wb_media_client.assert_public_url(_as_text(item) or "")
                 request[kind] = items
-            generation = dict(model.get("videoGeneration") or {})
             learned = learned_video_seconds(realm, model["id"])
             if learned is not None:
                 # 上游上一次拒绝时自报的区间比目录更晚、更真。
