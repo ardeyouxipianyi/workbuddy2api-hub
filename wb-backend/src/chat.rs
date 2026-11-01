@@ -21,6 +21,7 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String)
         &app.state.current_realm(),
         &crate::auth::bound_realm(&app.state, &key_id),
     );
+    let dump = crate::upstream::dumping(app);
     let session = crate::http::session_key_header(req.headers());
     let body = match body_json(req).await {
         Ok(v) => v,
@@ -51,6 +52,9 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String)
         messages.len() + usize::from(injected),
         key_id.get(..8).unwrap_or(&key_id),
     ));
+    if dump {
+        crate::upstream::dump(app, &key_id, &format!("REQ {}", serde_json::to_string(&body).unwrap_or_default()));
+    }
     app.inflight.fetch_add(1, Ordering::Relaxed);
     // CodeArts 是独立出口（自建签名/SSE/账号池），不进 WorkBuddy 的 upstream 管线。
     if realm == "codearts" {

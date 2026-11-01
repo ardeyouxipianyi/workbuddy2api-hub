@@ -363,6 +363,9 @@ pub async fn chat_stream(
                 if has_choices {
                     let out = emitter.rewrite(&frame);
                     if !out.is_empty() {
+                        if dumping(&app) {
+                            dump(&app, &key_id, &out);
+                        }
                         if tx.send(Ok(Frame::data(Bytes::from(out)))).await.is_err() {
                             return;
                         }
@@ -428,6 +431,26 @@ pub async fn chat_stream(
         hyper::header::HeaderValue::from_static("*"),
     );
     response
+}
+
+/// 埋点开关：`<accounts>/.dump-stream` 存在时，把客户端的请求体与下游收到的每一帧
+/// 按时间追加到 `<accounts>/stream-dump/<key>.log`。排查「客户端看到的流长什么样」
+/// 这类问题时用，删掉那个文件就恢复零开销（每帧只多一次 stat）。
+pub(crate) fn dumping(app: &crate::App) -> bool {
+    app.state.accounts_dir.join(".dump-stream").exists()
+}
+
+pub(crate) fn dump(app: &crate::App, name: &str, data: &str) {
+    let dir = app.state.accounts_dir.join("stream-dump");
+    let _ = std::fs::create_dir_all(&dir);
+    use std::io::Write;
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{name}.log")))
+    {
+        let _ = writeln!(fh, "{:.3}\t{}", crate::sse::epoch_now(), data);
+    }
 }
 
 /// 非流式：内部仍按流式取上游，读完再聚合成普通 JSON。

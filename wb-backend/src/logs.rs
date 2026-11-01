@@ -837,9 +837,12 @@ mod tests {
         let dir = workdir();
         let path = dir.join("logs.sqlite3");
         let conn = connect(&path).expect("open");
-        // 正好卡在边界上的那一行必须留下：cutoff 与写入口径都是空格分隔的本地时间。
-        let edge = crate::state::local_stamp_for(now_epoch() - 7 * 86_400);
-        for (id, ts) in [(1, edge.replace('T', " ")), (2, "2020-01-01 00:00:00".to_string())] {
+        // 窗口内/外各一行。不拿「正好等于 cutoff」的那一秒当边界样本：trim_rows 会
+        // 在毫秒后才重算 cutoff，两次取整跨秒时边界行会被判过期——那是测试的抖动，
+        // 不是窗口逻辑（`ts < cutoff` 本身）。CI 上就这么红过一次。
+        let inside = crate::state::local_stamp_for(now_epoch() - 6 * 86_400).replace('T', " ");
+        let outside = crate::state::local_stamp_for(now_epoch() - 8 * 86_400).replace('T', " ");
+        for (id, ts) in [(1, inside), (2, outside)] {
             conn.execute(
                 "INSERT INTO logs (id, ts, time, level, tag, msg) VALUES (?1, ?2, '00:00:00', 'INFO', 'system', 'x')",
                 rusqlite::params![id, ts],
