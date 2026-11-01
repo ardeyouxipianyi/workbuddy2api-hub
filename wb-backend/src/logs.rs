@@ -400,6 +400,9 @@ fn connect(path: &Path) -> Option<Connection> {
         let _ = std::fs::create_dir_all(dir);
     }
     let conn = Connection::open(path).ok()?;
+    // 与 Python 的 sqlite3 timeout=10 对齐：切换后端时两个进程可能短暂同时持有库，
+    // busy_timeout=0 会让这一瞬间的 INSERT 直接报 BUSY 然后被丢掉。
+    let _ = conn.busy_timeout(Duration::from_secs(10));
     // journal_mode=DELETE：文件大小就是操作者设上限的那个文件（WAL 的新行会停在
     // 副文件里，那个上限永远收不到它们）。
     let _ = conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=NORMAL;");
