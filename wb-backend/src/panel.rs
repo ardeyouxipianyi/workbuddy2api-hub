@@ -204,6 +204,15 @@ fn token_of(req: &Request<Incoming>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// `realm_options()`：CodeArts 未配置时不出现在列表里（与 Python 一致）。
+pub(crate) fn realm_options(app: &crate::App) -> Vec<String> {
+    let mut options = vec!["intl".to_string(), "cn".to_string()];
+    if crate::panel_settings::codearts_configured(&app.state.settings_snapshot()) {
+        options.push("codearts".into());
+    }
+    options
+}
+
 fn unauth() -> Resp {
     // 文案与 Python 一致（wb_proxy.py 的 panel 401）：客户端只认这句。
     json_resp(
@@ -297,7 +306,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
     if (&method, path.as_str()) == (&Method::GET, "/realm") {
         return Some(json_resp(
             StatusCode::OK,
-            &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
+            &json!({"current": app.state.current_realm(), "options": realm_options(app)}),
         ));
     }
 
@@ -319,7 +328,7 @@ pub async fn handle(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Option
     let out = match (&method, path.as_str()) {
         (&Method::GET, "/realm") => json_resp(
             StatusCode::OK,
-            &json!({"current": app.state.current_realm(), "options": ["intl", "cn"]}),
+            &json!({"current": app.state.current_realm(), "options": realm_options(app)}),
         ),
         (&Method::GET, "/admin/backend/status") => crate::launcher::status(app).await,
         (&Method::POST, "/admin/backend") => crate::launcher::switch(app, req).await,
@@ -747,6 +756,34 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
         if key == "limits" || crate::panel_limits::is_limit_key(key) {
             continue;
         }
+        // CodeArts 出口配置：只收七个已知键，越界回落默认（wb_codearts.save_config）。
+        if key == "codearts" {
+            let Some(patch) = value.as_object() else {
+                return json_resp(
+                    StatusCode::BAD_REQUEST,
+                    &json!({"error": {"message": "codearts settings must be an object", "code": 400}}),
+                );
+            };
+            if crate::codearts::admin::save_settings(app, patch).is_err() {
+                return json_resp(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &json!({"error": {"message": "cannot save codearts settings", "code": 500}}),
+                );
+            }
+            // 关掉 CodeArts 后把默认出口收敛回 intl（Python 的 reconcile_codearts_realm）。
+            if !crate::panel_settings::codearts_configured(&app.state.settings_snapshot())
+                && app.state.current_realm() == "codearts"
+            {
+                let _ = crate::state::write_json_atomic(
+                    &app.state.accounts_dir.join("active_realm.json"),
+                    &json!({"realm": "intl"}),
+                );
+                app.state.reload();
+                app.log("codearts", "WARN", "codearts realm disabled; default exit reset to intl");
+            }
+            applied.push(key.clone());
+            continue;
+        }
         // 单请求体上限（v1.10.0）：1–256 的整数，越界就是 400，别落盘成坏值。
         if key == "max_payload_mb" {
             let Some(mb) = value.as_i64().filter(|mb| (1..=256).contains(mb)) else {
@@ -828,13 +865,23 @@ async fn realm_set(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Resp {
         Err(resp) => return resp,
     };
     let realm = body.get("realm").and_then(Value::as_str).unwrap_or("");
-    if realm != "cn" && realm != "intl" {
-        return json_resp(StatusCode::BAD_REQUEST, &json!({"error": {"message": "realm must be cn or intl", "code": 400}}));
+    if realm != "cn" && realm != "intl" && realm != "codearts" {
+        return json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": "realm must be intl, cn, codearts or empty", "code": 400}}),
+        );
+    }
+    // 没配置的 CodeArts 出口不能被切成默认出口（Python 同）。
+    if realm == "codearts" && !crate::panel_settings::codearts_configured(&app.state.settings_snapshot()) {
+        return json_resp(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": {"message": "codearts realm is not configured; enable it in settings first", "code": 400}}),
+        );
     }
     let path = app.state.accounts_dir.join("active_realm.json");
     let _ = crate::state::write_json_atomic(&path, &json!({"realm": realm}));
     app.state.reload();
-    json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": ["intl", "cn"]}))
+    json_resp(StatusCode::OK, &json!({"ok": true, "current": realm, "options": realm_options(app)}))
 }
 
 /// `POST /accounts/product`：切换出站身分（cli / workbuddy / vscode）。

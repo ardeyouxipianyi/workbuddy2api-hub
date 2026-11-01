@@ -225,6 +225,14 @@ pub async fn handle(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // CodeArts 的 responses 形状（事件序列 + 回程工具映射）还没移植：
+    // 明确回 400 指路，别让它按 WorkBuddy 管线打到一个不存在的上游。
+    if realm == "codearts" {
+        return crate::http::error_resp(
+            StatusCode::BAD_REQUEST,
+            "CodeArts 出口暂不支持 /v1/responses，请改用 /v1/chat/completions",
+        );
+    }
     let compact = crate::responses_compact::requested(&path, &body);
     let mut chat_body = match to_chat(&body) {
         Ok(v) => v,

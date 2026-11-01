@@ -195,6 +195,8 @@ impl State {
             Some(Value::Object(m)) => match m.get("realm").and_then(Value::as_str) {
                 Some("cn") => "cn".into(),
                 Some("intl") => "intl".into(),
+                // v1.10.0 的第三出口：出口是否可用由 codearts 配置决定，这里只读持久值。
+                Some("codearts") => "codearts".into(),
                 _ => "intl".into(),
             },
             _ => "intl".into(),

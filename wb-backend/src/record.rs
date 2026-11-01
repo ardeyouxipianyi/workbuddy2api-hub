@@ -116,13 +116,16 @@ pub fn record(app: &crate::App, row: Row<'_>) {
     out.insert("realm".into(), json!(row.realm));
     out.insert("key".into(), json!(row.key));
     let settings = app.state.settings_snapshot();
-    out.insert(
-        "cost_policy".into(),
+    // CodeArts 没有价目表：照 Python 标成 codearts:unpriced，别按其他出口的价算钱。
+    let policy = if row.realm == "codearts" {
+        Value::String("codearts:unpriced".into())
+    } else {
         app.pricing
             .current_policy_id(row.model, &settings)
             .map(Value::String)
-            .unwrap_or(Value::Null),
-    );
+            .unwrap_or(Value::Null)
+    };
+    out.insert("cost_policy".into(), policy);
     if let Some(effort) = row.effort {
         out.insert("reasoning_effort".into(), json!(effort));
     }

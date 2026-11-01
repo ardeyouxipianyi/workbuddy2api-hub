@@ -20,7 +20,7 @@ fn b64url(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
 
-fn b64url_decode(text: &str) -> Option<Vec<u8>> {
+pub fn b64url_decode(text: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD.decode(text.trim_end_matches('=')).ok()
 }
 

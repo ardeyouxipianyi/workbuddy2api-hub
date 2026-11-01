@@ -54,13 +54,24 @@ pub async fn get(app: &Arc<App>) -> Resp {
     payload.insert("models_ready".into(), json!({}));
     payload.insert("api_key_required".into(), json!(state.api_key_required()));
     // v1.10.0 的 CodeArts 子字段：只报配置状态，掉线也不能把整体 /health 变红。
-    payload.insert(
-        "codearts".into(),
-        json!({
-            "configured": crate::panel_settings::codearts_configured(&state.settings_snapshot()),
+    {
+        let settings = state.settings_snapshot();
+        let mut codearts = json!({
+            "configured": crate::panel_settings::codearts_configured(&settings),
             "base_url": crate::panel_settings::CODEARTS_SNAP_HOST,
-        }),
-    );
+        });
+        // 启用后补上账号统计（Python 的 wb_codearts.health 会 update 进来）。
+        if crate::panel_settings::codearts_configured(&settings) {
+            let pool = crate::codearts::pool_for(app);
+            let health = crate::codearts::admin::health(&pool);
+            if let Some(map) = codearts.as_object_mut() {
+                map.insert("ok".into(), health["ok"].clone());
+                map.insert("accounts".into(), health["accounts"].clone());
+                map.insert("healthy".into(), health["healthy"].clone());
+            }
+        }
+        payload.insert("codearts".into(), codearts);
+    }
 
     // 账号身份只给授权调用方看（Python 版同一口径）；M1 的鉴权在 M2 一起接。
     match accounts.iter().find(|a| a.ready(now)) {

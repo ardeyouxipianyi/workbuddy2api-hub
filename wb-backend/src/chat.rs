@@ -48,6 +48,16 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String)
         key_id.get(..8).unwrap_or(&key_id),
     ));
     app.inflight.fetch_add(1, Ordering::Relaxed);
+    // CodeArts 是独立出口（自建签名/SSE/账号池），不进 WorkBuddy 的 upstream 管线。
+    if realm == "codearts" {
+        let result = if stream {
+            crate::codearts::chat::chat_stream(app, &body, session, None, started, &key_id).await
+        } else {
+            crate::codearts::chat::chat_once(app, &body, session, None, started, &key_id).await
+        };
+        app.inflight.fetch_sub(1, Ordering::Relaxed);
+        return result;
+    }
     let result = if stream {
         crate::upstream::chat_stream(
             app,

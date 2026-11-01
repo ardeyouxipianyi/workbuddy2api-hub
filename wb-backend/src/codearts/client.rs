@@ -307,14 +307,41 @@ fn base_headers(agent_type: &str) -> Vec<(String, String)> {
     headers
 }
 
-fn signed_headers_for(account: &Account, method: &str, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<Vec<(String, String)>> {
-    let (access_key, secret_key, security_token) = account.credential();
-    crypto::sign_request(method, url, headers, body, &access_key, &secret_key, &security_token, &utc_stamp())
+fn signed_headers_for(cred: &(String, String, String), method: &str, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<Vec<(String, String)>> {
+    let (access_key, secret_key, security_token) = cred;
+    crypto::sign_request(method, url, headers, body, access_key, secret_key, security_token, &utc_stamp())
         .map_err(CodeArtsError::Other)
 }
 
+/// 只带凭证的轻量对象，给「刚拿到 STS 凭证、还没有账号」的查询用
+/// （Python 的 `_CredentialHolder`）。
+pub struct CredentialHolder {
+    cred: (String, String, String),
+}
+
+impl CredentialHolder {
+    pub fn new(access_key: &str, secret_key: &str, token: &str) -> Self {
+        Self { cred: (access_key.to_string(), secret_key.to_string(), token.to_string()) }
+    }
+
+    pub fn credential(&self) -> (String, String, String) {
+        self.cred.clone()
+    }
+
+    pub fn proxy(&self) -> String {
+        String::new()
+    }
+
+    pub async fn signed_get(&self, url: &str, extra: &[(String, String)], timeout: f64, agent_type: &str) -> Result<Map<String, Value>> {
+        let mut headers = base_headers(agent_type);
+        headers.extend(extra.iter().cloned());
+        let signed = signed_headers_for(&self.cred, "GET", url, &headers, b"")?;
+        json_http("GET", url, &signed, None, timeout, "").await
+    }
+}
+
 /// `time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())`：签名必须用 UTC。
-fn utc_stamp() -> String {
+pub fn utc_stamp() -> String {
     let secs = super::now_secs() as i64;
     let days = secs.div_euclid(86400);
     let rest = secs.rem_euclid(86400);
@@ -336,7 +363,7 @@ pub async fn signed_get(
 ) -> Result<Map<String, Value>> {
     let mut headers = base_headers(agent_type);
     headers.extend(extra.iter().cloned());
-    let signed = signed_headers_for(account, "GET", url, &headers, b"")?;
+    let signed = signed_headers_for(&account.credential(), "GET", url, &headers, b"")?;
     json_http("GET", url, &signed, None, timeout, &account.proxy()).await
 }
 
@@ -351,8 +378,18 @@ pub async fn signed_post(
     let raw = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
     let mut headers = base_headers(agent_type);
     headers.extend(extra.iter().cloned());
-    let signed = signed_headers_for(account, "POST", url, &headers, &raw)?;
+    let signed = signed_headers_for(&account.credential(), "POST", url, &headers, &raw)?;
     json_http("POST", url, &signed, Some(raw), timeout, &account.proxy()).await
+}
+
+/// 只做签名（不追加 agent 头），给「签名之后才能加 Agent-Type」的接口用。
+pub fn sign_headers(cred: &(String, String, String), method: &str, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<Vec<(String, String)>> {
+    signed_headers_for(cred, method, url, headers, body)
+}
+
+/// 带自定义头的 JSON GET（头里可能含签名产物）。
+pub async fn json_get_with(url: &str, headers: &[(String, String)], timeout: f64, proxy: &str) -> Result<Map<String, Value>> {
+    json_http("GET", url, headers, None, timeout, proxy).await
 }
 
 /// `_ensure_token`：快过期就续期。refresh_token 一次性，必须串行。

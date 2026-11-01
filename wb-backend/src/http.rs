@@ -29,7 +29,7 @@ pub struct PeerAddr(pub std::net::IpAddr);
 /// 流式与非流式共用一种响应体：M1 的 `Full` 装不下 SSE 的增量写。
 pub type Resp = Response<BoxBody<Bytes, std::convert::Infallible>>;
 
-fn full(bytes: Bytes) -> BoxBody<Bytes, std::convert::Infallible> {
+pub fn full(bytes: Bytes) -> BoxBody<Bytes, std::convert::Infallible> {
     Full::new(bytes).map_err(|e| match e {}).boxed()
 }
 
@@ -199,6 +199,12 @@ pub async fn route(app: Arc<App>, mut req: Request<Incoming>) -> Resp {
         (&Method::POST, "/updates/install") => {
             crate::updates::install(&app, &req, app.listen_port).await
         }
+        // CodeArts 面板接口与浏览器 OAuth 回跳（Python 的 `/codearts*` 分支）。
+        (&Method::GET, "/oauth/callback") => {
+            let query = crate::http::query_pairs(req.uri().query().unwrap_or(""));
+            crate::codearts::panel::callback_get(&app, &query).await
+        }
+        (_, path) if path.starts_with("/codearts") => crate::codearts::panel::handle(&app, req).await,
         (&Method::OPTIONS, _) => text_resp(StatusCode::NO_CONTENT, ""),
         (_, "/health")
         | (_, "/v1/models")
@@ -225,6 +231,34 @@ pub async fn route(app: Arc<App>, mut req: Request<Incoming>) -> Resp {
 /// `?realm=` > `X-Realm` 头 > 当前区域（wb_proxy.py:19224 同一优先级）。
 /// 会话键（specs/identity-upstream.md §1.6）：头优先，再 body 三个位置。
 /// 都没有就返回 None，由 identity 层每请求新生成（上游按它做会话亲和）。
+/// `a=1&b=2` → [(a,1),(b,2)]，百分号解码（OAuth 回跳用）。
+pub fn query_pairs(raw: &str) -> Vec<(String, String)> {
+    fn decode(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'%' && index + 2 < bytes.len() {
+                if let Ok(value) = u8::from_str_radix(&String::from_utf8_lossy(&bytes[index + 1..index + 3]), 16) {
+                    out.push(value);
+                    index += 3;
+                    continue;
+                }
+            }
+            out.push(if bytes[index] == b'+' { b' ' } else { bytes[index] });
+            index += 1;
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+    raw.split('&')
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.split_once('=') {
+            Some((key, value)) => (decode(key), decode(value)),
+            None => (decode(part), String::new()),
+        })
+        .collect()
+}
+
 pub fn session_key_header(headers: &hyper::HeaderMap) -> Option<String> {
     for name in ["x-conversation-id", "conversation-id", "x-session-id", "session-id"] {
         if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {

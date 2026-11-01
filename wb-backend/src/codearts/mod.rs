@@ -4,6 +4,8 @@
 //! CodeArtsAccount/CodeArtsPool 移植；聊天链路在 `client.rs`/`models.rs`/`stream.rs`，
 //! 面板接口在 `panel.rs`。
 
+pub mod admin;
+pub mod chat;
 pub mod client;
 pub mod crypto;
 pub mod models;
@@ -543,6 +545,15 @@ impl Account {
 
     pub fn proxy_slot(&self) -> String {
         self.inner().proxy_slot.clone()
+    }
+
+    pub fn set_proxy_slot(&self, slot: &str) {
+        self.inner().proxy_slot = slot.trim().to_string();
+    }
+
+    /// 签到后让账户信息下一轮重新拉（Python 里把 info_fetched_at 清零）。
+    pub fn set_info_fetched_at_zero(&self) {
+        self.inner().info_fetched_at = 0.0;
     }
 
     pub fn max_concurrent(&self) -> i64 {
@@ -1134,6 +1145,11 @@ impl Pool {
         }
         self.save_state();
     }
+}
+
+/// 面板保存代理槽之后重新解绑/绑定用（Python `apply_proxy_slots`）。
+pub fn slots_for(accounts_dir: &Path) -> Vec<Value> {
+    load_slots(accounts_dir)
 }
 
 fn load_slots(accounts_dir: &Path) -> Vec<Value> {

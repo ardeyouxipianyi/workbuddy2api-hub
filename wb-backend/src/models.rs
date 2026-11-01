@@ -174,6 +174,10 @@ pub async fn list(app: &Arc<App>, req: &Request<Incoming>) -> Resp {
         .as_ref()
         .map(crate::state::AccountFile::realm)
         .unwrap_or_else(|| crate::http::requested_realm(req, &app.state.current_realm()));
+    // CodeArts 是活目录（三路上游 + 种子兜底），不走内置快照。
+    if realm == "codearts" {
+        return crate::codearts::chat::models_response(app).await;
+    }
     // 走运行时目录：面板「刷新模型清单」写的是它，这里若只读内置快照，
     // 刷新成功也看不见新模型（cn 一直停在 14 个）。
     let (mut data, catalog) = crate::catalog_refresh::entries_for(&realm);
