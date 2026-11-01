@@ -90,7 +90,12 @@ use tokio::net::TcpListener;
 
 /// 与上游约定的对话路径（wb_proxy.py:292）。
 pub const CHAT_PATH: &str = "/v2/chat/completions";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// 发布版由 CI 用 `WB_BUILD_VERSION=<tag>` 注入，让 `/health` 和 release 上的
+/// 二进制版本对得上；本地构建回落到 Cargo.toml 的版本。
+pub const VERSION: &str = match option_env!("WB_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// 进程级只读状态 + 写者。端口唯一属主是子进程自己（launcher 不 bind）。
 pub struct App {
@@ -166,6 +171,11 @@ fn parse_args() -> Args {
             "--port" => port = take(&mut i).parse().unwrap_or(port),
             "--accounts-dir" => accounts_dir = take(&mut i),
             "--usage-dir" => usage_dir = take(&mut i),
+            "--version" | "-V" => {
+                // 发布流水线用它核对二进制自带的版本号。
+                println!("wb-backend {VERSION}");
+                std::process::exit(0);
+            }
             // launcher 会带 --serve/--supervise 之外的后端通用参数，未知参数按 Python 版忽略。
             other => eprintln!("wb-backend: ignoring unknown argument {other}"),
         }

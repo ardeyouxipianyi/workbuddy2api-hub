@@ -444,9 +444,50 @@ jobs:
   # Runs for a tag push *and* for a manual packaging run. It reads releases
   # (to keep the maintainer's notes) but never writes one: everything it
   # produces goes into an artifact for the writer below, or to the log.
+  # The Rust backend is an optional second implementation of the same gateway.
+  # It is built here, never committed: a 10 MB binary in git would bloat every
+  # clone and could not be reproduced from source.
+  rust:
+    name: rust backend binary
+    needs: [version, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wb-backend
+      - name: Build the static binary
+        env:
+          # 让二进制的 `--version` / `/health.version` 与 release tag 一致。
+          WB_BUILD_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo build --release --target x86_64-unknown-linux-musl \
+            --manifest-path wb-backend/Cargo.toml
+          mkdir -p dist
+          install -m755 wb-backend/target/x86_64-unknown-linux-musl/release/wb-backend \
+            "dist/wb-backend-${{ needs.version.outputs.version }}-linux-x86_64"
+      - name: The binary must report this release's version
+        run: |
+          set -euo pipefail
+          BIN="dist/wb-backend-${{ needs.version.outputs.version }}-linux-x86_64"
+          "$BIN" --version
+          "$BIN" --version | grep -F -- "${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-backend
+          path: dist/wb-backend-*
+          if-no-files-found: error
+
   draft-preview:
     name: draft preview
-    needs: [version, gate, portable, openwrt]
+    needs: [version, gate, portable, openwrt, rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -461,7 +502,8 @@ jobs:
           set -euo pipefail
           ls -lR dist
           assets=()
-          for pat in 'dist/*.zip' 'dist/*.ipk' 'dist/*.apk'; do
+          for pat in 'dist/*.zip' 'dist/*.ipk' 'dist/*.apk' \
+                     'dist/wb-backend-*-linux-x86_64'; do
             found=0
             for f in $pat; do
               [ -f "$f" ] || continue
@@ -568,7 +610,8 @@ jobs:
           else
             gh release create "$TAG" --draft $FLAGS --title "$TITLE" --notes-file dist/release-body.md
           fi
-          gh release upload "$TAG" dist/*.zip dist/*.ipk dist/*.apk dist/SHA256SUMS --clobber
+          gh release upload "$TAG" dist/*.zip dist/*.ipk dist/*.apk \
+            dist/wb-backend-*-linux-x86_64 dist/SHA256SUMS --clobber
       - name: Prove the release is still a draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -581,6 +624,7 @@ jobs:
           for want in workbuddy2api-hub-v${{ needs.version.outputs.version }}.zip \
                       workbuddy2api_${{ needs.version.outputs.version }}-${{ needs.version.outputs.release }}_all.ipk \
                       workbuddy2api-${{ needs.version.outputs.version }}-r${{ needs.version.outputs.release }}.apk \
+                      wb-backend-${{ needs.version.outputs.version }}-linux-x86_64 \
                       SHA256SUMS; do
             gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$want" \
               || { echo "::error::draft 里缺少资产 $want"; exit 1; }

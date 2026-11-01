@@ -79,6 +79,47 @@ jobs:
           path: suite-logs
           if-no-files-found: ignore
 
+  # The Rust backend: its own unit tests plus the suites that only run when the
+  # binary exists. The Python legs above skip those (`skipUnless`), so without
+  # this job a broken Rust backend would still show a green matrix.
+  rust:
+    name: rust backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wb-backend
+      - name: cargo test
+        run: cargo test --manifest-path wb-backend/Cargo.toml
+      - name: Build the release binary
+        # Same command the release job uses, so a binary that cannot be built
+        # statically is caught here rather than on the tag.
+        run: cargo build --release --target x86_64-unknown-linux-musl --manifest-path wb-backend/Cargo.toml
+      - name: Run the suites that need the binary
+        # `_test_rust_backend.py` walks a fixed list of candidate paths and picks
+        # the first one that runs; the plain `target/release` build is what it
+        # looks for, so build that too.
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path wb-backend/Cargo.toml
+          python tests/run_all.py rust --jobs 2
+          python tests/run_all.py usage_parity --jobs 2
+          python tests/run_all.py backend_switch --jobs 2
+          python tests/run_all.py launcher_switch --jobs 2
+      - name: Check the suites left the checkout clean
+        if: success()
+        run: python scripts/check_clean_checkout.py
+
   # Release discipline: a v* tag must match the version baked into
   # wb_proxy.py, and the two source version strings must agree with each
   # other. A tag carrying a -ci suffix is a rehearsal and skips only the tag

@@ -206,6 +206,10 @@ def write_checksums(assets, out_path):
     return lines
 
 
+def backend_name(version):
+    return "wb-backend-%s-linux-x86_64" % version
+
+
 def download_block(version, zip_name, ipk_name, apk_name):
     """The stable help section the issue pins. Keep it short and unchanged."""
     return "\n".join([
@@ -223,6 +227,11 @@ def download_block(version, zip_name, ipk_name, apk_name):
         "",
         "- `%s`" % apk_name,
         "  - OpenWrt 25.x+ 的 apk-tools 安装包",
+        "",
+        "- `%s`" % backend_name(version),
+        "  - Rust 后端（测试版，可选）：默认仍然跑 Python 后端，",
+        "    放进容器 `/app/` 后用 `backend-switch rust` 启用，出问题切回 python 即可",
+        "  - Linux x86_64 静态二进制（musl），不依赖系统 Python",
         "",
         "- `SHA256SUMS`",
         "  - Release 资产的 SHA-256 校验值",

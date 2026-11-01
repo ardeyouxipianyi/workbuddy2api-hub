@@ -230,6 +230,48 @@ def check_release_writers(text):
         "workflow_dispatch 只能有 tag 一个输入，实际是 %s" % inputs)
 
 
+class RustBackendAssetTests(unittest.TestCase):
+    """Rust 后端由 CI 构建并随 release 分发，仓库里不放二进制。
+
+    10 MB 的二进制进 git 会把每次克隆和每个历史版本都撑大，而且源码无法从中
+    复现；所以流水线必须自己编译，并且资产名、校验和与「draft 里真有它」三处
+    都要对上，否则发出去的包里没有这个可选后端。
+    """
+
+    def test_release_builds_the_binary_from_source(self):
+        text = read(".github", "workflows", "release.yml")
+        self.assertIn("cargo build --release --target x86_64-unknown-linux-musl", text,
+                      "release 必须自己编译 Rust 后端")
+        self.assertIn("WB_BUILD_VERSION: ${{ needs.version.outputs.version }}", text,
+                      "二进制版本号要跟 release tag 一致")
+
+    def test_the_binary_is_a_release_asset(self):
+        text = read(".github", "workflows", "release.yml")
+        name = "wb-backend-${{ needs.version.outputs.version }}-linux-x86_64"
+        self.assertIn("install -m755", text, "要按固定名字落进 dist/")
+        self.assertIn(name, text)
+        # 三处都要出现：校验和的资产收集、上传列表、draft 完整性断言。
+        self.assertIn("'dist/wb-backend-*-linux-x86_64'", text)
+        self.assertIn("dist/wb-backend-*-linux-x86_64 dist/SHA256SUMS", text)
+        self.assertIn("                      " + name, text)
+
+    def test_the_binary_is_tested_before_it_is_released(self):
+        text = read(".github", "workflows", "tests.yml")
+        self.assertIn("cargo test --manifest-path wb-backend/Cargo.toml", text,
+                      "tests.yml 要跑 Rust 单测，否则矩阵绿了后端仍可能是坏的")
+
+    def test_release_notes_mention_the_optional_backend(self):
+        block = tools.download_block("1.2.3", "a.zip", "b.ipk", "c.apk")
+        self.assertIn("wb-backend-1.2.3-linux-x86_64", block)
+        self.assertIn("测试版", block, "下载说明里要说清这是可选测试版")
+
+    def test_no_committed_binary(self):
+        for path in sorted(glob.glob(os.path.join(ROOT, "wb-backend-*"))) + sorted(
+                glob.glob(os.path.join(ROOT, "wb-backend", "wb-backend*"))):
+            if os.path.isfile(path):
+                self.fail("仓库里不该提交二进制：%s" % path)
+
+
 class ManifestTests(unittest.TestCase):
     def test_every_listed_path_exists(self):
         for name in tools.read_manifest():
