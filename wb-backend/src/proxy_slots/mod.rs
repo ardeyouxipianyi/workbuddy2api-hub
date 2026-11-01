@@ -1,7 +1,7 @@
 //! Panel-managed proxy slots and their discovery/probe endpoints.
 
 mod probe;
-mod store;
+pub mod store;
 
 use std::sync::Arc;
 

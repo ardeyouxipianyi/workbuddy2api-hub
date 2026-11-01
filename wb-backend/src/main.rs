@@ -8,6 +8,7 @@ mod auth;
 mod accounts_ops;
 mod catalog_refresh;
 mod chat;
+mod codearts;
 mod daily_usage;
 mod egress;
 mod fingerprint;

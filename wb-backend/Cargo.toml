@@ -10,7 +10,7 @@ name = "wb-backend"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server"] }
 http-body-util = "0.1"
@@ -26,6 +26,11 @@ md-5 = "0.10"
 libc = "0.2"
 # 日志落库：与 Python 版同库同表（usage/logs.sqlite3），所以要能读写同一份文件。
 rusqlite = { version = "0.32", features = ["bundled"] }
+# CodeArts 出口：ES256(DPoP) + PKCE + 华为云 SDK-HMAC-SHA256 签名。
+p256 = { version = "0.13", features = ["ecdsa"] }
+hmac = "0.12"
+base64 = "0.22"
+rand = "0.8"
 
 [profile.release]
 opt-level = 3
