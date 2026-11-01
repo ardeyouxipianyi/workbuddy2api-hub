@@ -9,7 +9,7 @@ class GatewayFixesTest(unittest.TestCase):
     def test_gateway_hint_413(self):
         hint = wb_proxy.gateway_hint(413, "payload too large (20375735 bytes > 16777216 limit)")
         self.assertIn("WB_MAX_PAYLOAD_BYTES", hint)
-        self.assertIn("raise it and restart", hint)
+        self.assertIn("panel settings", hint)
 
     def test_gpt_max_tokens_clamping(self):
         body = {"model": "gpt-6-luna", "messages": [], "max_tokens": 1}

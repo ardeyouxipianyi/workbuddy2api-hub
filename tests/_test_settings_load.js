@@ -11,7 +11,7 @@
  * Run with Node.
  */
 const assert = require('assert');
-const {dashboardScript} = require('./_dashboard_source.js');
+const {dashboardHtml, dashboardScript} = require('./_dashboard_source.js');
 
 const script = dashboardScript();
 
@@ -172,7 +172,16 @@ global.__toasts = toasts;
   assert.equal(element('setWinMaxHeightState').textContent, '(当前 640px)',
     '窗口限高状态文案没写回');
 
-  realLog('loadSettings 完整性断言通过（18 项）');
+  /* 6. 标记里每个 id 只能出现一次：`getElementById` 静默取文档顺序上的第一个，
+     重复出来的第二个永远不会被回填，按钮改的也是第一个副本。实测 v1.9.2 设置页有两张
+     一模一样的「上游响应头超时」，下面那张输入框永远空着、点它的保存写的是上面那张的值。
+     先剥掉 <script>：脚本里的模板字符串同样会写 id="…"。 */
+  const markup = dashboardHtml().replace(/<script[\s\S]*?<\/script>/g, '');
+  const ids = [...markup.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);
+  const dup = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+  assert.deepStrictEqual(dup, [], '页面里有重复的元素 id：' + dup.join(', '));
+
+  realLog('loadSettings 完整性断言通过（19 项）');
 })().catch(e => {
   console.log = realLog;
   console.error(e && e.stack || e);

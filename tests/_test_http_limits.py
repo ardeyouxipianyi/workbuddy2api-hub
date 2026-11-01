@@ -201,6 +201,45 @@ class PayloadCapTests(unittest.TestCase):
                          "16MB; 50MB allowed a single request to peak at "
                          "~160MB on a ~480MB router")
 
+    def test_panel_limit_applies_before_reading(self):
+        handler = make_handler({"Content-Length": str(2 * 1024 * 1024)})
+        calls = []
+        handler._error = lambda *args: calls.append(args)
+        with mock.patch.object(P.wb_settings, "max_payload_mb", return_value=1):
+            self.assertIsNone(handler._payload_or_error())
+        self.assertEqual(calls[0][0], 413)
+        self.assertIn(str(1024 * 1024), calls[0][1])
+        self.assertEqual(handler.rfile.read_calls, 0)
+        self.assertTrue(handler.close_connection)
+
+    def test_increased_limit_allows_a_previously_rejected_json_body(self):
+        body = b'{"text":"' + b'x' * (1024 * 1024) + b'"}'
+        handler = make_handler({"Content-Length": str(len(body))}, CountingReader(body))
+        with mock.patch.object(P.wb_settings, "max_payload_mb", return_value=2):
+            self.assertEqual(len(handler._payload_or_error()["text"]), 1024 * 1024)
+
+    def test_chunk_exceeding_limit_is_not_drained(self):
+        reader = CountingReader(b'200000\r\n' + b'x' * 8)
+        handler = make_handler({"Transfer-Encoding": "chunked"}, rfile=reader)
+        calls = []
+        handler._error = lambda *args: calls.append(args)
+        with mock.patch.object(P.wb_settings, "max_payload_mb", return_value=1):
+            self.assertIsNone(handler._payload_or_error())
+        self.assertEqual(calls[0][0], 413)
+        self.assertEqual(reader.read_calls, 0)
+        self.assertTrue(handler.close_connection)
+
+    def test_panel_limit_rejects_invalid_values(self):
+        for value in (0, 257, True, 1.5, '16'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                P.wb_settings.set_max_payload_mb(_WORK, value)
+
+    def test_panel_limit_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(P.wb_settings.max_payload_mb(directory))
+            P.wb_settings.set_max_payload_mb(directory, 64)
+            self.assertEqual(P.wb_settings.max_payload_mb(directory), 64)
+
     def test_an_over_limit_body_is_never_read(self):
         """行为级：Content-Length 超限在解析前就被拒，rfile 一个字节没动。
 

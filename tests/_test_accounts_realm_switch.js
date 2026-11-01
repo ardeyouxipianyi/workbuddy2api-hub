@@ -47,6 +47,8 @@ assert.ok(/id="accountsRealmIntl"[^>]*onclick="switchViewRealm\('intl'\)"/.test(
   '「国际版」按钮应接上 switchViewRealm(\'intl\')');
 assert.ok(/id="accountsRealmCn"[^>]*onclick="switchViewRealm\('cn'\)"/.test(html),
   '「国内版」按钮应接上 switchViewRealm(\'cn\')');
+assert.ok(/id="accountsRealmCodearts"[^>]*onclick="switchViewRealm\('codearts'\)"/.test(html),
+  '「CodeArts」按钮应接上 switchViewRealm(\'codearts\')');
 // 两组按钮（网关页卡片 + 账号页控件）都必须走同一个入口，否则两边会各记一份状态
 assert.equal(html.split("onclick=\"switchViewRealm('intl')\"").length, 1 + 2,
   '切 intl 的入口应恰好两个：网关页卡片 + 账号页控件');
@@ -56,8 +58,10 @@ assert.equal(html.split("onclick=\"switchViewRealm('cn')\"").length, 1 + 2,
 // 高亮与 aria 由 updateUI 一处写，两边不能各写一份
 assert.ok(/rsIntl\.classList\.toggle\("active", isIntlView\)/.test(script),
   'updateUI 应按 VIEW_REALM 点亮账号页控件');
-assert.ok(/rsCn\.classList\.toggle\("active", !isIntlView\)/.test(script),
+assert.ok(/rsCn\.classList\.toggle\("active", isCnView\)/.test(script),
   'updateUI 应按 VIEW_REALM 点亮账号页控件');
+assert.ok(/rsCa\.classList\.toggle\("active", isCodeartsView\)/.test(script),
+  'updateUI 应按 VIEW_REALM 点亮 CodeArts 控件');
 // 搬家的逻辑要挂在既有的布局函数上（两种布局共用一个入口）
 assert.ok(/const realmSwitch = document\.getElementById\('accountsRealmSwitch'\);/.test(script),
   'applyAccountsTabLayout 应负责把控件搬到位');

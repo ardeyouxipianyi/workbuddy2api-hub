@@ -146,6 +146,10 @@ const check = (label, cond, extra) => {
         chipText(chipOf(out, '丙 · 无记录')) === '今日签到 · 无记录'
         && (chipOf(out, '丙 · 无记录') || '').includes('badge off'),
         JSON.stringify(chipOf(out, '丙 · 无记录')));
+  check('unknown CN status is not presented as an upstream failure to check in',
+        (chipOf(out, '丙 · 无记录') || '').includes('无本地记录')
+        && !(chipOf(out, '丙 · 无记录') || '').includes('未签到'),
+        JSON.stringify(chipOf(out, '丙 · 无记录')));
   check('the failure chip is rendered as a failure, not as a success',
         (chipOf(out, '丁 · 失败') || '').includes('badge bad'),
         JSON.stringify(chipOf(out, '丁 · 失败')));

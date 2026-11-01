@@ -404,7 +404,7 @@ table.account-cards tr.cool-row .cool-pill{display:inline-block;width:auto;max-w
 .acct-name-row{display:flex;align-items:center;gap:6px;min-width:0}
 /* 移动端专用徽章组：桌面表格视图隐藏（版本/状态有自己的两列）。 */
 .acct-mobile-badges{display:none}
-.acct-mobile-badges .badge,.acct-mobile-badges .realm-badge-intl,.acct-mobile-badges .realm-badge-cn{flex-shrink:0}
+.acct-mobile-badges .badge,.acct-mobile-badges .realm-badge-intl,.acct-mobile-badges .realm-badge-cn,.acct-mobile-badges .realm-badge-codearts{flex-shrink:0}
 .credit-summary{white-space:nowrap}
 .credit-kind{font-size:11px;font-weight:500;color:var(--dim)}
 .credit-stack{display:flex;flex-direction:column;align-items:flex-start;gap:3px;white-space:nowrap;min-width:0}
@@ -496,6 +496,7 @@ a:hover{text-decoration:underline}
 }
 .realm-badge-intl{color:#2c6e9e;background:rgba(106,155,204,.14);border:1px solid rgba(106,155,204,.35);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
 .realm-badge-cn{color:#a03c32;background:rgba(201,100,66,.12);border:1px solid rgba(201,100,66,.32);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.realm-badge-codearts{color:#5b3fa0;background:rgba(124,92,214,.13);border:1px solid rgba(124,92,214,.34);padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
 .badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:var(--think-soft);color:var(--think);border:1px solid rgba(138,106,150,.3);font-weight:600}
 .realm-filter{display:inline-flex;gap:6px;margin-left:8px}
 .realm-filter button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);padding:3px 9px;font-size:11px}
@@ -620,6 +621,7 @@ a:hover{text-decoration:underline}
 [data-theme="dark"] .cool-pill{color:#d9b25f;background:rgba(217,178,95,.18);border-color:rgba(217,178,95,.38)}
 [data-theme="dark"] .realm-badge-intl{color:#8ab4d9;background:rgba(106,155,204,.2);border-color:rgba(106,155,204,.4)}
 [data-theme="dark"] .realm-badge-cn{color:#e09a80;background:rgba(201,100,66,.22);border-color:rgba(201,100,66,.42)}
+[data-theme="dark"] .realm-badge-codearts{color:#c4b1f5;background:rgba(124,92,214,.24);border-color:rgba(124,92,214,.46)}
 [data-theme="dark"] .realm-switch button.active#accountsRealmCn{color:var(--bad);border-color:var(--bad)}
 [data-theme="dark"] .modal-mask{background:rgba(0,0,0,.65)}
 /* The page sections are toggled by a class so the inline head script can
@@ -1633,6 +1635,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '人工映射表 OVERRIDES': 'Manual mapping table OVERRIDES',
     '今日': 'Today',
     '今日已签到': 'Checked in today',
+    '无本地记录': 'No local record',
     '今日数据 (Today)': 'Today',
     '今日未签到': 'Not checked in today',
     '今日次数已用尽': 'No attempts left today',
@@ -1789,6 +1792,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '回收密钥': 'Recover key',
     '导入密钥': 'Import key',
     '固定国内版出口': 'China exit only',
+    '固定 CodeArts 出口': 'CodeArts exit only',
     '固定国际版出口': 'Global exit only',
     '国内版': 'China',
     '顶部页签显示': 'Top tab visibility',
@@ -1811,6 +1815,57 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '国际版 (Global) · www.workbuddy.ai': 'Global · www.workbuddy.ai',
     '国际版每日活跃': 'Global daily activity',
     '国际版每日活跃打卡': 'Global daily activity check-in',
+    // CodeArts 第三出口
+    'CodeArts': 'CodeArts',
+    'CodeArts (华为云)': 'CodeArts (Huawei Cloud)',
+    'CodeArts 账号': 'CodeArts accounts',
+    'CodeArts 接入': 'CodeArts',
+    'CodeArts 出口': 'CodeArts exit',
+    '启用 CodeArts 出口': 'Enable the CodeArts exit',
+    '添加 CodeArts 账号': 'Add a CodeArts account',
+    '+ 添加账号 (OAuth)': '+ Add account (OAuth)',
+    '全员签到': 'Check in all',
+    '保活': 'Keep alive',
+    '刷新': 'Refresh',
+    '授权链接': 'Authorization link',
+    '打开授权页': 'Open authorization page',
+    '我已授权': 'I have authorized',
+    '远端回调（可选）': 'Remote callback (optional)',
+    '中转回调': 'Relay callback',
+    '关闭': 'Close',
+    '管理超时（秒）': 'Admin timeout (s)',
+    '流式超时（秒）': 'Stream timeout (s)',
+    '模型缓存（秒）': 'Model cache (s)',
+    '保存 CodeArts 设置': 'Save CodeArts settings',
+    '测试连接': 'Test connection',
+    'API Key 已设置；留空保存不会覆盖。': 'An API key is set; leave the field blank to keep it.',
+    '还没有设置 API Key。': 'No API key set yet.',
+    '健康账号': 'Healthy accounts',
+    '积分': 'Credits',
+    'CodeArts 积分': 'CodeArts credits',
+    '剩余 / 总 ': 'Remaining / total ',
+    '模型': 'Models',
+    '冷却': 'Cooling',
+    '停用': 'Disabled',
+    '正常': 'Healthy',
+    '冷却中': 'Cooling down',
+    '已停用': 'Disabled',
+    '已签到': 'Checked in',
+    '清冷却': 'Clear cooldown',
+    '签到': 'Check in',
+    '删除': 'Delete',
+    '操作': 'Actions',
+    '状态': 'Status',
+    '并发': 'Concurrency',
+    '还没有 CodeArts 账号。点「+ 添加账号 (OAuth)」开始。': 'No CodeArts accounts yet. Start with + Add account (OAuth).',
+    '检查「设置 → CodeArts 接入」的 Base URL 和 API Key。': 'Check the Base URL and API key under Settings → CodeArts.',
+    'CodeArts 设置已保存': 'CodeArts settings saved',
+    'CodeArts 连接正常（': 'CodeArts connection OK (',
+    'CodeArts 连接失败: ': 'CodeArts connection failed: ',
+    '保存失败: ': 'Save failed: ',
+    '操作失败: ': 'Action failed: ',
+    '签到失败: ': 'Check-in failed: ',
+    '保活失败: ': 'Keep-alive failed: ',
     '① 时段': '1. Slots',
     '② 候选模型': '2. Model candidates',
     '③ 预算': '3. Budget',
@@ -2157,6 +2212,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '权重': 'Weight',
     '权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。': 'Accounts with weight >1 are dispatched first; several weighted accounts split traffic by weight, and when none of them can take requests the others serve as usual. 1 = no override, automatic rules such as expiring-credits-first apply as before.',
     '备注': 'Note',
+    '搜索昵称、备注或 UID': 'Search nickname, note or UID',
     '+ 备注': '+ note',
     '点击编辑备注': 'Click to edit the note',
     '点击添加备注，比如「批量」/「自用」': 'Click to add a note, e.g. "batch" / "personal"',
@@ -2922,6 +2978,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "为每个 Key 绑定专属出口。客户端使用该 Key 请求将固定走对应区域，实现双出口并发。": "為每個 Key 繫結專屬出口。客戶端使用該 Key 請求將固定走對應區域，實現雙出口併發。",
     "人工映射表 OVERRIDES": "人工對映表 OVERRIDES",
     "今日已签到": "今日已簽到",
+    "无本地记录": "無本地記錄",
     "今日数据 (Today)": "今日資料 (Today)",
     "今日未签到": "今日未簽到",
     "从 Web 控制台同步最新昵称（改名后免重登）": "從 Web 控制檯同步最新暱稱（改名後免重登）",
@@ -3338,6 +3395,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "总计（全部历史）": "總計（全部歷史）",
     "权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。": "權重 >1 的帳號優先接單，多個高權重帳號按權重比分流量；它們都接不了單時其他帳號照常頂上。1 = 不干預，臨期積分優先等自動規則照舊。",
     "点击编辑备注": "點擊編輯備註",
+    "搜索昵称、备注或 UID": "搜尋暱稱、備註或 UID",
     "点击添加备注，比如「批量」/「自用」": "點擊新增備註，例如「批量」/「自用」",
     "按「剩余用量估算」优先调度：某 (账号 × 模型) 的估计剩余越接近耗尽，分到的请求越多——先把快用完的额度用掉，等它到点重置。剩余不到 30% 开始加权、5% 以内权重最高；没有预算样本、或剩余为 0 / 冷却中的组合不参与。默认关闭。": "按「剩餘用量估算」優先排程：某 (帳號 × 模型) 的估計剩餘越接近耗盡，分到的請求越多——先把快用完的額度用掉，等它到點重置。剩餘不到 30% 開始加權、5% 以內權重最高；沒有預算樣本、或剩餘為 0 / 冷卻中的組合不參與。預設關閉。",
     "撞线样本": "撞線樣本",
@@ -4093,7 +4151,25 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </div>
 
-    <!-- 卡片 3: 网关出口控制 -->
+    <!-- 卡片 3: CodeArts (华为云) -->
+    <div id="tabCodearts" class="realm-card" onclick="switchViewRealm('codearts')" style="display:none">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span class="realm-badge-codearts">CodeArts (华为云)</span>
+        <span id="tabCodeartsHost" class="mono" style="font-size:11px;color:var(--dim)">华为云</span>
+        <span id="tabCodeartsDefaultBadge" class="badge ok mini" style="font-weight:600;display:none">默认出口</span>
+        <span id="tabCodeartsViewBadge" class="badge s mini" style="display:none">当前视图</span>
+        <span id="tabCodeartsOffline" class="badge bad mini" style="display:none">离线</span>
+      </div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div class="credit-summary" style="display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;min-width:0">
+          <span id="tabCodeartsHealthy" style="font-size:22px;font-weight:700;color:var(--accent);letter-spacing:-.5px" title="健康账号数 / 账号总数">—</span>
+          <span style="font-size:12px;color:var(--dim)">/ <span id="tabCodeartsTotal" style="color:var(--fg);font-weight:600">0</span> 账号 · <span id="tabCodeartsModels" style="color:var(--fg);font-weight:600">0</span> 模型 · <span id="tabCodeartsCredits" style="color:var(--fg);font-weight:600">—</span> 积分</span>
+        </div>
+        <span id="tabCodeartsKeyBadge" class="badge s mini" style="font-weight:600">0 个 Key</span>
+      </div>
+    </div>
+
+    <!-- 卡片 4: 网关出口控制 -->
     <div id="cardGatewayCtrl" class="realm-card gateway-ctrl" style="cursor:default">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">网关默认出口</span>
@@ -4126,6 +4202,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         <button class="sec mini" id="btnToggleSched" onclick="toggleScheduler(this)">暂停调度</button>
       </div>
     </div>
+  </div>
+  <!-- CodeArts 视图的统计条：WorkBuddy 的积分/调度口径不适用，单独一块。 -->
+  <div id="codeartsSummary" style="display:none;margin-bottom:18px">
+    <div class="cards" id="codeartsCards"></div>
   </div>
 
   <!-- 合并模式（设置里「账号独立成一个页签」关闭，默认）时，账号页的三个区块搬到
@@ -4217,11 +4297,26 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     <div id="accountsRealmSwitch" class="realm-switch" role="group" aria-label="版本视图">
       <button type="button" id="accountsRealmIntl" onclick="switchViewRealm('intl')" aria-pressed="false">国际版</button>
       <button type="button" id="accountsRealmCn" onclick="switchViewRealm('cn')" aria-pressed="false">国内版</button>
+      <button type="button" id="accountsRealmCodearts" onclick="switchViewRealm('codearts')" aria-pressed="false" style="display:none">CodeArts</button>
     </div>
   </div>
   <!-- 拆分模式下三个区块的落点（页头之后、原顺序）；合并模式搬走之后这里就空着 -->
   <span id="accountsHomeAnchor" hidden></span>
-  <section>
+  <!-- CodeArts 视图：账号池由本进程直接管理。 -->
+  <section id="codeartsAccountsSection" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <h2 style="margin:0">CodeArts 账号<em id="codeartsAcctCount"></em></h2>
+      <div class="legend" style="margin:0">账号、token 续期、模型发现、冷却与签到都由本进程直接完成。</div>
+    </div>
+    <div class="toolbar">
+      <button onclick="openCodeartsOauthModal()">+ 添加账号 (OAuth)</button>
+      <button class="sec" onclick="codeartsCheckinAll(this)">全员签到</button>
+      <button class="sec" onclick="codeartsKeepalive(this)">保活</button>
+      <button class="sec" onclick="loadCodeartsOverview(true)">刷新</button>
+    </div>
+    <div id="codeartsAccounts"></div>
+  </section>
+  <section id="workbuddyAccountsSection">
     <h2 title="多个账号按会话粘性 + 轮询使用；某个账号被上游拒绝时自动切到下一个">
       <!-- 折叠开关：真按钮，所以键盘可达；aria-expanded、chevron
            方向与正文可见性三者永远同步。标题与计数留在正文之外，收起时仍可见。 -->
@@ -4275,7 +4370,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 
   <!-- 当前禁用总览：把散落在账号卡片上的停用/限流状态汇总成一张表。
        数据全部取自 /accounts（window.ACCOUNTS），不额外发请求。 -->
-  <section>
+  <section id="workbuddyDisabledSection">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <h2 style="margin:0">当前禁用<em id="disabledRealmTag" style="color:var(--dim);font-weight:500"></em><em id="disabledCount"></em></h2>
       <div class="legend" style="margin:0"><span>「上游限流」到点自动恢复；「本地停用」需手动启用；「日限额」次日零点恢复</span></div>
@@ -4286,7 +4381,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   <!-- 签到与活跃记录：读 wb_activity.py 落下的结构化历史（GET /activity/history），
        一行一次真实尝试。筛选全部由服务端做（range/task/result/uid/limit），前端
        只拼查询串与渲染，免得两处各写一份筛选规则再慢慢跑偏。 -->
-  <section>
+  <section id="workbuddyActivitySection">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <h2 style="margin:0">签到与活跃记录 <em id="activityCount"></em></h2>
       <div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -4801,6 +4896,45 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <!-- 已删除的 Key 只留名字和日期：密钥已抹掉，所以这里没有「复制」。
            历史用量按 id 记账，删掉这一行会让那些请求变成「未知 key」。 -->
       <div id="deletedKeySection"></div>
+    </section>
+
+    <section>
+      <h2>CodeArts 接入 <em id="setCodeartsState"></em></h2>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
+        第三个出口直接连华为云 CodeArts：OAuth 登录、token 续期、模型发现、
+        冷却与签到都在本进程内完成，不需要再跑独立的 codearts2api 服务。
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;min-height:40px">
+          <input id="setCodeartsEnabled" type="checkbox" style="width:16px;height:16px">
+          启用 CodeArts 出口
+        </label>
+        <div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">单账号并发</div>
+          <input id="setCodeartsMaxConcurrent" type="number" min="1" max="20" value="1"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">管理超时（秒）</div>
+          <input id="setCodeartsTimeout" type="number" min="1" max="600"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">流式超时（秒）</div>
+          <input id="setCodeartsStreamTimeout" type="number" min="1" max="3600"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">模型缓存（秒）</div>
+          <input id="setCodeartsModelsTtl" type="number" min="1" max="3600"
+                 style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+        <button onclick="saveCodeartsSettings(this)">保存 CodeArts 设置</button>
+        <button class="sec" onclick="testCodeartsConnection(this)">测试连接</button>
+        <span id="setCodeartsHint" style="font-size:12px;color:var(--dim)"></span>
+      </div>
     </section>
 
     <section>
@@ -5510,6 +5644,12 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
       <section>
+        <h2>单请求体上限</h2>
+        <div style="font-size:12px;color:var(--dim);margin:8px 0">超限时可临时调高后重试压缩请求；调高会增加并发请求的内存占用。保存后立即生效。</div>
+        <input id="setMaxPayloadMB" type="number" min="1" max="256" step="1" style="width:90px"> MB
+        <button onclick="saveMaxPayload(this)">保存</button>
+      </section>
+      <section>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
@@ -5573,27 +5713,6 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
               启用更稳的会话键
             </label>
             <button onclick="saveAffinityStableKey(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。
-            </div>
-            <div style="font-size:12px;color:var(--warn);margin-top:4px">
-              调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setHeaderTimeout" type="number" min="1" step="1" style="width:90px">
-              秒
-            </label>
-            <button onclick="saveHeaderTimeout(this)">保存</button>
           </div>
         </div>
       </section>
@@ -5853,6 +5972,37 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
 
   <footer>每 5 秒自动刷新 · 数据来自本机反代 <span class="mono" id="logfile"></span></footer>
 </main>
+
+<div class="modal-mask" id="codeartsOauthModal">
+  <div class="modal" role="dialog" aria-modal="true" style="width:min(640px,100%)">
+    <div class="modal-hd">
+      <h2>添加 CodeArts 账号</h2>
+      <button class="modal-x" onclick="closeCodeartsOauthModal()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <div style="font-size:12px;color:var(--dim);margin-bottom:10px">
+        用华为云账号完成授权。浏览器和本网关不在同一台机器时，回调地址会打不开；
+        把地址栏里的完整地址粘贴到下面，点「中转回调」。
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:4px">授权链接</div>
+      <div id="codeartsOauthUrl" class="mono" style="word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:38px"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="sec" onclick="openCodeartsAuthUrl()">打开授权页</button>
+        <button class="sec" onclick="pollCodeartsOAuth(false)">我已授权</button>
+      </div>
+      <div style="font-size:12px;color:var(--dim);margin:14px 0 4px">远端回调（可选）</div>
+      <input id="codeartsOauthCallback" type="text" placeholder="http://127.0.0.1:.../oauth/callback?..."
+             style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="sec" onclick="importCodeartsCallback(this)">中转回调</button>
+      </div>
+      <div id="codeartsOauthStatus" style="font-size:12px;color:var(--dim);margin-top:12px;min-height:18px"></div>
+    </div>
+    <div class="modal-ft">
+      <button onclick="closeCodeartsOauthModal()">关闭</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-mask" id="loginModal">
   <div class="modal" role="dialog" aria-modal="true">
@@ -6243,14 +6393,24 @@ window.ACCOUNTS = [];
 
 function updateUI(){
   const isIntlView = (window.VIEW_REALM === "intl");
+  const isCnView = (window.VIEW_REALM === "cn");
+  const isCodeartsView = (window.VIEW_REALM === "codearts");
+  const caEnabled = (window.REALM_OPTIONS || []).includes("codearts");
   const tIntl = document.getElementById("tabIntl");
   const tCn = document.getElementById("tabCn");
+  const tCa = document.getElementById("tabCodearts");
   if(tIntl) tIntl.className = "realm-card" + (isIntlView ? " active" : "");
-  if(tCn) tCn.className = "realm-card" + (!isIntlView ? " active" : "");
+  if(tCn) tCn.className = "realm-card" + (isCnView ? " active" : "");
+  if(tCa){
+    tCa.style.display = caEnabled ? "" : "none";
+    tCa.className = "realm-card" + (isCodeartsView ? " active" : "");
+  }
   const vbIntl = document.getElementById("tabIntlViewBadge");
   if(vbIntl) vbIntl.style.display = isIntlView ? "inline-block" : "none";
   const vbCn = document.getElementById("tabCnViewBadge");
-  if(vbCn) vbCn.style.display = !isIntlView ? "inline-block" : "none";
+  if(vbCn) vbCn.style.display = isCnView ? "inline-block" : "none";
+  const vbCa = document.getElementById("tabCodeartsViewBadge");
+  if(vbCa) vbCa.style.display = isCodeartsView ? "inline-block" : "none";
 
   // 账号页页头的版本切换与上面两张卡片同一份状态（VIEW_REALM），所以两边永远
   // 一起亮：在账号页切过去，回网关页看到的就是刚切的那一版，反之亦然。
@@ -6261,14 +6421,20 @@ function updateUI(){
   }
   const rsCn = document.getElementById("accountsRealmCn");
   if(rsCn){
-    rsCn.classList.toggle("active", !isIntlView);
-    rsCn.setAttribute("aria-pressed", !isIntlView ? "true" : "false");
+    rsCn.classList.toggle("active", isCnView);
+    rsCn.setAttribute("aria-pressed", isCnView ? "true" : "false");
+  }
+  const rsCa = document.getElementById("accountsRealmCodearts");
+  if(rsCa){
+    rsCa.style.display = caEnabled ? "" : "none";
+    rsCa.classList.toggle("active", isCodeartsView);
+    rsCa.setAttribute("aria-pressed", isCodeartsView ? "true" : "false");
   }
 
   // 区块标题上的出口标签：这几个区块的内容都按当前视图区域取（账号、禁用汇总、
   // 最近请求、模型清单），标出来免得把国际版的数字看成全局的。用 <em> 承载：
   // 侧栏导航由 h2 生成时会剥掉 <em>，所以标签不会串进导航项。
-  const sectionRealm = isIntlView ? "（国际版）" : "（国内版）";
+  const sectionRealm = isIntlView ? "（国际版）" : (isCnView ? "（国内版）" : "（CodeArts）");
   ["disabledRealmTag", "recentRealmTag", "modelsRealmTag"].forEach(function(id){
     const el = document.getElementById(id);
     if(el) el.textContent = sectionRealm;
@@ -6278,30 +6444,47 @@ function updateUI(){
   // 版本），所以不看视图、只看 window.ACCOUNTS。
   updateProductAllButton();
 
-  const isIntlGw = (window.ACTIVE_GATEWAY_REALM === "intl");
+  const gwRealm = window.ACTIVE_GATEWAY_REALM || "intl";
+  const isIntlGw = (gwRealm === "intl");
+  const isCnGw = (gwRealm === "cn");
+  const isCaGw = (gwRealm === "codearts");
   const dbIntl = document.getElementById("tabIntlDefaultBadge");
   if(dbIntl) dbIntl.style.display = isIntlGw ? "inline-block" : "none";
   const dbCn = document.getElementById("tabCnDefaultBadge");
-  if(dbCn) dbCn.style.display = !isIntlGw ? "inline-block" : "none";
+  if(dbCn) dbCn.style.display = isCnGw ? "inline-block" : "none";
+  const dbCa = document.getElementById("tabCodeartsDefaultBadge");
+  if(dbCa) dbCa.style.display = isCaGw ? "inline-block" : "none";
 
   const gwName = document.getElementById("activeGatewayName");
   if(gwName) {
-    gwName.textContent = isIntlGw ? "国际版 (Global)" : "国内版 (China)";
-    gwName.style.color = isIntlGw ? "var(--accent)" : "var(--bad)";
+    gwName.textContent = isIntlGw ? "国际版 (Global)"
+      : (isCnGw ? "国内版 (China)" : "CodeArts (华为云)");
+    gwName.style.color = isIntlGw ? "var(--accent)"
+      : (isCnGw ? "var(--bad)" : "#5b3fa0");
   }
   const ep = document.getElementById("activeEndpoint");
-  if(ep) ep.textContent = isIntlGw ? "https://www.workbuddy.ai/v2" : "https://copilot.tencent.com/v2";
+  if(ep) ep.textContent = isIntlGw ? "https://www.workbuddy.ai/v2"
+    : (isCnGw ? "https://copilot.tencent.com/v2"
+              : ((window.CODEARTS_OVERVIEW || {}).base_url || "华为云 CodeArts"));
 
+  const gwOptions = (window.REALM_OPTIONS && window.REALM_OPTIONS.length)
+    ? window.REALM_OPTIONS : ["intl", "cn"];
+  let gwIdx = gwOptions.indexOf(gwRealm);
+  if(gwIdx < 0) gwIdx = 0;
+  const nextGw = gwOptions[(gwIdx + 1) % gwOptions.length];
+  const nextGwName = (nextGw === "intl") ? "国际版" : (nextGw === "cn" ? "国内版" : "CodeArts");
   const btnToggle = document.getElementById("btnToggleRealm");
   if(btnToggle) {
-    btnToggle.textContent = isIntlGw ? "切换默认出口为【国内版】" : "切换默认出口为【国际版】";
-    btnToggle.style.borderColor = isIntlGw ? "var(--bad)" : "var(--accent)";
-    btnToggle.style.color = isIntlGw ? "var(--bad)" : "var(--accent)";
+    btnToggle.textContent = "切换默认出口为【" + nextGwName + "】";
+    btnToggle.style.borderColor = isIntlGw ? "var(--accent)" : (isCnGw ? "var(--bad)" : "#5b3fa0");
+    btnToggle.style.color = isIntlGw ? "var(--accent)" : (isCnGw ? "var(--bad)" : "#5b3fa0");
   }
   const cardGw = document.getElementById("cardGatewayCtrl");
   if(cardGw){
-    cardGw.style.borderColor = isIntlGw ? "rgba(37,99,235,.28)" : "rgba(220,38,38,.28)";
-    cardGw.style.background = isIntlGw ? "rgba(37,99,235,.03)" : "rgba(220,38,38,.03)";
+    cardGw.style.borderColor = isIntlGw ? "rgba(37,99,235,.28)"
+      : (isCnGw ? "rgba(220,38,38,.28)" : "rgba(124,92,214,.30)");
+    cardGw.style.background = isIntlGw ? "rgba(37,99,235,.03)"
+      : (isCnGw ? "rgba(220,38,38,.03)" : "rgba(124,92,214,.04)");
   }
 
   const btnCheckin = document.getElementById("btnCheckin");
@@ -6314,8 +6497,10 @@ function updateUI(){
   const keys = (typeof API_KEY_ROWS !== 'undefined' && API_KEY_ROWS.length) ? API_KEY_ROWS : (window.API_KEY_ROWS || []);
   const intlKeys = keys.filter(k => k.enabled !== false && k.realm === 'intl').length;
   const cnKeys = keys.filter(k => k.enabled !== false && k.realm === 'cn').length;
+  const caKeys = keys.filter(k => k.enabled !== false && k.realm === 'codearts').length;
   const followKeys = keys.filter(k => k.enabled !== false && !k.realm).length;
-  const activeKeysTotal = isIntlGw ? (intlKeys + followKeys) : (cnKeys + followKeys);
+  const activeKeysTotal = isIntlGw ? (intlKeys + followKeys)
+    : (isCnGw ? (cnKeys + followKeys) : (caKeys + followKeys));
 
   const elGwKeyBadge = document.getElementById("activeGatewayKeyCount");
   if(elGwKeyBadge) elGwKeyBadge.textContent = activeKeysTotal + ' 个 Key 生效';
@@ -6325,6 +6510,8 @@ function updateUI(){
 
   const elCnKey = document.getElementById("tabCnKeyBadge");
   if(elCnKey) elCnKey.textContent = cnKeys + ' 个 Key';
+  const elCaKey = document.getElementById("tabCodeartsKeyBadge");
+  if(elCaKey) elCaKey.textContent = caKeys + ' 个 Key';
 
   // 左侧卡片账号数与积分统计：大数字是「总剩余」（含停用账号），副行的
   // 「可用」只算 isAcctActive（启用且未触发保留/限额护栏）的账号——与旁边
@@ -6369,6 +6556,44 @@ function updateUI(){
   if(elCnAvail) elCnAvail.innerHTML = '<span class="credit-kind">可用</span> ' + (hasCnAvail ? fmt(cnAvailCred) : "—");
   const elCnAcct = document.getElementById("tabCnAccts");
   if(elCnAcct) elCnAcct.innerHTML = '<b style="color:var(--accent)">' + cnActive + '</b>/' + cnAccts.length + ' 账号';
+
+  // CodeArts 卡片：健康/总数、模型数、离线标记。没有积分——codearts2api 的
+  // stats.credits 实际是健康账号数，不是余额。
+  const ca = window.CODEARTS_OVERVIEW || {};
+  const caStats = ca.stats || {};
+  const caHealthy = (caStats.healthy != null) ? caStats.healthy : "—";
+  const caTotal = (caStats.total != null) ? caStats.total : 0;
+  const caModels = (ca.models || []).length;
+  const elCaHealthy = document.getElementById("tabCodeartsHealthy");
+  if(elCaHealthy) elCaHealthy.textContent = caHealthy;
+  const elCaTotal = document.getElementById("tabCodeartsTotal");
+  if(elCaTotal) elCaTotal.textContent = caTotal;
+  const elCaModels = document.getElementById("tabCodeartsModels");
+  if(elCaModels) elCaModels.textContent = caModels;
+  const elCaCredits = document.getElementById("tabCodeartsCredits");
+  if(elCaCredits) elCaCredits.textContent = fmtCredits(caStats.credits);
+  const elCaOffline = document.getElementById("tabCodeartsOffline");
+  if(elCaOffline) elCaOffline.style.display = (ca.online === false) ? "inline-block" : "none";
+  const elCaHost = document.getElementById("tabCodeartsHost");
+  if(elCaHost && ca.base_url){
+    try { elCaHost.textContent = new URL(ca.base_url).host; }
+    catch(e) { elCaHost.textContent = ca.base_url; }
+  }
+
+  // CodeArts 视图隐藏 WorkBuddy 专属区块，避免把两套账号/积分读混。
+  ["workbuddyAccountsSection", "workbuddyDisabledSection",
+   "workbuddyActivitySection"].forEach(function(id){
+    const el = document.getElementById(id);
+    if(el) el.style.display = isCodeartsView ? "none" : "";
+  });
+  const caSection = document.getElementById("codeartsAccountsSection");
+  if(caSection) caSection.style.display = isCodeartsView ? "" : "none";
+  const caSummary = document.getElementById("codeartsSummary");
+  if(caSummary) caSummary.style.display = isCodeartsView ? "" : "none";
+  const wbCards = document.getElementById("cards");
+  if(wbCards) wbCards.style.display = isCodeartsView ? "none" : "";
+  const wbSched = document.getElementById("schedulerBar");
+  if(wbSched) wbSched.style.display = isCodeartsView ? "none" : "";
 };
 
 // 切换视图的唯一入口：改完 VIEW_REALM 立刻用**已经加载好的**全量 window.ACCOUNTS
@@ -6386,26 +6611,377 @@ async function switchViewRealm(r){
   setViewRealm(r);
   RECENT_PAGE = 1;
   window.updateUI();
+  if(r === "codearts"){
+    // CodeArts 没有 WorkBuddy 的账号池/成长任务/调度器，别拿空数据去刷那些接口。
+    await Promise.all([loadCodeartsOverview(true), loadModels(),
+                       loadAnalytics(), refresh()]);
+    return;
+  }
   // 并行发起，不要逐个 await：国内版的成长任务一次要约 2 秒（上游两个接口），
   // 串行排队时后面那些毫秒级的用量接口全被它堵着，切过去看着就是"过几秒才刷新"。
   await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
                      loadSchedulerStatus(), loadAnalytics(), refresh()]);
 };
 
+function realmLabel(r){
+  return r === "intl" ? "国际版" : (r === "cn" ? "国内版" : "CodeArts");
+}
+
 async function toggleActiveGatewayRealm(){
-  const next = (window.ACTIVE_GATEWAY_REALM === "intl" ? "cn" : "intl");
+  const options = window.REALM_OPTIONS || ["intl", "cn"];
+  const cur = window.ACTIVE_GATEWAY_REALM || "intl";
+  let idx = options.indexOf(cur);
+  if(idx < 0) idx = 0;
+  const next = options[(idx + 1) % options.length];
   try {
     const res = await postJSON("/realm", {realm: next});
     window.ACTIVE_GATEWAY_REALM = res.current || next;
-    toast("网关默认上游已切换并永久保存为: " + (window.ACTIVE_GATEWAY_REALM === "intl" ? "国际版" : "国内版"));
+    toast("网关默认上游已切换并永久保存为: " + realmLabel(window.ACTIVE_GATEWAY_REALM));
     setViewRealm(window.ACTIVE_GATEWAY_REALM);
     window.updateUI();
-    await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
-                       loadSchedulerStatus(), loadAnalytics(), refresh()]);
+    if(window.ACTIVE_GATEWAY_REALM === "codearts"){
+      await Promise.all([loadCodeartsOverview(true), loadModels(),
+                         loadAnalytics(), refresh()]);
+    }else{
+      await Promise.all([loadAccounts(), loadModels(), loadGrowthTasks(),
+                         loadSchedulerStatus(), loadAnalytics(), refresh()]);
+    }
   }catch(e){
     alert("切换失败: " + e.message);
   }
 };
+
+/* ---- CodeArts 第三出口 ---- */
+window.CODEARTS_OVERVIEW = null;
+window.REALM_OPTIONS = ["intl", "cn"];
+
+async function loadCodeartsOverview(force){
+  const box = document.getElementById("codeartsAccounts");
+  try{
+    const r = await getJSON("/codearts/overview");
+    window.CODEARTS_OVERVIEW = r;
+    await loadProxySlots();
+    renderCodeartsCards(r);
+    renderCodeartsAccounts(r);
+    window.updateUI();
+  }catch(e){
+    if(box){
+      box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--bad)">'
+        + escapeHtml(e.message || "读取 CodeArts 失败")
+        + '<div style="margin-top:8px;color:var(--dim);font-size:12px">检查「设置 → CodeArts 接入」的 Base URL 和 API Key。</div></div>';
+    }
+    window.updateUI();
+  }
+}
+
+function fmtCredits(value){
+  if(value == null || value === "" || isNaN(Number(value))) return "—";
+  return Number(value).toLocaleString(undefined, {maximumFractionDigits: 2});
+}
+
+function renderCodeartsCards(r){
+  const box = document.getElementById("codeartsCards");
+  if(!box) return;
+  const st = r.stats || {};
+  const healthy = (st.healthy != null) ? st.healthy : "—";
+  const total = (st.total != null) ? st.total : 0;
+  const credits = (st.credits != null) ? st.credits : null;
+  const creditsTotal = (st.credits_total != null) ? st.credits_total : null;
+  const creditsUsed = (st.credits_used != null) ? st.credits_used : null;
+  const creditSub = (creditsTotal != null)
+    ? ("剩余 / 总 " + fmtCredits(creditsTotal)
+       + (creditsUsed != null ? " · 已用 " + fmtCredits(creditsUsed) : ""))
+    : "CodeArts 积分";
+  box.innerHTML =
+    card("健康账号", healthy + "/" + total, "由本进程直接管理")
+    + card("积分", fmtCredits(credits), creditSub)
+    + card("模型", (r.models || []).length, "CodeArts 目录")
+    + card("冷却", (st.cooling != null) ? st.cooling : 0, "到点自动恢复")
+    + card("停用", (st.disabled != null) ? st.disabled : 0, "手动/上游");
+}
+
+function codeartsSlotSelectHtml(a){
+  const current = a.proxy_slot || '';
+  const opts = ['<option value=""' + (current ? '' : ' selected') + '>直连</option>'];
+  const known = PROXY_SLOTS.some(s => s.id === current);
+  if(current && !known){
+    opts.push('<option value="" selected>已删除的槽位（直连）</option>');
+  }
+  opts.push.apply(opts, PROXY_SLOTS.map(s =>
+    '<option value="' + esc(s.id) + '"' + (s.id === current ? ' selected' : '') + '>'
+    + esc(s.label || s.name || s.id) + (s.enabled === false ? '（停用）' : '') + '</option>'));
+  const uidAttr = esc(String(a.uid || '').replace(/[^\w.@-]/g, ''));
+  return '<select class="slot-select" onchange="codeartsSetProxy(&quot;' + uidAttr + '&quot;, this.value, this)">'
+    + opts.join('') + '</select>';
+}
+
+async function codeartsSetProxy(uid, slotId, el){
+  if(el) el.disabled = true;
+  try{
+    await postJSON('/codearts/accounts/proxy', {uid: uid, slot_id: slotId});
+    toast('出口已更新', 'ok');
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast('出口更新失败: ' + e.message, 'bad');
+  }finally{
+    if(el) el.disabled = false;
+  }
+}
+
+function renderCodeartsAccounts(r){
+  const box = document.getElementById("codeartsAccounts");
+  const count = document.getElementById("codeartsAcctCount");
+  const accounts = r.accounts || [];
+  if(count) count.textContent = accounts.length ? (" · " + accounts.length) : "";
+  if(!box) return;
+  if(!accounts.length){
+    box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">还没有 CodeArts 账号。点「+ 添加账号 (OAuth)」开始。</div>';
+    return;
+  }
+  let html = '<div class="table-wrap"><table><thead><tr>'
+    + '<th>账号</th><th>状态</th><th>Token</th><th>出口</th><th>积分</th><th>并发</th><th>签到</th><th>操作</th>'
+    + '</tr></thead><tbody>';
+  accounts.forEach(function(a){
+    const uid = escapeHtml(a.uid || "");
+    const name = escapeHtml(a.nickname || a.user_name || a.uid || "");
+    let status = '<span class="badge ok mini">正常</span>';
+    if(a.disabled) status = '<span class="badge bad mini">已停用</span>';
+    else if(a.cooling) status = '<span class="badge warn mini">冷却中</span>';
+    const token = escapeHtml((a.token_remaining || "—") + (a.expires_at ? " · " + a.expires_at : ""));
+    const credits = (a.credits && a.credits.remain != null)
+      ? (fmtCredits(a.credits.remain)
+         + (a.credits.used ? '<div style="font-size:11px;color:var(--dim)">已用 ' + fmtCredits(a.credits.used) + '</div>' : ''))
+      : "—";
+    const conc = (a.active_concurrent != null ? a.active_concurrent : 0)
+      + "/" + (a.max_concurrent != null ? a.max_concurrent : "—");
+    let checkin = "—";
+    if(a.checkin && a.checkin.ok) checkin = "已签到";
+    else if(a.checkin && a.checkin.message) checkin = escapeHtml(a.checkin.message);
+    const actions = [];
+    if(a.disabled){
+      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'enable\',\'' + uid + '\')">启用</button>');
+    }else{
+      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'disable\',\'' + uid + '\')">停用</button>');
+    }
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'clear-cooldown\',\'' + uid + '\')">清冷却</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'checkin\',\'' + uid + '\')">签到</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'delete\',\'' + uid + '\')">删除</button>');
+    html += '<tr><td><b>' + name + '</b><div class="mono" style="color:var(--dim);font-size:11px">' + uid + '</div></td>'
+      + '<td>' + status + (a.reason ? '<div style="font-size:11px;color:var(--dim)">' + escapeHtml(a.reason) + '</div>' : '') + '</td>'
+      + '<td class="mono" style="font-size:11px">' + token + '</td>'
+      + '<td>' + codeartsSlotSelectHtml(a) + '</td>'
+      + '<td>' + credits + '</td>'
+      + '<td>' + conc + '</td><td>' + checkin + '</td>'
+      + '<td style="white-space:nowrap">' + actions.join(" ") + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  box.innerHTML = html;
+}
+
+async function codeartsAccountAction(action, uid){
+  if(action === "delete"){
+    if(!confirm("删除 CodeArts 账号 " + uid + "？\n\n会删除凭据并移出账号池，不可恢复。")) return;
+  }
+  try{
+    const r = await postJSON("/codearts/accounts/" + action, {uid: uid});
+    toast((r && r.message) || "操作成功", "ok");
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast("操作失败: " + e.message, "bad");
+  }
+}
+
+async function codeartsCheckinAll(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/codearts/accounts/checkin", {});
+    toast((r && r.message) || "已发起签到", "ok");
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast("签到失败: " + e.message, "bad");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function codeartsKeepalive(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/codearts/keepalive", {});
+    toast((r && r.message) || "已发起保活", "ok");
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast("保活失败: " + e.message, "bad");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function openCodeartsConsole(){
+  const base = (window.CODEARTS_OVERVIEW || {}).base_url || "";
+  if(!base){ toast("CodeArts 还没有配置 Base URL", "warn"); return; }
+  window.open(base, "_blank", "noopener,noreferrer");
+}
+
+let CODEARTS_OAUTH_SESSION = "";
+let CODEARTS_OAUTH_TIMER = null;
+
+function setCodeartsOauthStatus(msg, ok){
+  const el = document.getElementById("codeartsOauthStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.style.color = (ok === true) ? "var(--accent2)" : (ok === false ? "var(--bad)" : "var(--dim)");
+}
+
+function openCodeartsOauthModal(){
+  const modal = document.getElementById("codeartsOauthModal");
+  if(modal) modal.classList.add("show");
+  const url = document.getElementById("codeartsOauthUrl");
+  if(url) url.textContent = "";
+  const cb = document.getElementById("codeartsOauthCallback");
+  if(cb) cb.value = "";
+  startCodeartsOAuth();
+}
+
+function closeCodeartsOauthModal(){
+  if(CODEARTS_OAUTH_TIMER){ clearInterval(CODEARTS_OAUTH_TIMER); CODEARTS_OAUTH_TIMER = null; }
+  CODEARTS_OAUTH_SESSION = "";
+  const modal = document.getElementById("codeartsOauthModal");
+  if(modal) modal.classList.remove("show");
+}
+
+async function startCodeartsOAuth(){
+  try{
+    const r = await postJSON("/codearts/accounts/oauth/start", {});
+    CODEARTS_OAUTH_SESSION = r.session_id || "";
+    const url = document.getElementById("codeartsOauthUrl");
+    if(url) url.textContent = r.auth_url || "";
+    setCodeartsOauthStatus("已生成链接，正在等待授权…", null);
+    if(r.auth_url) window.open(r.auth_url, "_blank", "noopener,noreferrer");
+    if(CODEARTS_OAUTH_TIMER) clearInterval(CODEARTS_OAUTH_TIMER);
+    CODEARTS_OAUTH_TIMER = setInterval(function(){ pollCodeartsOAuth(true); }, 2500);
+  }catch(e){
+    setCodeartsOauthStatus("发起失败: " + e.message, false);
+  }
+}
+
+async function pollCodeartsOAuth(silent){
+  if(!CODEARTS_OAUTH_SESSION) return;
+  try{
+    const r = await postJSON("/codearts/accounts/oauth/poll",
+                             {session_id: CODEARTS_OAUTH_SESSION});
+    if(r.status === "pending"){
+      setCodeartsOauthStatus(r.message || "等待浏览器完成授权…", null);
+      return;
+    }
+    if(r.status === "done" && r.ok){
+      setCodeartsOauthStatus("✓ " + (r.message || "登录成功"), true);
+      if(CODEARTS_OAUTH_TIMER){ clearInterval(CODEARTS_OAUTH_TIMER); CODEARTS_OAUTH_TIMER = null; }
+      CODEARTS_OAUTH_SESSION = "";
+      await loadCodeartsOverview(true);
+      setTimeout(closeCodeartsOauthModal, 900);
+      return;
+    }
+    setCodeartsOauthStatus("✗ " + (r.message || "授权失败"), false);
+    if(CODEARTS_OAUTH_TIMER){ clearInterval(CODEARTS_OAUTH_TIMER); CODEARTS_OAUTH_TIMER = null; }
+  }catch(e){
+    if(!silent) setCodeartsOauthStatus("查询失败: " + e.message, false);
+  }
+}
+
+async function importCodeartsCallback(btn){
+  const input = document.getElementById("codeartsOauthCallback");
+  const callbackUrl = input ? input.value.trim() : "";
+  if(!CODEARTS_OAUTH_SESSION || !callbackUrl){
+    setCodeartsOauthStatus("请先发起授权，再粘贴完整回调地址", false);
+    return;
+  }
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/codearts/accounts/oauth/callback", {
+      session_id: CODEARTS_OAUTH_SESSION,
+      callback_url: callbackUrl,
+    });
+    if(input) input.value = "";
+    setCodeartsOauthStatus(r.message || "回调已接收，继续等待授权…", null);
+    if(r.next_url){
+      const url = document.getElementById("codeartsOauthUrl");
+      if(url) url.textContent = r.next_url;
+      window.open(r.next_url, "_blank", "noopener,noreferrer");
+    }
+    setTimeout(function(){ pollCodeartsOAuth(true); }, 500);
+  }catch(e){
+    setCodeartsOauthStatus("中转失败: " + e.message, false);
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function openCodeartsAuthUrl(){
+  const el = document.getElementById("codeartsOauthUrl");
+  const url = el ? el.textContent.trim() : "";
+  if(url) window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function renderCodeartsSettings(cfg){
+  if(!cfg) return;
+  const enabled = document.getElementById("setCodeartsEnabled");
+  if(enabled) enabled.checked = cfg.enabled === true;
+  const conc = document.getElementById("setCodeartsMaxConcurrent");
+  if(conc) conc.value = cfg.max_concurrent || 1;
+  const timeout = document.getElementById("setCodeartsTimeout");
+  if(timeout) timeout.value = cfg.timeout_seconds || 30;
+  const stream = document.getElementById("setCodeartsStreamTimeout");
+  if(stream) stream.value = cfg.stream_timeout_seconds || 600;
+  const ttl = document.getElementById("setCodeartsModelsTtl");
+  if(ttl) ttl.value = cfg.models_ttl_seconds || 300;
+  const state = document.getElementById("setCodeartsState");
+  if(state){
+    state.textContent = cfg.configured ? "(已启用)" : "(未启用)";
+    state.style.color = cfg.configured ? "var(--accent2)" : "var(--dim)";
+  }
+  const hint = document.getElementById("setCodeartsHint");
+  if(hint){
+    hint.textContent = (cfg.accounts || 0) + " 个账号，"
+      + (cfg.healthy || 0) + " 个健康；账号在「账号」页的 CodeArts 视图管理。";
+  }
+}
+
+async function saveCodeartsSettings(btn){
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ""; };
+  const payload = {
+    enabled: !!(document.getElementById("setCodeartsEnabled") || {}).checked,
+    max_concurrent: parseInt(val("setCodeartsMaxConcurrent"), 10) || 1,
+    timeout_seconds: parseFloat(val("setCodeartsTimeout")) || 30,
+    stream_timeout_seconds: parseFloat(val("setCodeartsStreamTimeout")) || 600,
+    models_ttl_seconds: parseFloat(val("setCodeartsModelsTtl")) || 300,
+  };
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/settings/save", {codearts: payload});
+    if(r && r.warning) toast(r.warning, "warn");
+    else toast("CodeArts 设置已保存", "ok");
+    if(r && r.codearts) renderCodeartsSettings(r.codearts);
+    await refreshActiveRealm();
+    window.updateUI();
+  }catch(e){
+    toast("保存失败: " + e.message, "bad");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function testCodeartsConnection(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/codearts/test", {});
+    toast("CodeArts 连接正常（" + ((r.models != null) ? r.models : 0) + " 个模型）", "ok");
+  }catch(e){
+    toast("CodeArts 连接失败: " + e.message, "bad");
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
 
 async function refreshActiveRealm(){
   // Refresh which exit the gateway is switched to. Deliberately does NOT touch
@@ -6415,6 +6991,7 @@ async function refreshActiveRealm(){
   try {
     const r = await getJSON("/realm");
     if(r && r.current) window.ACTIVE_GATEWAY_REALM = r.current;
+    if(r && Array.isArray(r.options)) window.REALM_OPTIONS = r.options;
   } catch(e){}
 }
 
@@ -6426,16 +7003,32 @@ async function initRealm(){
   await refreshActiveRealm();
   window.VIEW_REALM = window.ACTIVE_GATEWAY_REALM;
   const viewFromUrl = new URLSearchParams(window.location.search).get('view');
-  if(viewFromUrl && ['intl', 'cn'].includes(viewFromUrl)) window.VIEW_REALM = viewFromUrl;
+  if(viewFromUrl && ['intl', 'cn', 'codearts'].includes(viewFromUrl)) window.VIEW_REALM = viewFromUrl;
   const limitFromUrl = new URLSearchParams(window.location.search).get('limit');
   if(limitFromUrl && [10, 20, 50, 100].includes(parseInt(limitFromUrl, 10))) RECENT_LIMIT = parseInt(limitFromUrl, 10);
   window.updateUI();
+  if(window.VIEW_REALM === 'codearts') loadCodeartsOverview(true);
 }
 
 async function refreshModelCatalog(btn){
   // 手动刷新模型清单：强制走一次上游 /v3/config（服务端执行，绕过 300s 缓存），
   // 只刷当前视图版本——这张表显示的是哪个版本，刷新按钮就只拉哪个版本，绝
   // 不跨区（服务端会挑该版本自己的账号发请求）。完成后立即重载表格。
+  if(window.VIEW_REALM === 'codearts'){
+    if(btn) btn.disabled = true;
+    const prevText = btn ? btn.textContent : '';
+    if(btn) btn.textContent = '刷新中...';
+    try{
+      const r = await postJSON('/codearts/models/refresh', {});
+      toast('CodeArts 模型目录：' + ((r && r.models) || 0) + ' 个模型', 'ok');
+      await loadModels();
+    }catch(e){
+      toast('CodeArts 模型目录刷新失败：' + e.message, 'bad');
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = prevText; }
+    }
+    return;
+  }
   const realm = window.VIEW_REALM === 'cn' ? 'cn' : 'intl';
   const label = realm === 'cn' ? '国内版' : '国际版';
   if(btn) btn.disabled = true;
@@ -6679,6 +7272,16 @@ function renderModelsSourceLine(meta){
   const isApi = (meta.source === 'remote' || meta.source === 'endpoint');
   const at = fmtCatalogStamp(meta.fetched_at);
   el.title = tip;
+  if(meta.source === 'codearts'){
+    el.style.cssText = CATALOG_BANNER_BASE
+      + 'background:var(--accent2-soft);border:1px solid rgba(94,140,79,.28);color:var(--accent2)';
+    el.title = 'CodeArts 模型目录来自本进程的 agent-center / builtin / 福利三路发现；缓存过期后自动重取，失败时回退到上次成功的目录。';
+    el.innerHTML = '<b>✓ 当前为 CodeArts 模型目录</b>'
+      + '<span style="color:var(--dim)">刷新时间 ' + esc(at || '—')
+      + (meta.stale ? ' · 上游暂时不可达，显示上次成功的目录' : '')
+      + '</span>';
+    return;
+  }
   if(isApi){
     el.style.cssText = CATALOG_BANNER_BASE
       + 'background:var(--accent2-soft);border:1px solid rgba(94,140,79,.28);color:var(--accent2)';
@@ -8192,7 +8795,7 @@ function activityStatusOf(a){
   // 国内版：加油站
   const event = ACTIVITY_TODAY.byUid[uid];
   const gasDone = a && a.lastCheckin;
-  let gas = {kind: 'none', label: '加油站', state: '未领', at: '', message: ''};
+  let gas = {kind: 'none', label: '加油站', state: '无本地记录', at: '', message: ''};
   if(event && event.task === 'checkin'){
     gas = {kind: event.ok ? 'ok' : 'failed', label: '加油站',
            state: event.ok ? '已领' : '失败',
@@ -8204,7 +8807,7 @@ function activityStatusOf(a){
 
   // 国内版：成长计划连登打卡
   const streakDone = a && a.lastActivityReport;
-  let streak = {kind: 'none', label: '成长连登', state: '未打卡', at: '', message: ''};
+  let streak = {kind: 'none', label: '成长连登', state: '无本地记录', at: '', message: ''};
   if(streakDone && String(streakDone).startsWith(todayStamp())){
     streak = {kind: 'done', label: '成长连登', state: '已打卡', at: String(streakDone), message: '连登活跃已上报'};
   }
@@ -8248,10 +8851,10 @@ function activityStatusChip(a){
   return '<div style="display:inline-flex;flex-direction:column;gap:4px;align-items:center">'
     + '<span class="' + mainStatus.cls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(gasTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('Buddy 加油站 · ' + (status.gas.kind === 'none' ? '未领' : status.gas.state)) + '</span>'
+    + esc('Buddy 加油站 · ' + status.gas.state) + '</span>'
     + '<span class="' + stkCls + '" style="cursor:pointer;white-space:nowrap" title="' + esc(stkTip) + '"'
     + ' onclick="openActivityHistory(&quot;' + uidAttr + '&quot;)">'
-    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '未签到')) + '</span>'
+    + esc('成长计划 · ' + (status.streak.kind === 'done' ? '已签到' : '无本地记录')) + '</span>'
     + '</div>'
     + '<span style="display:none">' + esc(mainStatus.text) + '</span>';
 }
@@ -11919,6 +12522,8 @@ async function loadSettings(showToast){
       renderQuotaScanState(data);
       // 上游响应头超时：没改过时后端给的就是默认 120，所以「等于 120」按默认态
       // 显示，只有被改过才标出实际秒数。
+      const maxPayload = document.getElementById('setMaxPayloadMB');
+      if(maxPayload) maxPayload.value = data.max_payload_mb || Math.ceil((data.max_payload_bytes_effective || 16777216) / 1048576);
       const headerTimeout = (data.upstream || {}).header_timeout_seconds;
       const headerTimeoutInput = document.getElementById('setHeaderTimeout');
       if(headerTimeoutInput){
@@ -11968,6 +12573,7 @@ async function loadSettings(showToast){
       deleted_at: k.deleted_at || '',
     }));
     renderKeyRows();
+    renderCodeartsSettings(data.codearts);
     updateUI();
     const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
     set('setVersion', data.version);
@@ -13236,6 +13842,18 @@ async function saveUsageKeep(btn){
 }
 /* 上游响应头超时。后端只接受 >=1 的整数秒，所以先把输入收成整数再发：空值、
    小数、非数字就地拦下，而不是送上去换一个 400 回来。 */
+async function saveMaxPayload(btn){
+  const el = document.getElementById('setMaxPayloadMB');
+  const value = Number(el && el.value);
+  if(!Number.isInteger(value) || value < 1 || value > 256){ toast('请输入 1 到 256 的整数 MB', 'bad'); return; }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {max_payload_mb: value});
+    toast('单请求体上限已保存', 'ok');
+    loadSettings();
+  } catch(e) { toast('保存失败: ' + e.message, 'bad'); }
+  finally { if(btn) btn.disabled = false; }
+}
 async function saveHeaderTimeout(btn){
   const el = document.getElementById('setHeaderTimeout');
   const value = Math.floor(Number(el && el.value));
@@ -13809,7 +14427,8 @@ function renderDeletedKeyRows(){
   if(!DELETED_KEY_ROWS.length){ box.innerHTML = ''; return; }
   const rows = DELETED_KEY_ROWS.map(k => {
     const realmLbl = (k.realm === 'intl') ? '固定国际版出口'
-      : ((k.realm === 'cn') ? '固定国内版出口' : '跟随面板切换');
+      : ((k.realm === 'cn') ? '固定国内版出口'
+        : ((k.realm === 'codearts') ? '固定 CodeArts 出口' : '跟随面板切换'));
     return '<div style="font-size:12px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--line)">'
       + '<span style="color:var(--fg);font-weight:600">' + esc(k.name || '未命名') + '</span>'
       + '<span>' + esc(realmLbl) + '</span>'
@@ -13837,7 +14456,10 @@ function renderKeyRows(){
   }
   box.innerHTML = API_KEY_ROWS.map((row, i) => {
     if(row._editing){
-      const options = REALM_CHOICES.map(([val, lbl]) =>
+      const realmChoices = REALM_CHOICES.concat(
+        (window.REALM_OPTIONS || []).includes('codearts')
+          ? [['codearts', '固定 CodeArts 出口']] : []);
+      const options = realmChoices.map(([val, lbl]) =>
         '<option value="' + val + '"' + ((row.realm || '') === val ? ' selected' : '') + '>' + lbl + '</option>'
       ).join('');
       return '<div class="key-card" style="border-color:var(--accent);background:var(--panel);box-shadow:0 0 0 1px var(--accent), var(--shadow-md)">'
@@ -13884,7 +14506,7 @@ function renderKeyRows(){
         +     '</div>'
         +     '<div id="editKeyAccountPicker_' + i + '" style="display:none;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px">'
         +       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'
-        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
+        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称、备注或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',true)">全选</button>'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',false)">全不选</button>'
         +       '</div>'
@@ -14049,7 +14671,8 @@ async function renderKeyPickers(i){
     accountList.innerHTML = accts.map(a => {
       const uid = String((a && a.uid) || '');
       if(!uid) return '';
-      const label = (a.nickname || uid.slice(0, 8)) + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '');
+      const note = String(a.note || '').trim();
+      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '');
       const checked = (row.accounts || []).indexOf(uid) >= 0 ? ' checked' : '';
       return '<label class="key-pick-row" data-search="' + esc((label + ' ' + uid).toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(uid) + '"' + checked + ' onchange="toggleKeyAccount(' + i + ',this)">' + esc(label) + '</label>';
     }).join('') || '<div style="font-size:12px;color:var(--warn);padding:4px">账号列表为空或加载失败，<a href="javascript:void(0)" onclick="renderKeyPickers(' + i + ')">重试</a></div>';
@@ -16685,6 +17308,18 @@ function nicknameOf(uid){
   const acc = ((state.analytics || {}).accounts || []).find(x => x.uid === uid);
   return acc ? (acc.nickname || acc.uid.slice(0, 8)) : (uid || '').slice(0, 8);
 }
+/* 「实时活动流」原先只截 HH:MM:SS：昨天 22:11 的请求和今天 22:11 的在同一列里
+   长得一模一样，往下翻一段就分不清哪条是刚才进来的。这里补上跨天判断：
+   同一天仍只显示时分秒（平时盯的就是这几行），不是今天的补上月日。 */
+function recentStamp(iso){
+  const s = (iso || '').replace('T', ' ');
+  const time = s.slice(11, 19);
+  if (!time) return '—';
+  const now = new Date();
+  const pad = v => String(v).padStart(2, '0');
+  const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+  return s.slice(0, 10) === today ? time : s.slice(5, 16);
+}
 async function loadRecent(){
   try{
     const r = await api('/usage/recent?limit=12');
@@ -16694,7 +17329,7 @@ async function loadRecent(){
       const ok = x.outcome === 'completed';
       const nm = nicknameOf(x.account);
       return `<div class="recent-item">
-        <span class="t">${(x.iso || '').slice(11, 19)}</span>
+        <span class="t">${recentStamp(x.iso)}</span>
         <span class="m"><b>${x.model || ''}</b> → ${nm.length > 16 ? nm.slice(0, 16) + '…' : nm}${ok ? '' : ' <span class="err">[' + (x.outcome || '失败') + ']</span>'}</span>
         <span class="r"><b>${fmtCompact(x.total_tokens || 0)}</b> tok · ${((x.elapsed_ms || 0) / 1000).toFixed(1)}s</span>
       </div>`;

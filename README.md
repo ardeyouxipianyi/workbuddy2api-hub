@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.9.2-2496ED?style=flat-square" alt="Version 1.9.2"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.0-2496ED?style=flat-square" alt="Version 1.10.0"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -169,14 +169,40 @@ docker run -d --name wb-proxy-watchtower --restart unless-stopped \
 - **健康检查**：镜像自带 `HEALTHCHECK`（每 30s 探一次 `/health`），`docker ps` 的 STATUS 列会显示 healthy / unhealthy；
 - **源码构建**：`docker compose -f docker-compose.build.yml up -d --build`。
 
-### 6. 测试
+### 6. CodeArts 第三出口
+
+CodeArts 的 OAuth、token 续期、账号池、模型发现、聊天 SSE 和签到都由本进程直接完成，不需要再跑独立的 codearts2api 服务。
+
+- 顶部出口卡片从 `国际版 / 国内版` 变成 `国际版 / 国内版 / CodeArts`；
+- 选中 CodeArts 时，`/v1/models` 返回 CodeArts 的模型目录，`/v1/chat/completions`、`/v1/responses`、Anthropic Messages 都由本进程直连华为云；
+- API Key 可以绑定 `codearts` 出口，三个出口可以同时用；
+- 看板「账号」页的 CodeArts 视图可以添加（OAuth）、启用、停用、清冷却、签到、删除 CodeArts 账号。
+- CodeArts 账号支持绑定「账号代理槽」：在账号表的「出口」列选择槽位后，聊天、模型发现、token 续期、签到、积分查询都走该槽；槽位地址变化自动跟随，禁用或删除槽位回退直连。首次 OAuth 换取 token 时还没有账号可绑定，仍直连。
+
+**首次配置**
+
+1. 打开 wb-hub 看板 →「设置 → CodeArts 接入」，勾选「启用 CodeArts 出口」并保存。不需要 Base URL 或 API Key。
+2. 切到 CodeArts 视图，点「+ 添加账号 (OAuth)」完成华为云授权。
+3. 在「设置 → API Key 与出口绑定」里新建 Key，出口选 `CodeArts`，或留空跟随顶部默认出口。
+
+**口径与限制**
+
+- 账号、token 续期、冷却、签到、并发都由本进程直接执行；华为云凭据只存在本机 `accounts/codearts/`。
+- CodeArts 积分余额通过 `snap-manager/v1/statistics/plugin` 查询，看板显示剩余 / 总额 / 已用；单次请求的积分扣减上游不返回，最近请求表的积分列显示 `0.00`、估算价格显示 `—`。
+- CodeArts 出口不参与 WorkBuddy 的积分/额度护栏，也不参与 `国际版 → 国内版` 的跨出口回退。
+- API Key 的「允许账号」白名单同样限制 CodeArts 请求；没有列入任何 CodeArts 账号时不会使用其他账号。面板的账号选择当前主要面向 WorkBuddy 账号。
+- CodeArts 出口暂不支持图片输入；包含图片的请求会返回错误，不会静默丢弃图片。
+- CodeArts 出口没有 wb-hub 的 web_search / web_fetch 代跑；客户端自带工具照常透传。
+- `/codearts/*` 管理端点只接受面板会话，不接受普通 API Key；删除账号不可恢复。
+
+### 7. 测试
 
 ```bash
 python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 239 个套件：180 个 Python + 59 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 244 个套件：181 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -483,7 +509,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-- **面板密码加密异常明确报错**（#658）：解释器缺少 `hashlib.pbkdf2_hmac` 支持时（如 Windows SAC 拦截便携运行时 DLL），不再将计算异常吞成「密码错误」返回 401，而是明确返回 500 与环境排查指引；启动自检与 `/health`、`/panel/status` 暴露 `crypto_ok` 状态并在面板提示。新增 `tests/_test_panel_crypto_unavailable.py`。
+- **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
+- **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。
 - **流式终止**：设置 `WB_STOP_AT_SSE_DONE=1` 后，收到上游 SSE `[DONE]` 立即结束读取；默认关闭，保持原有行为。 / **Stream termination**: set `WB_STOP_AT_SSE_DONE=1` to stop reading at the upstream SSE `[DONE]` marker; disabled by default to retain existing behavior.
 - **HTTP 错误正文**：设置 `WB_CACHE_HTTP_ERROR_BODY=1` 后缓存首次读取的错误正文，供后续读取使用；默认关闭。 / **HTTP error body**: set `WB_CACHE_HTTP_ERROR_BODY=1` to retain the first error-body read for later readers; disabled by default.
@@ -581,7 +608,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **DSH 一键配置放宽限流重试，修掉「对话到一半链接中断」**：WorkBuddy 的 429 冷却通常约一分钟，而 DSH 的默认 `retryPolicy` 是 `normal` / 最多 5 次 / 退避 500ms 起翻倍、封顶 10s——加起来不到 16 秒就放弃，冷却还没结束回合就以 `RATE_LIMIT` 失败。一键配置现在给 `wb-proxy` 单独写 `retryPolicy: {mode: normal, maxRetries: 8, backoff: {initialDelayMs: 2000, maxDelayMs: 30000, jitterRatio: 0.1}}`（合计约 2 分半），只影响 `wb-proxy`，其它 provider 仍用默认策略；字段与取值按 `@deepseek-ai/dsh-llm` 的 `RetryPolicySchema`。已经接入过的机器重新点一次「一键配置」即可补上这段（幂等），重启 DSH 生效。
   DSH's default per-provider retry policy (normal, at most 5 retries, 500ms→10s backoff, under 16 seconds in total) gives up before WorkBuddy's ~60s rate-limit cooldown ends, so the turn dies with `RATE_LIMIT` — which the user sees as the conversation breaking mid-flight. The one-click config now writes a wider `retryPolicy` for `wb-proxy` only (8 retries, 2s initial delay, 30s cap, ~2.5 minutes in total); other providers keep the default policy. Field names and bounds follow `@deepseek-ai/dsh-llm`'s `RetryPolicySchema`. Re-running the one-click config on an already-integrated machine adds it idempotently, and a DSH restart applies it.
 
-已发布版本的完整记录（v1.4.5 ~ v1.9.2，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+已发布版本的完整记录（v1.4.5 ~ v1.10.0，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ## 七、致谢与引用声明 (Credits & References)
 

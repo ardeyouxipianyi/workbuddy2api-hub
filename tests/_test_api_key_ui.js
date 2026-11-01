@@ -61,4 +61,22 @@ for(const [zh, en] of Object.entries(EN)){
 // 弹窗标题都能被 HANT_PHRASES 逐字转换（「API」是 ASCII，原样保留）。
 check(html.includes("'添加 API Key 账号'"), '正文缺少弹窗标题');
 
+// The key account picker must show notes, search them, and escape markup.
+const pickerStart = html.indexOf('async function renderKeyPickers(i)');
+const pickerEnd = html.indexOf('function toggleKeyModel(i, el)', pickerStart);
+assert.ok(pickerStart >= 0 && pickerEnd > pickerStart);
+const pickerList = {innerHTML: ''};
+const fakeDocument = {getElementById: id => id === 'editKeyAccountList_0' ? pickerList : null};
+const escapeHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const picker = new Function('API_KEY_ROWS', 'document', 'window', 'esc', 'updateKeyAccountSummary',
+  html.slice(pickerStart, pickerEnd) + '\nreturn renderKeyPickers;')(
+    [{accounts: ['uid-123']}], fakeDocument,
+    {ACCOUNTS: [{uid: 'uid-123', nickname: 'Alice', note: '<VIP>', realm: 'cn'}]},
+    escapeHtml, () => {});
+picker(0).then(() => {
+  check(pickerList.innerHTML.includes('&lt;VIP>'), '备注应安全显示');
+  check(pickerList.innerHTML.includes('data-search="alice · &lt;vip>'), '备注应进入搜索文本');
+  check(pickerList.innerHTML.includes('value="uid-123" checked'), '选择仍以 UID 保存');
+}).catch(err => { console.error(err); process.exitCode = 1; });
+
 console.log('OK ' + checks + ' checks');

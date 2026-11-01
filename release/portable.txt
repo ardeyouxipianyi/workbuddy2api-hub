@@ -56,6 +56,8 @@ wb_activity.py
 wb_agents.py
 wb_atrest.py
 wb_catalog.py
+wb_codearts.py
+wb_codearts_crypto.py
 wb_egress.py
 wb_fingerprint.py
 wb_identity.py
