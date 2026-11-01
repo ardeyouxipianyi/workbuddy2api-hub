@@ -305,6 +305,33 @@ class ReadEndpointsTests(unittest.TestCase):
         self.assertEqual(generation["resolutions"], ["720P", "1080P", "4K"])
         self.assertEqual(generation["maxPromptLength"], 2500)
 
+    def test_media_models_price_is_per_resolution(self):
+        """同一模型换分辨率就是另一个价，必须分开报。
+
+        实测：minimax 4 秒 768P 扣 57.14、2K 扣 91.43（贵 60%）。只报一个
+        `creditPerSecond`（默认档的价）时，调用方按 768P 算 2K 的花费会少算 60%。
+        没观测过的那档**不出现**——拿别档的价冒充比不报更坏。
+        """
+        with tempfile.TemporaryDirectory() as root:
+            inst = _Instance(os.path.join(root, "per-res"), media_enabled=True)
+            prices = os.path.join(root, "per-res", "media", "video-prices.json")
+            with open(prices, "w", encoding="utf-8") as handle:
+                json.dump({"kling-video-v3|720P": 25.714,
+                           "kling-video-v3|4K": 64.285}, handle)
+            inst.start()
+            try:
+                status, body, _ = inst.json("GET", "/v1/media/models")
+                self.assertEqual(status, 200)
+                video = [m for m in body["models"] if m["id"] == "kling-video-v3"][0]
+                self.assertAlmostEqual(video["creditsPerSecond"]["720P"], 25.714, places=3)
+                self.assertAlmostEqual(video["creditsPerSecond"]["4K"], 64.285, places=3)
+                # 1080P 从没观测过：不许拿 720P 或 4K 的价来充数。
+                self.assertNotIn("1080P", video["creditsPerSecond"])
+                # 默认档那档仍走旧字段，老调用方不受影响。
+                self.assertAlmostEqual(video["creditPerSecond"], 25.714, places=3)
+            finally:
+                inst.stop()
+
     def test_media_models_tag_filter(self):
         status, body, _ = _ON.json("GET", "/v1/media/models?tag=text-to-image")
         self.assertEqual([model["id"] for model in body["models"]], ["hunyuan-image-alpha"])

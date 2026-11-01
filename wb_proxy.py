@@ -657,11 +657,15 @@ def learn_media_price(model, resolution, credit, seconds):
     return price
 
 
-def media_price_per_second(model, resolution=None):
+def media_price_per_second(model, resolution=None, exact_only=False):
     """实测单价（上游 credit ÷ 秒数）；没有观测值返回 None。
 
     精确匹配 `(模型, 分辨率)` 优先；只有别的分辨率的观测值时取该模型**最大值**
     ——估算宁可往高报：高估只是可能少派一次，低估会把账号打穿。
+
+    `exact_only=True` 关掉那个"取最大值"的兜底：**报价**必须诚实，把 4K 的价
+    填给没观测过的 1080P 就是错报（实测 minimax 2K 比 768P 贵 60%，两者价差
+    不是噪声）。所以对外报价走严格模式，内部预算判断才用宽松模式。
     """
     model = (model or "").strip()
     if not model:
@@ -670,6 +674,8 @@ def media_price_per_second(model, resolution=None):
         exact = _MEDIA_PRICES.get((model, (resolution or "").strip()))
         if exact:
             return exact
+        if exact_only:
+            return None
         same_model = [price for (name, _res), price in _MEDIA_PRICES.items()
                       if name == model]
     return max(same_model) if same_model else None
@@ -21160,7 +21166,21 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             generation = model.get("videoGeneration") or {}
             model["creditPerSecond"] = media_price_per_second(
-                model.get("id"), generation.get("defaultResolution"))
+                model.get("id"), generation.get("defaultResolution"), exact_only=True)
+            # **同一个模型换分辨率就是另一个价**：minimax 4 秒 768P 实扣 57.14，
+            # 2K 实扣 91.43（1.6 倍）。只报一个 creditPerSecond（默认分辨率的价）
+            # 会让调用方按 768P 的价算 2K 的花费，差 60%。所以把每一档都列出来，
+            # 没观测过的那档不出现（不要拿别档的价冒充）。
+            per_resolution = {}
+            for name in (generation.get("resolutions")
+                         or [generation.get("defaultResolution")]):
+                if not name:
+                    continue
+                price = media_price_per_second(model.get("id"), name, exact_only=True)
+                if price is not None:
+                    per_resolution[name] = price
+            if per_resolution:
+                model["creditsPerSecond"] = per_resolution
             if model["creditPerSecond"] is None:
                 # 如实说明现在的估算依据是上界，而不是装作知道价格。
                 model["creditPerSecondCeiling"] = wb_media.COST_VIDEO_PER_SECOND_CEILING
