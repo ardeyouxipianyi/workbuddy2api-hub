@@ -126,9 +126,10 @@ impl Logs {
     pub fn new(usage_dir: impl Into<PathBuf>) -> Logs {
         Logs {
             ring: Mutex::new(VecDeque::new()),
-            // id 从毫秒时间戳起：库被清空或换了份空库重启后，面板手里的 since_id
-            // 仍然只会「往后跳」，不会把旧 id 段重放一遍。
-            next_id: AtomicI64::new(epoch_ms()),
+            // id 从毫秒时间戳 ×1000 起：库被清空或换了份空库重启后，面板手里的
+            // since_id 仍然只会「往后跳」，不会把旧 id 段重放一遍。
+            // shortcut: 同一毫秒内重启两次仍可能重号，重启间隔按毫秒算，不会碰到。
+            next_id: AtomicI64::new(epoch_ms() * 1000),
             path: usage_dir.into().join("logs.sqlite3"),
             worker: Mutex::new(None),
         }
@@ -811,6 +812,8 @@ mod tests {
 
         // 库被清空后重启（面板手里的 since_id 是旧的大数）：id 仍必须更大。
         let mut highest = entry["id"].as_i64().unwrap();
+        // 新进程的 id 起点是「当前毫秒」，等过这一毫秒再换库，算重启（不是同进程重入）。
+        std::thread::sleep(Duration::from_millis(5));
         let _ = std::fs::remove_file(dir.join("logs.sqlite3"));
         let fresh = Logs::new(dir);
         fresh.configure(true, Caps::default());

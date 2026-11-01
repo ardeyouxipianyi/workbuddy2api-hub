@@ -53,6 +53,14 @@ pub async fn get(app: &Arc<App>) -> Resp {
     payload.insert("accounts_ready_current_realm".into(), json!(ready_current));
     payload.insert("models_ready".into(), json!({}));
     payload.insert("api_key_required".into(), json!(state.api_key_required()));
+    // v1.10.0 的 CodeArts 子字段：只报配置状态，掉线也不能把整体 /health 变红。
+    payload.insert(
+        "codearts".into(),
+        json!({
+            "configured": crate::panel_settings::codearts_configured(&state.settings_snapshot()),
+            "base_url": crate::panel_settings::CODEARTS_SNAP_HOST,
+        }),
+    );
 
     // 账号身份只给授权调用方看（Python 版同一口径）；M1 的鉴权在 M2 一起接。
     match accounts.iter().find(|a| a.ready(now)) {

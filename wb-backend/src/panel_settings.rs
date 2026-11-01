@@ -361,6 +361,11 @@ fn runtime_settings(settings: &Map<String, Value>, app: &Arc<App>) -> Value {
         "keep_backups": int_setting(&settings, "keep_backups", 1, 3),
         "keep_backups_max": 3,
         "upstream": crate::panel_defaults::mapping(&settings, "upstream", upstream_defaults),
+        // v1.10.0：单请求体上限可在面板里 1–256MB 调整，没设就是环境变量/16MB。
+        "max_payload_mb": crate::panel_defaults::null_or_i64(settings.get("max_payload_mb")),
+        "max_payload_bytes_effective": crate::http::payload_bytes_effective(&settings),
+        // CodeArts 出口（wb_codearts.masked_config）：rust 侧没有账号池，只回配置与 0 计数。
+        "codearts": codearts_masked(&settings),
         "usage": crate::panel_defaults::mapping(&settings, "usage", usage_defaults),
         "prompt": crate::panel_defaults::mapping(&settings, "prompt", prompt_defaults),
         "window_probe": bool_setting(&settings, "window_probe", true),
@@ -371,6 +376,50 @@ fn runtime_settings(settings: &Map<String, Value>, app: &Arc<App>) -> Value {
         "usage_dir": app.state.usage_dir.display().to_string(),
         "settings_file": app.state.accounts_dir.join("settings.json").display().to_string(),
         "version": crate::VERSION,
+    })
+}
+
+/// `wb_codearts.SNAP_HOST`：面板/健康检查里展示的 CodeArts 入口。
+pub const CODEARTS_SNAP_HOST: &str = "https://snap-access.cn-north-4.myhuaweicloud.com";
+
+/// `wb_codearts.configured_config`：只认 settings 里 `codearts.enabled is True`。
+pub fn codearts_configured(settings: &Map<String, Value>) -> bool {
+    settings
+        .get("codearts")
+        .and_then(|value| value.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// `wb_codearts.load_config` + `masked_config` 的形状（面板设置页直接读这些键）。
+pub fn codearts_masked(settings: &Map<String, Value>) -> Value {
+    fn number(raw: Option<&Value>, default: f64, low: f64, high: f64) -> Value {
+        let value = raw
+            .and_then(|value| value.as_f64())
+            .filter(|value| value.is_finite())
+            .unwrap_or(default)
+            .clamp(low, high);
+        // Python 侧这些字段有的存成整数（max_concurrent），照原类型回。
+        if value.fract() == 0.0 {
+            json!(value as i64)
+        } else {
+            json!(value)
+        }
+    }
+    let raw = settings.get("codearts");
+    let field = |key: &str| raw.and_then(|value| value.get(key));
+    let enabled = field("enabled").and_then(Value::as_bool).unwrap_or(false);
+    json!({
+        "enabled": enabled,
+        "timeout_seconds": number(field("timeout_seconds"), 30.0, 1.0, 600.0),
+        "stream_timeout_seconds": number(field("stream_timeout_seconds"), 600.0, 1.0, 3600.0),
+        "models_ttl_seconds": number(field("models_ttl_seconds"), 300.0, 60.0, 86400.0),
+        "max_concurrent": number(field("max_concurrent"), 1.0, 1.0, 20.0),
+        "benefit_auto_claim": field("benefit_auto_claim").and_then(Value::as_bool).unwrap_or(true),
+        "credits_auto_claim": field("credits_auto_claim").and_then(Value::as_bool).unwrap_or(true),
+        "configured": enabled,
+        "accounts": 0,
+        "healthy": 0,
     })
 }
 

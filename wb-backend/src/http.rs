@@ -253,35 +253,65 @@ pub fn session_key_body(body: &Value) -> Option<String> {
 }
 
 pub fn requested_realm(req: &Request<Incoming>, current: &str) -> String {
+    // `codearts` 也原样放行：rust 还没实现这个出口，明确回「池子里没有可用账号」
+    // 比悄悄按当前出口派单诚实（v1.10.0 的第三个 realm）。
+    fn accept(value: &str) -> Option<String> {
+        matches!(value, "cn" | "intl" | "codearts").then(|| value.to_string())
+    }
     if let Some(q) = req.uri().query() {
         for pair in q.split('&') {
             if let Some(v) = pair.strip_prefix("realm=") {
-                if v == "cn" || v == "intl" {
-                    return v.to_string();
+                if let Some(realm) = accept(v) {
+                    return realm;
                 }
             }
         }
     }
     if let Some(v) = req.headers().get("x-realm").and_then(|v| v.to_str().ok()) {
-        if v == "cn" || v == "intl" {
-            return v.to_string();
+        if let Some(realm) = accept(v) {
+            return realm;
         }
     }
     current.to_string()
 }
 
+/// 面板设置 `max_payload_mb` 生效后的上限；0 = 还没配置过，回落环境变量。
+static PAYLOAD_LIMIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// 请求体上限：`WB_MAX_PAYLOAD_BYTES`，默认 16 MiB（wb_proxy.py:42）。
-fn payload_limit() -> usize {
+fn env_payload_limit() -> usize {
     std::env::var("WB_MAX_PAYLOAD_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(16 * 1024 * 1024)
 }
 
+/// 面板的 `max_payload_mb`（1..=256）优先，没设就用环境变量/默认值。
+pub fn payload_bytes_effective(settings: &serde_json::Map<String, Value>) -> usize {
+    settings
+        .get("max_payload_mb")
+        .and_then(Value::as_i64)
+        .filter(|mb| (1..=256).contains(mb))
+        .map(|mb| mb as usize * 1024 * 1024)
+        .unwrap_or_else(env_payload_limit)
+}
+
+/// 启动时与每次保存设置都调一次：改完立刻生效，不用重启（v1.10.0 的设置项）。
+pub fn apply_payload_limit(settings: &serde_json::Map<String, Value>) {
+    PAYLOAD_LIMIT.store(payload_bytes_effective(settings), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn payload_limit() -> usize {
+    match PAYLOAD_LIMIT.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => env_payload_limit(),
+        limit => limit,
+    }
+}
+
 /// 超限报文的 `gateway_hint`（wb_proxy.py:13722）——客户端/人靠它知道去改哪个开关。
 fn gateway_hint_413() -> &'static str {
-    "single request body exceeds the gateway cap (WB_MAX_PAYLOAD_BYTES, default 16MB); \
-     raise it and restart wb-proxy"
+    "single request body exceeds the gateway cap; reduce the request or \
+     increase the limit in panel settings (or WB_MAX_PAYLOAD_BYTES before startup)"
 }
 
 /// 读整个请求体；超限时回 Python 版同一条 413 报文。
@@ -313,6 +343,20 @@ mod tests {
     use http_body_util::BodyExt;
 
     use super::*;
+
+    #[test]
+    fn payload_limit_follows_the_panel_setting() {
+        let empty = serde_json::Map::new();
+        assert_eq!(payload_bytes_effective(&empty), 16 * 1024 * 1024);
+        let mut settings = serde_json::Map::new();
+        settings.insert("max_payload_mb".into(), json!(3));
+        assert_eq!(payload_bytes_effective(&settings), 3 * 1024 * 1024);
+        // 越界值不生效（保存时本就拦掉了，这里防手工改坏 settings.json）。
+        for bad in [0, 257, -5] {
+            settings.insert("max_payload_mb".into(), json!(bad));
+            assert_eq!(payload_bytes_effective(&settings), 16 * 1024 * 1024);
+        }
+    }
 
     #[tokio::test]
     async fn api_error_envelope_has_python_code_field() {

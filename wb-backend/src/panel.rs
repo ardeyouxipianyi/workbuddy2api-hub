@@ -747,6 +747,21 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
         if key == "limits" || crate::panel_limits::is_limit_key(key) {
             continue;
         }
+        // 单请求体上限（v1.10.0）：1–256 的整数，越界就是 400，别落盘成坏值。
+        if key == "max_payload_mb" {
+            let Some(mb) = value.as_i64().filter(|mb| (1..=256).contains(mb)) else {
+                return json_resp(
+                    StatusCode::BAD_REQUEST,
+                    &json!({"error": {
+                        "message": "max_payload_mb must be an integer between 1 and 256",
+                        "code": 400,
+                    }}),
+                );
+            };
+            settings.insert(key.clone(), json!(mb));
+            applied.push(key.clone());
+            continue;
+        }
         // 观察清单要先规整（去空白/去重/保序），与 Python 版落盘的口径一致。
         if key == "quota_scan_models" {
             let Some(models) = clean_models(value) else {
@@ -769,6 +784,8 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
                     // 日志落库四键：老配置里没有它们，但面板要能第一次就打开落库。
                     | "log_db_enabled" | "log_db_max_rows" | "log_db_max_days"
                     | "log_db_max_bytes"
+                    // 请求体上限与 CodeArts 配置同理：面板第一次改就得能写进去。
+                    | "max_payload_mb" | "codearts"
             );
         if !known {
             continue;
@@ -792,6 +809,8 @@ async fn settings_save(app: &std::sync::Arc<App>, req: Request<Incoming>) -> Res
             app.pool.refresh_guards(&app.state, limits_changed);
             // 日志落库的开关与上限改完立即生效（Python 的 apply_log_db_settings）。
             app.logs.configure_from(&app.state.settings_snapshot());
+            // 请求体上限同理：面板改完立刻生效，不用重启。
+            crate::http::apply_payload_limit(&app.state.settings_snapshot());
             app.log("settings", "INFO", &format!("设置已保存: {}", applied.join(", ")));
             json_resp(StatusCode::OK, &json!({"ok": true, "applied": applied}))
         }

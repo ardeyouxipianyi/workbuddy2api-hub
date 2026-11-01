@@ -207,6 +207,7 @@ async fn main() -> std::io::Result<()> {
     app.pool.refresh_guards(&app.state, false);
     // 日志落库开关与保留上限来自面板设置（Python 在启动后与每次保存设置时各调一次）。
     app.logs.configure_from(&app.state.settings_snapshot());
+    crate::http::apply_payload_limit(&app.state.settings_snapshot());
 
     scheduler::spawn(app.clone());
     updates::spawn(app.clone());
