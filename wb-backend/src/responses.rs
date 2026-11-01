@@ -77,6 +77,11 @@ pub fn to_chat(body: &Value) -> Result<Value, String> {
             chat.insert(key.into(), value.clone());
         }
     }
+    // Codex 把档位放在 reasoning.effort 里，chat 协议只认 reasoning_effort
+    // （responses_to_chat:16790）；漏掉它等于请求永远跑目录默认档。
+    if let Some(effort) = body.get("reasoning").and_then(|value| value.get("effort")) {
+        chat.insert("reasoning_effort".into(), effort.clone());
+    }
     if let Some(tools) = body.get("tools").and_then(Value::as_array) {
         let mut out = Vec::new();
         for tool in tools {
@@ -101,6 +106,36 @@ pub fn to_chat(body: &Value) -> Result<Value, String> {
         }
     }
     Ok(Value::Object(chat))
+}
+
+/// `custom_tool_names`（wb_proxy.py:15995）：type=custom 的工具名，递归进 namespace。
+/// 只给日志行用；namespace 里塞的是 `tools`/`children`/`functions` 三种拼法。
+fn custom_tool_names(tools: Option<&Value>) -> std::collections::BTreeSet<String> {
+    fn walk(tools: Option<&Value>, depth: usize, names: &mut std::collections::BTreeSet<String>) {
+        if depth > 4 {
+            return;
+        }
+        let Some(items) = tools.and_then(Value::as_array) else {
+            return;
+        };
+        for tool in items {
+            let Some(map) = tool.as_object() else { continue };
+            let kind = map.get("type").and_then(Value::as_str).unwrap_or("");
+            if kind.eq_ignore_ascii_case("custom") {
+                if let Some(name) = map.get("name").and_then(Value::as_str) {
+                    names.insert(name.to_string());
+                }
+            } else if kind.eq_ignore_ascii_case("namespace") {
+                let subs = ["tools", "children", "functions"]
+                    .iter()
+                    .find_map(|key| map.get(*key).filter(|value| value.is_array()));
+                walk(subs, depth + 1, names);
+            }
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    walk(tools, 0, &mut names);
+    names
 }
 
 fn text_of(item: &Value) -> String {
@@ -201,11 +236,23 @@ pub async fn handle(
     let session = session.or_else(|| crate::http::session_key_body(&body));
     let session = session.as_deref();
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    // Python 的 `responses: model=… effort=%r tools=%d/%d custom_tools=%s compaction=%s …`
+    // （自定义工具名是排查「调用不执行」那类问题的唯一线索，别省）。
+    let model = chat_body.get("model").and_then(Value::as_str).unwrap_or("-");
+    let custom = custom_tool_names(body.get("tools"));
     app.note(&format!(
-        "responses: model={} stream={} msgs={} key={}",
-        chat_body.get("model").and_then(Value::as_str).unwrap_or("-"),
-        stream,
+        "responses: model={model} stream={} msgs={} effort={} tools={}/{} custom_tools={} compaction={} key={}",
+        crate::logs::yn(stream),
         chat_body.get("messages").and_then(Value::as_array).map_or(0, Vec::len),
+        crate::logs::show(chat_body.get("reasoning_effort")),
+        chat_body.get("tools").and_then(Value::as_array).map_or(0, Vec::len),
+        body.get("tools").and_then(Value::as_array).map_or(0, Vec::len),
+        if custom.is_empty() {
+            "-".to_string()
+        } else {
+            format!("[{}]", custom.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", "))
+        },
+        crate::logs::yn(compact),
         key_id.get(..8).unwrap_or(&key_id),
     ));
     app.inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -505,4 +552,42 @@ async fn stream_response(
     headers.insert(hyper::header::CACHE_CONTROL, hyper::header::HeaderValue::from_static("no-cache"));
     headers.insert(hyper::header::CONNECTION, hyper::header::HeaderValue::from_static("close"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn to_chat_carries_reasoning_effort_from_reasoning_block() {
+        let chat = super::to_chat(&serde_json::json!({
+            "model": "deepseek-v4.1-flash", "input": "hi",
+            "reasoning": {"effort": "low"}
+        }))
+        .expect("convert");
+        assert_eq!(chat["reasoning_effort"], "low");
+        // 两处都写了时 reasoning.effort 优先（Python 先读它，没有才回退顶层）。
+        let chat = super::to_chat(&serde_json::json!({
+            "model": "m", "input": "hi", "reasoning_effort": "high",
+            "reasoning": {"effort": "low"}
+        }))
+        .expect("convert");
+        assert_eq!(chat["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn custom_tool_names_reaches_into_namespaces() {
+        let tools = serde_json::json!([
+            {"type": "function", "name": "read_file"},
+            {"type": "custom", "name": "exec"},
+            {"type": "namespace", "name": "functions", "children": [
+                {"type": "custom", "name": "shell"},
+                {"type": "namespace", "functions": [{"type": "CUSTOM", "name": "apply_patch"}]}
+            ]}
+        ]);
+        assert_eq!(
+            super::custom_tool_names(Some(&tools)).into_iter().collect::<Vec<_>>(),
+            vec!["apply_patch", "exec", "shell"]
+        );
+        // 没有 tools 就是空集，日志行才印得出 "-"。
+        assert!(super::custom_tool_names(None).is_empty());
+    }
 }

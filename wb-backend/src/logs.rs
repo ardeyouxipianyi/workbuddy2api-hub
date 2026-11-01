@@ -126,7 +126,9 @@ impl Logs {
     pub fn new(usage_dir: impl Into<PathBuf>) -> Logs {
         Logs {
             ring: Mutex::new(VecDeque::new()),
-            next_id: AtomicI64::new(0),
+            // id 从毫秒时间戳起：库被清空或换了份空库重启后，面板手里的 since_id
+            // 仍然只会「往后跳」，不会把旧 id 段重放一遍。
+            next_id: AtomicI64::new(epoch_ms()),
             path: usage_dir.into().join("logs.sqlite3"),
             worker: Mutex::new(None),
         }
@@ -494,6 +496,14 @@ fn stats_db(conn: &Connection, path: &Path) -> Value {
     })
 }
 
+/// 单调的 id 起点来源；系统钟被往回拨时只会在同一进程内退化成「后加的不再更大」。
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|span| span.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn max_id(path: &Path) -> Option<i64> {
     if !path.exists() {
         return None;
@@ -586,6 +596,24 @@ fn now_epoch() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Python `%s` 印 bool 是 True/False；面板里两种拼法混着看很别扭。
+pub fn yn(value: bool) -> &'static str {
+    if value {
+        "True"
+    } else {
+        "False"
+    }
+}
+
+/// Python `%r` 的那点差别：字符串带单引号、没有就说 None。日志行里只是可读性问题。
+pub fn show(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => "None".to_string(),
+        Some(Value::String(text)) => format!("'{text}'"),
+        Some(other) => other.to_string(),
+    }
 }
 
 /// `?since_id=&limit=&level=&tag=&search=`：面板日志页与筛选框用的那组参数。
@@ -772,13 +800,33 @@ mod tests {
         assert_eq!(from_db["logs"].as_array().unwrap().len(), 2);
         assert_eq!(from_db["logs"][1]["msg"], "second");
 
-        // 新进程（新 Logs）接着库里最大 id 续号。
-        let reopened = Logs::new(dir);
+        // 新进程接着库里最大 id 往后记，且 id 段整体往后跳（不会重放旧 id）。
+        let before = from_db["max_id"].as_i64().unwrap();
+        let reopened = Logs::new(dir.clone());
         reopened.configure(true, Caps::default());
         let entry = reopened.add("third", None, Some("system"));
-        assert_eq!(entry["id"].as_i64().unwrap(), 3);
+        assert!(entry["id"].as_i64().unwrap() > before);
         reopened.configure(false, Caps::default());
         logs.configure(false, Caps::default());
+
+        // 库被清空后重启（面板手里的 since_id 是旧的大数）：id 仍必须更大。
+        let mut highest = entry["id"].as_i64().unwrap();
+        let _ = std::fs::remove_file(dir.join("logs.sqlite3"));
+        let fresh = Logs::new(dir);
+        fresh.configure(true, Caps::default());
+        let entry = fresh.add("after wipe", None, Some("system"));
+        assert!(entry["id"].as_i64().unwrap() > highest);
+        highest = entry["id"].as_i64().unwrap();
+        assert!(highest > 1_000_000_000_000, "id 起点应是毫秒时间戳");
+        fresh.configure(false, Caps::default());
+    }
+
+    #[test]
+    fn show_mimics_python_repr() {
+        assert_eq!(show(None), "None");
+        assert_eq!(show(Some(&Value::Null)), "None");
+        assert_eq!(show(Some(&json!("high"))), "'high'");
+        assert_eq!(show(Some(&json!({"type": "disabled"}))), "{\"type\":\"disabled\"}");
     }
 
     #[test]

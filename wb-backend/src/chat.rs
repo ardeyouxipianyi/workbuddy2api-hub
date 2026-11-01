@@ -25,12 +25,26 @@ pub async fn completions(app: &Arc<App>, req: Request<Incoming>, key_id: String)
     let session = session.or_else(|| crate::http::session_key_body(&body));
     let session = session.as_deref();
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    // Python 的 `chat: model=… stream=… msgs=… key=…`：面板日志页的主要来源。
+    // Python 的 `chat: model=… client_effort=%r -> upstream_effort=%r …`：面板日志页的主要来源。
+    // 客户端那栏按 Python 的四种拼法取，实际档位交给 upstream_effort_of 判。
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("-");
+    let given = ["reasoning_effort", "reasoningEffort", "reasoning", "thinking", "enable_thinking"]
+        .iter()
+        .find_map(|key| body.get(*key).filter(|value| !value.is_null()));
+    let effort = crate::upstream::upstream_effort_of(&body, &realm, model);
+    let effort = effort.as_deref().map(Value::from);
+    // msgs 数的是**发出去的**消息：build_upstream_body 会在首条不是 system 时补一条。
+    let messages = body.get("messages").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    let injected = !matches!(
+        messages.first().and_then(|m| m.get("role")).and_then(Value::as_str),
+        Some("system")
+    );
     app.note(&format!(
-        "chat: model={} stream={} msgs={} key={}",
-        body.get("model").and_then(Value::as_str).unwrap_or("-"),
-        stream,
-        body.get("messages").and_then(Value::as_array).map_or(0, Vec::len),
+        "chat: model={model} client_effort={} -> upstream_effort={} stream={} msgs={} key={}",
+        crate::logs::show(given),
+        crate::logs::show(effort.as_ref()),
+        crate::logs::yn(stream),
+        messages.len() + usize::from(injected),
         key_id.get(..8).unwrap_or(&key_id),
     ));
     app.inflight.fetch_add(1, Ordering::Relaxed);
