@@ -291,7 +291,9 @@ class UsageParity(unittest.TestCase):
                 for row in rows:
                     fh.write(json.dumps(row) + "\n")
             with open(os.path.join(self.tmp, label, "accounts", "settings.json"), "w") as fh:
-                json.dump({"api_keys": []}, fh)
+                # 关掉计价自动刷新：两边都别去联网抓价表，否则「谁先抓到」
+                # 决定 cost_cny，对拍就成了看网络快慢（CI 上就红过一次）。
+                json.dump({"api_keys": [], "pricing_refresh_minutes": 0}, fh)
         self.py = Backend(
             "py",
             [sys.executable, os.path.join(REPO, "wb_proxy.py"), "--host", "127.0.0.1",
