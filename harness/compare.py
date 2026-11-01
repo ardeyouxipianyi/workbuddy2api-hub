@@ -393,8 +393,16 @@ def diff_usage(left_dir, right_dir):
     # （backend-capabilities.json 的 pricing 仍 ported:false），所以这一列恒为 null。
     # 拿它比对只会暴露「Rust 不做计价」这件已知的事，与请求语义无关。
     known_gaps = {"cost_policy"}
+    # 非流式请求的「首包」取决于上游把整包分几次给过来：一次读完就没有首包，
+    # 这两个后端都只在观察到首包时才记 ttft/gen（tokens_per_sec 由 gen 推出来）。
+    # 同一个请求在两边的读次数不必相同，所以这几个键按「波动值」处理，
+    # 否则对拍会随机器快慢时红时绿。
+    timing = {"ttft_ms", "gen_ms", "tokens_per_sec"}
     for key in sorted(shared, key=str):
         lrow, rrow = left[key], right[key]
+        if key[2] is False:
+            lrow = {k: v for k, v in lrow.items() if k not in timing}
+            rrow = {k: v for k, v in rrow.items() if k not in timing}
         if lrow == rrow:
             continue
         skip = {k: (lrow.get(k), rrow.get(k)) for k in known_gaps if lrow.get(k) != rrow.get(k)}
