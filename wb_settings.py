@@ -1718,12 +1718,18 @@ MEDIA_DEFAULTS = {
     # 这是第二道闸门：key 级防「一个客户端把整个池子烧光」，账号级的
     # daily_credit_limit 防「某个账号被烧穿」。两层都过才派发。
     "daily_credits_per_key": 200,
+    # 同时跑几条生视频。超过就排队（不提交上游、不扣费），等有任务结束再自动提交。
+    # 3 是"三条并行、各占一个账号"的默认：再多会放大同一账号的风控面，
+    # 而账号数不足时排队比硬塞更划算。
+    "video_concurrency": 3,
 }
 
 MEDIA_LIMITS = {
     "image_max_per_minute": 60,
     "video_max_seconds": 60,
     "daily_credits_per_key": 100000,
+    # 上限压在媒体并发槽（4）以内：再大也没有东西去跑。
+    "video_concurrency": 8,
 }
 
 #: 每个数值项的合法下界。生图次数与视频时长至少 1 秒/次；每日额度允许 0（不限）。
@@ -1731,6 +1737,7 @@ MEDIA_MINIMUMS = {
     "image_max_per_minute": 1,
     "video_max_seconds": 1,
     "daily_credits_per_key": 0,
+    "video_concurrency": 1,
 }
 
 MEDIA_REALMS = ("cn", "intl")

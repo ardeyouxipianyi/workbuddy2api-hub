@@ -489,7 +489,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 | GET | /v1/media/models | 该区可用的生图 / 生视频模型与各自约束（时长区间、分辨率、比例、prompt 上限），只读 |
 | POST | /v1/images/generations | 文生图，OpenAI Images 形状；**默认关闭**，需在设置页打开媒体能力 |
 | POST | /v1/images/edits | 改图 / 图生图；`image` 只接受 data URL 或公网 http(s) |
-| POST | /v1/videos | 提交文生 / 图生视频任务，立刻 202 + 任务 id；`?wait=1` 阻塞到完成 |
+| POST | /v1/videos | 提交文生 / 图生视频任务，立刻 202 + 任务 id；`?wait=1` 阻塞到完成。**并发满时先排队**（不提交上游、不扣积分，返回 `queue_position`），并行任务尽量分到不同账号 |
 | GET | /v1/videos/\<id\> | 查生视频任务状态（OpenAI Video API 形状，`status` ∈ queued / in_progress / completed / failed） |
 | GET | /v1/videos/\<id\>/content | 下载产物 mp4；支持 `?t=` 签名令牌，浏览器与播放器可直接打开 |
 | GET | /v1/media/tasks | 最近的生视频任务与队列统计；每个 API Key 只看得到自己的 |
@@ -518,6 +518,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 - **新增生图 / 生视频能力（默认关闭）**：`POST /v1/images/generations`、`/v1/images/edits`、`/v1/videos`（+ `/{id}` 查状态、`/{id}/content` 下 mp4）、`GET /v1/media/models`。视频是**异步任务**：提交立刻 202，后台 worker 轮询到完成再下载，`?wait=1` 可阻塞。复用现有账号池（面板权重 / 临期积分优先 / 轮转 / 熔断全部继承），单次调用约 5.7 积分一张图、57–129 积分一条 5 秒视频，所以默认关闭、按 Key 限每分钟次数与每日积分、且一次只出一张/一条。输入图只接受 data URL 与公网 http(s)——本地路径会让网关把服务器上的文件发给上游。设计、实现与测试记录见 `docs/MEDIA-PLAN.md`、`docs/MEDIA-IMPL.md`、`docs/MEDIA-TEST-PLAN.md`。**注意：媒体接口目前不幂等，请勿对超时请求自动重试**（会重复扣费）。 / **New image and video generation (off by default)**: `POST /v1/images/generations`, `/v1/images/edits`, `/v1/videos` (plus `/{id}` for status and `/{id}/content` for the mp4) and `GET /v1/media/models`. Video is an **async task**: submission returns 202 immediately, a background worker polls to completion and downloads, and `?wait=1` blocks instead. It reuses the existing account pool (panel weights, expiring-credits preference, rotation and breakers all apply); one image costs about 5.7 credits and a 5-second video 57–129, hence off by default, per-key per-minute and per-day caps, and one image or clip per request. Input images accept only data URLs or public http(s) — local paths would make the gateway send server files upstream. Design, implementation and test records live in `docs/MEDIA-PLAN.md`, `docs/MEDIA-IMPL.md` and `docs/MEDIA-TEST-PLAN.md`. **Note: the media endpoints are not idempotent — do not auto-retry a timed-out request** (it would be billed twice).
 
+- **媒体能力（生图 / 生视频）**：设置页新增「媒体」分区与独立页签，默认关闭。开关、接口形状与已知限制见 [docs/MEDIA-IMPL.md](docs/MEDIA-IMPL.md)。生视频默认 **3 并发**（`video_concurrency` 可调）：超过上限的新任务在本地排队、**不提交上游也不扣积分**，有任务结束时自动提交；并行任务会优先分配到**没有在跑任务的账号**上。**本接口不幂等**，超时请先轮询任务状态，不要直接重发。
 - **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
 - **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。

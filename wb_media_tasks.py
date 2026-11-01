@@ -44,9 +44,16 @@ import time
 
 import wb_media
 
-#: 同时轮询的任务数。默认 1：视频本来就慢，串行不损失什么，而**同一账号同时跑两条**
-#: 是明确的风控放大面。需要并发时调大它。
-DEFAULT_WORKERS = 1
+#: 同时在跑的生视频任务数。**这是"并发生成"的闸**：超过它的提交不进上游，先在我们
+#: 这边排队（status=waiting），等有任务结束再提交。
+#:
+#: 默认 3 与默认工人数相同：每条在跑的任务各占一个轮询线程，避免一条的轮询拖住其它条。
+#: 为什么不设更大：真正的成本在上游——同一账号同时跑多条会放大风控面，所以调度器
+#: 会把并行任务分散到**不同账号**（`busy_accounts()`），账号不够时宁可排队。
+DEFAULT_CONCURRENCY = 3
+#: 轮询线程数。**默认等于并发数**：一条任务的轮询可能阻塞几十秒（上游慢/超时），
+#: 单线程会把其他条一起拖住，看起来像"并发没生效"。
+DEFAULT_WORKERS = 3
 #: 未完成任务超过这个数就拒绝**新提交**（在花钱之前拦）。视频按分钟算，20 条已经是
 #: 很长的等待了；再多客户端还不如直接看到 429。
 DEFAULT_MAX_PENDING = 20
@@ -85,6 +92,7 @@ class MediaTaskStore(object):
     """
 
     def __init__(self, out_dir=None, workers=DEFAULT_WORKERS,
+                 concurrency=DEFAULT_CONCURRENCY,
                  max_pending=DEFAULT_MAX_PENDING, max_tasks=DEFAULT_MAX_TASKS,
                  max_disk_mb=DEFAULT_MAX_DISK_MB, ttl_days=DEFAULT_TTL_DAYS,
                  client=None, resolve_account=None, logger=None, clock=None,
@@ -92,6 +100,14 @@ class MediaTaskStore(object):
         self.out_dir = out_dir or default_out_dir()
         self.state_path = os.path.join(self.out_dir, "tasks.json")
         self.workers = max(1, int(workers))
+        self.concurrency = max(1, int(concurrency))
+        #: 等待提交的任务体：`task_id → {body, model, realm, key}`。**只在内存里**——
+        #: 这些任务还没花过钱，重启直接丢弃（标 failed 让客户端重试）比把 prompt
+        #: 整段写进磁盘更合适。
+        self._waiting_bodies = {}
+        #: 提交器：`fn(task) -> {upstream_id, account, warning?}`。由 wb_proxy 注入，
+        #: 因为"选哪个账号、怎么提交"属于服务层的事，任务表只管调度。
+        self._submitter = None
         self.max_pending = max(1, int(max_pending))
         self.max_tasks = max(1, int(max_tasks))
         self.max_disk_bytes = int(max_disk_mb) * 1024 * 1024
@@ -190,6 +206,141 @@ class MediaTaskStore(object):
             self.ensure_worker()
         return dict(task)
 
+    def create_pending(self, model, params, body, realm="cn", key=""):
+        """登记一个**还没提交到上游**的任务（排队中，没花钱）。
+
+        与 `create()` 的区别就是钱：`create()` 记的是"上游已受理、已扣费"，失败也只能
+        认亏；这里失败说明**一分没花**，可以放心让客户端重试。
+
+        `body` 留在内存（`_waiting_bodies`），不进磁盘：这些任务最终要么提交、要么在
+        重启时作废，把 prompt 整段写盘没有收益。
+        """
+        with self._lock:
+            task_id = self._new_id()
+            now = self._clock()
+            prompt = ""
+            if isinstance(body, dict):
+                prompt = body.get("prompt") or ""
+            task = {
+                "id": task_id,
+                "status": "waiting",
+                "model": model,
+                "realm": realm,
+                "account": None,
+                "key": key or "",
+                "upstream_id": None,
+                "seconds": params.get("seconds"),
+                "resolution": params.get("resolution"),
+                "aspect_ratio": params.get("aspect_ratio"),
+                "enable_audio": params.get("enable_audio"),
+                "image_to_video": bool(params.get("image_to_video")),
+                "prompt_head": prompt[:80],
+                "prompt_len": len(prompt),
+                "created_at": int(now),
+                "started_at": None,
+                "completed_at": None,
+                "credit": None,
+                "error": "",
+                "videos": [],
+                "warnings": list(params.get("warnings") or []),
+            }
+            self._tasks[task_id] = task
+            self._order.append(task_id)
+            self._waiting_bodies[task_id] = {"body": body, "model": model,
+                                             "realm": realm, "key": key or ""}
+            self._evict_locked()
+            self._persist_locked()
+        if self.autostart:
+            self.ensure_worker()
+        return dict(task)
+
+    def set_submitter(self, submitter):
+        """注入"怎么提交"（选账号 + 调上游）。`None` 表示本进程不代提。"""
+        self._submitter = submitter
+
+    def active_count(self):
+        """**已经提交到上游、还没结束**的任务数（= 真正占着并发的那些）。"""
+        with self._lock:
+            return sum(1 for task in self._tasks.values()
+                       if task["status"] in ("queued", "running"))
+
+    def busy_accounts(self):
+        """正在跑任务的账号 uid 集合。调度器用它把并行任务摊到不同账号上。"""
+        with self._lock:
+            return {task.get("account") for task in self._tasks.values()
+                    if task["status"] in ("queued", "running") and task.get("account")}
+
+    def waiting_count(self):
+        with self._lock:
+            return sum(1 for task in self._tasks.values() if task["status"] == "waiting")
+
+    def queue_position(self, task_id):
+        """排队位次（1 = 下一个被提交）。不在队列里返回 0。"""
+        with self._lock:
+            if self._tasks.get(task_id, {}).get("status") != "waiting":
+                return 0
+            waiters = [tid for tid in self._order
+                       if self._tasks.get(tid, {}).get("status") == "waiting"]
+            try:
+                return waiters.index(task_id) + 1
+            except ValueError:
+                return 0
+
+    def _pump(self):
+        """把排队中的任务尽量提交出去：并发未满 + 有等待者 + 有提交器。
+
+        由 worker 的空转分支与任务结束时调用。**不阻塞、不重试**：提交失败就把任务标
+        `rejected`（一分没花），让客户端改参数重来，而不是在后台反复烧上游。
+        """
+        submitter = self._submitter
+        if submitter is None:
+            return
+        while True:
+            with self._lock:
+                if self.active_count() >= self.concurrency:
+                    return
+                candidate = next((tid for tid in self._order
+                                  if self._tasks.get(tid, {}).get("status") == "waiting"),
+                                 None)
+                if candidate is None:
+                    return
+                # 先占位再提交：否则两个 worker 会同时挑中同一条。
+                self._tasks[candidate]["status"] = "submitting"
+                snapshot = dict(self._tasks[candidate])
+            payload = self._waiting_bodies.pop(candidate, None)
+            if payload is None:
+                self._finish(candidate, "failed",
+                             error="排队中的任务体丢失（进程重启过），请重新提交")
+                continue
+            task_for_submit = dict(snapshot)
+            task_for_submit.update(payload)
+            try:
+                outcome = submitter(task_for_submit) or {}
+            except wb_media.MediaError as exc:
+                # 未扣费：可以放心让客户端立刻重试。
+                self._finish(candidate, "rejected", error=exc.message)
+                continue
+            except Exception as exc:                      # noqa: BLE001
+                self._finish(candidate, "rejected", error="提交失败：%s" % (exc,))
+                continue
+            upstream_id = outcome.get("upstream_id")
+            if not upstream_id:
+                self._finish(candidate, "rejected", error="上游没有返回任务 id")
+                continue
+            with self._lock:
+                task = self._tasks.get(candidate)
+                if task is not None:
+                    task.update({
+                        "status": "queued",
+                        "upstream_id": upstream_id,
+                        "account": outcome.get("account") or task.get("account"),
+                    })
+                    if outcome.get("warning"):
+                        task.setdefault("warnings", []).append(outcome["warning"])
+                self._persist_locked()
+            # 交给轮询队列（与同步提交成功的任务同一条路）。
+            self._queue.put(candidate)
+
     def get(self, task_id):
         with self._lock:
             task = self._tasks.get(str(task_id or ""))
@@ -212,7 +363,13 @@ class MediaTaskStore(object):
                 counts[task["status"]] = counts.get(task["status"], 0) + 1
             return {"total": len(self._tasks), "pending": self.pending_count(),
                     "by_status": counts, "queue_depth": self._queue.qsize(),
-                    "workers": self.workers}
+                    "workers": self.workers,
+                    # 并发生视频：concurrency 是在跑的上限，active 是当前占位，
+                    # waiting 是排队等提交（**没花钱**）的条数。
+                    "concurrency": self.concurrency,
+                    "active": self.active_count(),
+                    "waiting": self.waiting_count(),
+                    "busy_accounts": len(self.busy_accounts())}
 
     def cancel(self, task_id):
         """本地放弃一个还没开始轮询的任务。
@@ -308,6 +465,12 @@ class MediaTaskStore(object):
             try:
                 task_id = self._queue.get(timeout=0.5)
             except queue.Empty:
+                # 空转时看看有没有排队等提交的任务：并发有空位就提交它。
+                # 放在这里（而不是定时线程）是为了不引入第三个循环。
+                try:
+                    self._pump()
+                except Exception:                         # noqa: BLE001
+                    pass
                 continue
             if task_id is None:
                 break
@@ -317,6 +480,11 @@ class MediaTaskStore(object):
                 self._finish(task_id, "failed", error="worker crashed: %s" % (exc,))
             finally:
                 self._queue.task_done()
+                # 一条结束就腾出一个并发位：立刻提交排队中的下一条。
+                try:
+                    self._pump()
+                except Exception:                         # noqa: BLE001
+                    pass
 
     def _run_task(self, task_id):
         task = self.get(task_id)
@@ -468,6 +636,11 @@ class MediaTaskStore(object):
             if task.get("status") in ("queued", "running"):
                 task["status"] = "lost"
                 task["error"] = "网关重启时任务仍在进行，上游可能已扣费"
+            elif task.get("status") in ("waiting", "submitting"):
+                # 还没提交到上游 ⇒ **一分没花**，按 failed 报并明说可以重试。
+                # 与 lost 的区别很重要：lost 意味着钱可能已经花了。
+                task["status"] = "failed"
+                task["error"] = "排队期间网关重启（未提交到上游，未扣费），请重新提交"
             self._tasks[task["id"]] = task
             self._order.append(task["id"])
         self._log("media tasks: 读回 %d 条历史任务" % len(self._order))

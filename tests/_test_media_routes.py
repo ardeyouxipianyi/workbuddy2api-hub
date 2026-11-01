@@ -897,6 +897,61 @@ class ReferenceValidationOrderTests(MediaRouteCases):
         self.assertIn("互斥", json.dumps(message, ensure_ascii=False) if not isinstance(message, str) else message)
 
 
+class VideoConcurrencyTests(MediaRouteCases):
+    """并发生视频：满了就排队（不提交、不花钱），并行任务摊到不同账号。"""
+
+    def setUp(self):
+        super(VideoConcurrencyTests, self).setUp()
+        self.saved_tasks = P._MEDIA_TASKS
+        _STORE_SEQ[0] += 1
+        self.store = T.MediaTaskStore(
+            out_dir=os.path.join(_TMP.name, "conc-%d" % _STORE_SEQ[0]),
+            client=object(), resolve_account=lambda uid: FakeAccount(uid),
+            autostart=False)
+        P._MEDIA_TASKS = self.store
+
+    def tearDown(self):
+        P._MEDIA_TASKS = self.saved_tasks
+        self.store.stop()
+
+    def test_full_concurrency_queues_without_submitting(self):
+        store = self.store
+        store.concurrency = 2
+        # 两条已经在跑
+        store.create("kling-video-v3", {"seconds": 5}, "u-1", {"prompt": "a"}, "up-1")
+        store.create("kling-video-v3", {"seconds": 5}, "u-2", {"prompt": "b"}, "up-2")
+        with mock.patch.object(wb_media_client, "submit_video",
+                               side_effect=AssertionError("并发满时不该提交")):
+            handler = self.post(path="/v1/videos",
+                                payload={"prompt": "c", "model": "minimax-video-h3",
+                                         "seconds": 4})
+        code, body = handler.sent
+        self.assertEqual(code, 202)
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["queue_position"], 1)
+        self.assertIn("未扣积分", body["hint"])
+
+    def test_parallel_submissions_avoid_busy_accounts(self):
+        store = self.store
+        store.concurrency = 3
+        store.create("kling-video-v3", {"seconds": 5}, "u-1", {"prompt": "a"}, "up-1")
+        picked = []
+
+        def fake_pick(self_, realm, model_id, cost_hint, excluded):
+            picked.append(set(excluded))
+            return FakeAccount("u-9")
+
+        with mock.patch.object(FakeHandler, "_pick_media_account", fake_pick),                 mock.patch.object(wb_media_client, "submit_video",
+                                  return_value={"taskId": "up-9"}):
+            handler = self.post(path="/v1/videos",
+                                payload={"prompt": "c", "model": "minimax-video-h3",
+                                         "seconds": 4})
+        code, _body = handler.sent
+        self.assertEqual(code, 202)
+        # 第一条抛出的"要避开的账号"里必须包含 u-1。
+        self.assertTrue(any("u-1" in avoided for avoided in picked), picked)
+
+
 class IsolationTests(unittest.TestCase):
     """整个设计里最大的两个承诺，各要一条能失败的证据。"""
 

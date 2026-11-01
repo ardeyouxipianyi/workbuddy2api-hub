@@ -990,6 +990,11 @@ def estimate_cost(kind, seconds=None):
 #: 靠 `error_code_for()` 区分「能不能立刻重试」。
 _STATUS_OUT = {
     "queued": "queued",
+    # 还没提交到上游（在本地排队等并发位）。对外仍然是 queued——对客户端来说
+    # "在排队"和"已受理"没有区别，都是"还没开始出片"。
+    "waiting": "queued",
+    # 正在提交的那一瞬。对外也是 queued，避免客户端看到一闪而过的未知状态。
+    "submitting": "queued",
     "running": "in_progress",
     "completed": "completed",
     "rejected": "failed",

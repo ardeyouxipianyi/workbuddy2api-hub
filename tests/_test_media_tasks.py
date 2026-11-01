@@ -71,12 +71,16 @@ def make_store(client=None, accounts=None, **kwargs):
     """
     accounts = accounts if accounts is not None else {"u-1": FakeAccount()}
     kwargs.setdefault("autostart", False)
+    submitter = kwargs.pop("submitter", None)
     _STORE_SEQ[0] += 1
-    return T.MediaTaskStore(
+    store = T.MediaTaskStore(
         out_dir=os.path.join(_TMP.name, "media-%d" % _STORE_SEQ[0]),
         client=client or FakeClient(),
         resolve_account=lambda uid: accounts.get(uid),
         **kwargs)
+    if submitter is not None:
+        store.set_submitter(submitter)
+    return store
 
 
 PARAMS = {"seconds": 5, "resolution": "720P", "aspect_ratio": "16:9",
@@ -109,8 +113,99 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(stats["total"], 1)
         self.assertEqual(stats["pending"], 1)
         self.assertEqual(stats["by_status"]["queued"], 1)
-        self.assertEqual(stats["workers"], 1)
+        # 轮询线程数默认等于并发数（3）：单线程会被一条慢任务拖住，看起来像并发没生效。
+        self.assertEqual(stats["workers"], store.workers)
+        self.assertEqual(stats["workers"], T.DEFAULT_CONCURRENCY)
+        self.assertEqual(stats["concurrency"], T.DEFAULT_CONCURRENCY)
+        self.assertEqual(stats["active"], 1)
+        self.assertEqual(stats["waiting"], 0)
         store.stop()
+
+
+class QueueTests(unittest.TestCase):
+    """并发闸 + 排队：超过并发数的提交**不进上游、不花钱**。"""
+
+    def test_pending_task_is_not_submitted_yet(self):
+        store = make_store(submitter=None)
+        task = store.create_pending("minimax-video-h3", PARAMS, BODY)
+        self.assertEqual(task["status"], "waiting")
+        self.assertIsNone(task["upstream_id"])
+        self.assertEqual(store.active_count(), 0)     # 没占用并发
+        self.assertEqual(store.waiting_count(), 1)
+        self.assertEqual(store.queue_position(task["id"]), 1)
+        store.stop()
+
+    def test_pump_submits_and_moves_to_queue(self):
+        submitted = []
+
+        def submitter(task):
+            submitted.append(task["id"])
+            return {"upstream_id": "up-9", "account": "u-9"}
+
+        store = make_store(client=FakeClient(), submitter=submitter)
+        task = store.create_pending("minimax-video-h3", PARAMS, BODY)
+        store._pump()
+        self.assertEqual(submitted, [task["id"]])
+        row = store.get(task["id"])
+        self.assertEqual(row["status"], "queued")     # 已受理，等轮询
+        self.assertEqual(row["upstream_id"], "up-9")
+        self.assertEqual(row["account"], "u-9")
+        store.stop()
+
+    def test_pump_respects_the_concurrency_cap(self):
+        submitted = []
+
+        def submitter(task):
+            submitted.append(task["id"])
+            return {"upstream_id": "up-%d" % len(submitted), "account": "u-1"}
+
+        store = make_store(client=FakeClient(), workers=1, concurrency=2,
+                           submitter=submitter)
+        for _ in range(5):
+            store.create_pending("minimax-video-h3", PARAMS, BODY)
+        store._pump()
+        # 起来 2 条到并发上限就停手；其余仍在排队。
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(store.waiting_count(), 3)
+        store.stop()
+
+    def test_rejected_submission_costs_nothing_and_is_retryable(self):
+        def submitter(task):
+            raise M.MediaError("REJECTED", "上游拒绝：seconds 越界")
+
+        store = make_store(client=FakeClient(), submitter=submitter)
+        task = store.create_pending("minimax-video-h3", PARAMS, BODY)
+        store._pump()
+        row = store.get(task["id"])
+        # 未扣费 → rejected（对外 failed + invalid_request），不是 lost。
+        self.assertEqual(row["status"], "rejected")
+        self.assertIn("越界", row["error"])
+        self.assertEqual(store.active_count(), 0)
+        store.stop()
+
+    def test_busy_accounts_reports_running_tasks(self):
+        store = make_store(submitter=None)
+        store.create("m", PARAMS, "u-1", BODY, "up-1")
+        store.create("m", PARAMS, "u-2", BODY, "up-2")
+        self.assertEqual(store.busy_accounts(), {"u-1", "u-2"})
+        store.stop()
+
+    def test_restart_marks_waiting_as_retryable_not_lost(self):
+        """排队中的任务重启后是 failed（没花钱），不是 lost（钱可能花了）。"""
+        # 两个 store 必须共用同一个产物目录，否则读回来的是空表（每个 make_store
+        # 默认开新目录，见它的 docstring）。
+        out_dir = os.path.join(_TMP.name, "media-restart")
+        store = T.MediaTaskStore(out_dir=out_dir, client=FakeClient(),
+                                 resolve_account=lambda uid: None, autostart=False)
+        store.create_pending("minimax-video-h3", PARAMS, BODY)
+        store.stop()
+
+        reloaded = T.MediaTaskStore(out_dir=out_dir, client=FakeClient(),
+                                    resolve_account=lambda uid: None, autostart=False)
+        row = reloaded.list()[0]
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("未扣费", row["error"])
+        reloaded.stop()
 
 
 class WorkerTests(unittest.TestCase):

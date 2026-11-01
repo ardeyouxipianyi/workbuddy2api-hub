@@ -555,19 +555,101 @@ def media_account_by_uid(uid):
         return None
 
 
+def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
+    """选账号的**模块级**实现（后台提交线程也能用）。
+
+    `Handler._pick_media_account` 只是薄薄一层：它把 self 上的 Key 白名单/钉账号
+    变成参数再调这里。后台线程没有 self，直接调这个。
+    """
+    apply_daily_guards()
+    apply_reserve_credits()
+    hold = restriction_hold_remaining(realm)
+    if hold > 0:
+        raise wb_media.MediaError(
+            "RATE_LIMIT",
+            "上游账号级限制生效中（整池暂停），%d 秒后再试" % (int(hold) + 1))
+    pinned = pinned_account()
+    if pinned is not None:
+        if pinned.realm != realm:
+            raise wb_media.MediaError(
+                "INVALID_ARGS", "钉住的账号属于 %s 出口，媒体只走 %s" % (pinned.realm, realm))
+        if not pinned.ready(model=model_id):
+            raise wb_media.MediaError(
+                "UPSTREAM", "钉住的账号此刻不可用：%s" % pinned.unavailable_reason(model=model_id))
+        ok, reason = media_budget_ok(pinned, cost_hint)
+        if not ok:
+            raise wb_media.MediaError("NO_CREDIT", "钉住的账号付不起这次调用：%s" % reason)
+        return pinned
+    account = POOL.pick(realm=realm, exclude=excluded or set(), model=model_id)
+    if account is None:
+        return None
+    ok, reason = media_budget_ok(account, cost_hint)
+    if not ok:
+        raise wb_media.MediaError("NO_CREDIT", "%s 付不起这次调用：%s" % (account.uid[:8], reason))
+    return account
+
+
 def media_tasks():
-    """生视频任务表的懒单例。"""
+    """生视频任务表的懒单例。
+
+    并发数在这里定：`media.video_concurrency`（默认 3）。轮询线程数跟着它走——一条
+    任务的轮询可能阻塞几十秒，单线程会把其它条一起拖住，看起来像"并发没生效"。
+    """
     global _MEDIA_TASKS
     if _MEDIA_TASKS is None:
         with _MEDIA_TASKS_LOCK:
             if _MEDIA_TASKS is None:
+                concurrency = 3
+                try:
+                    config = wb_settings.media_config(ACCOUNTS_DIR)
+                    concurrency = int(config.get("video_concurrency") or 3)
+                except Exception:
+                    pass
+                concurrency = max(1, concurrency)
                 _MEDIA_TASKS = wb_media_tasks.MediaTaskStore(
                     out_dir=wb_media_tasks.default_out_dir(),
+                    workers=concurrency,
+                    concurrency=concurrency,
                     on_finish=media_task_finished,
                     resolve_account=media_account_by_uid,
                     logger=lambda message: log(message, tag="media"),
                 )
+                # 排队中的任务由任务表回调本函数提交（它自己不知道怎么选账号）。
+                _MEDIA_TASKS.set_submitter(submit_queued_video_task)
     return _MEDIA_TASKS
+
+
+def submit_queued_video_task(task):
+    """把排队中的任务真正提交到上游。返回 `{upstream_id, account}`。
+
+    **只用 task 里带回来的字段**（body/model/realm/key 都在内存队列里），所以这里
+    不依赖请求上下文——后台线程没有 self。失败抛 `wb_media.MediaError`，任务表会把
+    它标成 `rejected`（一分没花、客户端可立刻重试）。
+    """
+    body = task.get("body") or {}
+    model_id = task.get("model")
+    realm = task.get("realm") or "cn"
+    store = media_tasks()
+    # 先把正在跑任务的账号排掉：并行任务摊到不同账号上，别在同一个账号上叠风控。
+    excluded = set(store.busy_accounts() or ())
+
+    def pick(avoid):
+        config = wb_settings.media_config(ACCOUNTS_DIR)
+        try:
+            cost_hint = wb_media.estimate_cost("video", (task.get("seconds") or 5))
+        except Exception:
+            cost_hint = 0
+        return _pick_media_account_for(realm, model_id, cost_hint, avoid, config)
+
+    account = pick(excluded)
+    if account is None:
+        # 所有账号都在跑任务：退一步用任意可用账号（排队总比报错好）。
+        account = pick(set())
+    if account is None:
+        raise wb_media.MediaError("UPSTREAM", "没有可用账号跑这次生视频")
+    submission = wb_media_client.submit_video(account, body)
+    account.note_success(model=model_id)
+    return {"upstream_id": submission["taskId"], "account": account.uid}
 
 
 def read_catalog_dump(realm):
@@ -19533,6 +19615,8 @@ class Handler(BaseHTTPRequestHandler):
             "identity": media_cfg["identity"],
             "slots": MEDIA_SLOTS,
             "inflight": media_inflight(),
+            # 生视频并发：超过就排队，不提交上游、不扣费。
+            "video_concurrency": int(media_cfg.get("video_concurrency") or 3),
         }
         if _MEDIA_TASKS is not None:
             # 只有任务表真的被创建过才报（否则 health 会顺带建目录、起线程）。
@@ -20618,12 +20702,35 @@ class Handler(BaseHTTPRequestHandler):
             self._key_id(), cost_hint, int(config.get("daily_credits_per_key") or 0))
         if not spend_ok:
             return self._media_error(wb_media.MediaError("NO_CREDIT", spend_why))
+        # **并发生视频的闸**：已经在跑的任务达到上限时，本次不提交上游、也不花钱，
+        # 先在我们这边排队（status=queued，对外仍是 queued）。等有条跑完，
+        # 任务表的调度泵会自动提交它。
+        if store.active_count() >= store.concurrency:
+            queued = store.create_pending(model["id"], params, body,
+                                          realm=realm, key=self._key_id())
+            log("media: 并发已满（%d/%d），生视频任务 %s 进入排队"
+                % (store.active_count(), store.concurrency, queued["id"]), tag="media")
+            public = self._media_task_public(queued)
+            public["queue_position"] = store.queue_position(queued["id"])
+            public["hint"] = ("已进入队列，未提交上游、未扣积分；轮询 GET /v1/videos/%s 查看进度"
+                              % queued["id"])
+            return self._json(202, public)
+
         if not acquire_media_slot():
             return self._error(503, "media slots busy (%d in flight); retry shortly"
                                % MEDIA_SLOTS, "server_error")
         try:
             try:
-                account = self._pick_media_account(realm, model["id"], cost_hint, set())
+                # 并行任务优先摊到**没在跑任务**的账号上；都在跑才退一步复用。
+                busy = set(store.busy_accounts() or ())
+                account = None
+                if busy:
+                    try:
+                        account = self._pick_media_account(realm, model["id"], cost_hint, busy)
+                    except wb_media.MediaError:
+                        account = None
+                if account is None:
+                    account = self._pick_media_account(realm, model["id"], cost_hint, set())
             except wb_media.MediaError as exc:
                 return self._media_error(exc)
             started_at = time.time()

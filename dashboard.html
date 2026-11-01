@@ -1524,6 +1524,8 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '每分钟生图上限': 'Images per minute',
     '视频时长上限（秒）': 'Video length cap (seconds)',
     '每 Key 每日积分上限': 'Daily credits per key',
+    '生视频并发': 'Concurrent videos',
+    '生视频并发超过上限时新任务**先排队**（不提交上游、不扣积分），并行任务会尽量分到不同账号上。': 'When the concurrent-video cap is reached, new tasks **queue locally** (not submitted upstream, no credits spent). Parallel tasks are spread across different accounts.',
     '每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。': 'A daily credit cap of 0 means unlimited. The video length cap is combined with each model\'s own limit, whichever is smaller. The outbound identity decides which client the request imitates; desktop accounts usually need no change.',
     '能力': 'Capability',
     '比例': 'Aspect',
@@ -5948,6 +5950,10 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">视频时长上限（秒）</div>
           <input id="setMediaVideoSeconds" type="number" min="1" max="60" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
         </div>
+        <div style="min-width:130px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">生视频并发</div>
+          <input id="setMediaVideoConcurrency" type="number" min="1" max="8" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+        </div>
         <div style="min-width:150px">
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">每 Key 每日积分上限</div>
           <input id="setMediaDailyCredits" type="number" min="0" max="100000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
@@ -5956,6 +5962,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
       <div style="font-size:12px;color:var(--dim);margin-top:10px">
         每 Key 每日积分上限填 0 表示不限。视频时长会与模型目录里的上限取小值。出站身份决定冒充哪种客户端发请求，桌面账号一般不用改。
+        生视频并发超过上限时新任务**先排队**（不提交上游、不扣积分），并行任务会尽量分到不同账号上。
       </div>
     </section>
 
@@ -12289,6 +12296,8 @@ function applyMediaSettings(media){
   if(seconds && cfg.video_max_seconds != null) seconds.value = cfg.video_max_seconds;
   const credits = document.getElementById('setMediaDailyCredits');
   if(credits && cfg.daily_credits_per_key != null) credits.value = cfg.daily_credits_per_key;
+  const conc = document.getElementById('setMediaVideoConcurrency');
+  if(conc && cfg.video_concurrency != null) conc.value = cfg.video_concurrency;
   const state = document.getElementById('setMediaState');
   if(state){
     state.textContent = cfg.enabled === true ? '(已开启)' : '(已关闭)';
@@ -12309,7 +12318,8 @@ async function saveMediaConfig(btn){
       identity: (document.getElementById('setMediaIdentity') || {}).value || 'desktop',
       image_max_per_minute: num('setMediaImageRate', 6),
       video_max_seconds: num('setMediaVideoSeconds', 15),
-      daily_credits_per_key: num('setMediaDailyCredits', 200)
+      daily_credits_per_key: num('setMediaDailyCredits', 200),
+      video_concurrency: num('setMediaVideoConcurrency', 3)
     }
   };
   if(btn) btn.disabled = true;
