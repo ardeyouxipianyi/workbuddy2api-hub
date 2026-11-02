@@ -41,6 +41,7 @@ failed），内部却保留五态（多出 `rejected` 与 `lost`）。两者的�
 `status_out()` / `error_code_for()`，**前端、文档、测试必须共用这一份**，否则
 「同一个失败」在不同地方会有三种说法。
 """
+import base64
 import json
 import re
 
@@ -837,10 +838,45 @@ def parse_video_task(payload):
     outcome = {"status": status, "videos": videos}
     if credit is not None:
         outcome["credit"] = credit
-    error = _as_string(data.get("error")) or _as_string(data.get("error_message"))
+    error, error_code = parse_task_error(data)
     if error is not None:
         outcome["error"] = error
+    if error_code is not None:
+        outcome["error_code"] = error_code
     return outcome
+
+
+def parse_task_error(data):
+    """从轮询响应的 `data` 里读出失败原因，返回 `(message, code)`。
+
+    上游的 `error` **是对象不是字符串**：
+
+        "error": {"code": "2013",
+                  "message": "2013: content[4].video_url: media url unreachable ..."}
+
+    这是实测（2026-11-02）才发现的：原来这里用 `_as_string(data["error"])`，
+    读到 dict 一律返回 None，于是所有上游失败都被报成"上游没有给出原因"——
+    整整两轮带参考素材的排查因此白做（真实原因就写在这个 message 里：
+    参考视频的地址上游抓不到，需要换可达的公网地址或 `mm_file://{file_id}`）。
+
+    所以这里把 dict 形态当一等公民：内层 `message`/`msg`/`error_message` 取正文，
+    `code` 单独留着给上层分类。字符串形态（老响应）仍然兼容。
+    """
+    raw = data.get("error")
+    code = None
+    if isinstance(raw, dict):
+        message = (_as_string(raw.get("message")) or _as_string(raw.get("msg"))
+                   or _as_string(raw.get("error_message")) or _as_string(raw.get("detail")))
+        code = (_as_string(raw.get("code")) or _as_string(raw.get("error_code"))
+                or _as_string(raw.get("type")))
+        if message is None and code is not None:
+            message = "上游错误码 %s（未给说明）" % code
+        if message is None:
+            # 认不出字段就带上原始 JSON，宁可难看也别再说"没有原因"。
+            message = json.dumps(raw, ensure_ascii=False)[:400]
+        return message, code
+    message = _as_string(raw) or _as_string(data.get("error_message"))
+    return message, None
 
 
 # ---------------------------------------------------------------- 失败分类
@@ -956,6 +992,52 @@ def decoded_base64_length(text):
     body = match.group(2).strip()
     padding = body.count("=")
     return max(0, len(body) * 3 // 4 - padding)
+
+
+def is_data_url(text):
+    """是不是内联 data URL（`data:<mime>;base64,…`）。"""
+    if not isinstance(text, str):
+        return False
+    return text.strip().lower().startswith("data:")
+
+
+def split_data_url(text):
+    """把 data URL 拆成 `(bytes, 建议文件名)`。
+
+    文件名要带扩展名：上传到 COS 的 object key 里没有扩展名时，上游判不出这是
+    视频还是音频（实测上传器早先会把 `.mp4` 吃掉，只剩 `mp4`）。类型从 mime 推。
+    """
+    if not is_data_url(text):
+        raise MediaError("INVALID_ARGS", "不是 data URL")
+    header, _, payload = text.strip().partition(",")
+    mime = header[5:].split(";")[0].strip().lower() if header.lower().startswith("data:") else ""
+    try:
+        data = base64.b64decode(payload, validate=False)
+    except Exception as exc:                                  # noqa: BLE001
+        raise MediaError("INVALID_ARGS", "data URL 解不出内容：%s" % exc)
+    if not data:
+        raise MediaError("INVALID_ARGS", "data URL 解不出内容")
+    ext = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+           "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/wav": ".wav",
+           "audio/x-wav": ".wav", "audio/aac": ".aac", "image/png": ".png",
+           "image/jpeg": ".jpg", "image/webp": ".webp"}.get(mime, "")
+    return data, "upload" + (ext or ".bin")
+
+
+def assert_data_url_size(text, limit, label="素材"):
+    """内联素材的体积闸门：空、超限都当场拒，别让上游或内存去承担。
+
+    参考视频/音频走 data URL 时用这个。上限比图片更该卡死——base64 会让体积
+    涨三分之一，而一次请求里最多能带 3 段视频 + 3 段音频。
+    """
+    size = decoded_base64_length(text)
+    if size <= 0:
+        raise MediaError("INVALID_ARGS", "%s的 data URL 解不出内容" % label)
+    if size > limit:
+        raise MediaError(
+            "INVALID_ARGS",
+            "%s %.1f MB，超过 %.0f MB 上限；请压缩后再传，或改用公网 URL"
+            % (label, size / 1048576.0, limit / 1048576.0))
 
 
 def assert_input_image_bytes(byte_length, source="输入图"):

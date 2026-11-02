@@ -39,6 +39,18 @@ CATALOG = {"code": 0, "data": {"models": [
      "tags": ["text-to-image"]},
     {"id": "hunyuan-image-alpha-edit", "name": "Hunyuan Image Alpha Edit",
      "tags": ["image-to-image"]},
+    #: 参考素材只有 minimax 支持（kling 的三个上限都是 0）。夹具原先漏了它，
+    #: 于是"多图+视频混用"这类测试只能拿 kling 顶替，测出来的结论是反的。
+    {"id": "minimax-video-h3", "name": "MiniMax-H3",
+     "tags": ["text-to-video", "image-to-video"],
+     "videoGeneration": {"minSeconds": 4, "maxSeconds": 15, "defaultSeconds": 5,
+                         "resolutions": ["768P", "2K"], "defaultResolution": "768P",
+                         "aspectRatios": ["16:9", "9:16", "1:1"],
+                         "maxPromptLength": 2000, "audioMode": "always-on",
+                         "allowMixedReferenceMaterials": True,
+                         "maxReferenceImages": 9, "maxReferenceVideos": 3,
+                         "maxReferenceAudios": 3, "maxReferenceMaterials": 12,
+                         "framesExclusiveWithReferenceMaterials": True}},
     {"id": "kling-video-v3", "name": "Kling-Video-V3",
      "tags": ["text-to-video", "image-to-video"],
      "videoGeneration": {"minSeconds": 3, "maxSeconds": 15, "defaultSeconds": 5,
@@ -234,7 +246,11 @@ class ParameterGateTests(unittest.TestCase):
 
     def test_video_seconds_below_catalog_minimum(self):
         """目录说 kling 最低 3 秒，本地就该拦下，不必让上游拒一次。"""
-        status, body, _ = _ON.json("POST", "/v1/videos", {"prompt": "海边", "seconds": 1})
+        # 指定 kling：不指定时按目录顺序会先选中 minimax（最低 4 秒），
+        # 这条测的是"按模型自己的下限拦"，所以模型必须写死。
+        status, body, _ = _ON.json("POST", "/v1/videos",
+                                   {"prompt": "海边", "seconds": 1,
+                                    "model": "kling-video-v3"})
         self.assertEqual(status, 400)
         self.assertIn("3", json.dumps(body, ensure_ascii=False))
 
@@ -242,6 +258,54 @@ class ParameterGateTests(unittest.TestCase):
         status, body, _ = _ON.json("POST", "/v1/videos",
                                    {"prompt": "海边", "image": "/etc/passwd"})
         self.assertEqual(status, 400)
+
+
+    def test_reference_video_rejection_names_the_video(self):
+        """参考视频被拒时，报错必须说"参考视频"，不能说"输入图"。
+
+        本地 mp4 会先被客户端转成 data URL，网关在 assert_public_url 拦下。
+        文案如果写"输入图 URL 只支持 http/https"，调用方第一反应是去查首帧，
+        而真正要换掉的是那段视频——排查方向直接跑偏。实测踩过。
+        """
+        status, body, _ = _ON.json(
+            "POST", "/v1/videos",
+            {"prompt": "海边", "seconds": 5,
+             "model": "minimax-video-h3",
+             "reference_videos": ["/etc/passwd"]})
+        self.assertEqual(status, 400)
+        message = json.dumps(body, ensure_ascii=False)
+        self.assertIn("参考视频", message)
+        self.assertNotIn("输入图", message)
+
+    def test_reference_audio_rejection_names_the_audio(self):
+        status, body, _ = _ON.json(
+            "POST", "/v1/videos",
+            {"prompt": "海边", "seconds": 5,
+             "model": "minimax-video-h3",
+             "reference_audios": ["/etc/passwd"]})
+        self.assertEqual(status, 400)
+        message = json.dumps(body, ensure_ascii=False)
+        self.assertIn("参考音频", message)
+        self.assertNotIn("输入图", message)
+
+    def test_reference_images_and_video_may_be_mixed(self):
+        """多图 + 一段视频是允许的组合（minimax allowMixedReferenceMaterials）。
+
+        舞步迁移就是这个用法：三视图锁角色、舞蹈视频给动作。这里只断言
+        **不是被"不允许混用"拦下**，避免把合法组合误拦。
+        """
+        png = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+               "AAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==")
+        status, body, _ = _ON.json(
+            "POST", "/v1/videos",
+            {"prompt": "海边", "seconds": 5,
+             "model": "minimax-video-h3",
+             "reference_images": [png, png, png],
+             "reference_videos": ["/etc/passwd"]})
+        message = json.dumps(body, ensure_ascii=False)
+        self.assertNotIn("不允许混用", message)
+        # 走到视频 URL 校验那一层才被拒，说明混用本身是通过的。
+        self.assertIn("参考视频", message)
 
 
 class PayloadLimitTests(unittest.TestCase):

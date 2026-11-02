@@ -124,6 +124,41 @@ def error_code_of(callable_obj, *args, **kwargs):
 
 # ---------------------------------------------------------------- 目录
 
+class InlineMaterialTests(unittest.TestCase):
+    """参考视频/音频可以走 data URL（2026-11-02 实测上游接受）。
+
+    原来网关只收公网 URL，理由是"data URL 对这两类没有意义"。实测推翻了它：
+    3 张参考图 + 1 段 88KB mp4 的 data URL 提交后照常出片（扣 128.57）。
+    真正要守的是体积闸门——base64 膨胀 4/3，一次请求还能带 3+3 个。
+    """
+
+    def test_is_data_url(self):
+        self.assertTrue(M.is_data_url("data:video/mp4;base64,AAAA"))
+        self.assertTrue(M.is_data_url("  DATA:audio/mp3;base64,AA"))
+        self.assertFalse(M.is_data_url("https://example.com/a.mp4"))
+        self.assertFalse(M.is_data_url("C:/tmp/a.mp4"))
+        self.assertFalse(M.is_data_url(None))
+
+    def test_size_gate_rejects_empty(self):
+        with self.assertRaises(M.MediaError):
+            M.assert_data_url_size("data:video/mp4;base64,", 1024, "参考视频")
+
+    def test_size_gate_rejects_oversize(self):
+        # 4 KB 原始字节 → base64 约 5.4 KB；上限给 1 KB 必拒
+        payload = "data:video/mp4;base64," + ("A" * 5460)
+        with self.assertRaises(M.MediaError):
+            M.assert_data_url_size(payload, 1024, "参考视频")
+
+    def test_size_gate_accepts_within_limit(self):
+        payload = "data:video/mp4;base64," + ("A" * 120)
+        M.assert_data_url_size(payload, 1024, "参考视频")   # 不抛就算过
+
+    def test_size_counts_decoded_bytes_not_string_length(self):
+        """按 base64 字符串长度卡会把合法文件误拒。90 字节原始 → 120 字符。"""
+        payload = "data:video/mp4;base64," + ("A" * 120)
+        self.assertEqual(M.decoded_base64_length(payload), 90)
+
+
 class CatalogProjectionTests(unittest.TestCase):
     def test_reads_data_models_from_full_envelope(self):
         self.assertEqual(len(models()), 4)
@@ -904,6 +939,137 @@ class ReferenceMaterialTests(unittest.TestCase):
             {"prompt": "x", "reference_images": ["https://a/1.png", 42, {}]},
             dict(self.GENERATION))
         self.assertEqual(params["references"]["reference_images"], ["https://a/1.png"])
+
+
+
+
+class ReferenceUploadTests(unittest.TestCase):
+    """参考视频/音频的 data URL 必须在提交前换成上传后的 download_url。
+
+    上游对 `video_url` 是真去下载的：data URL 抓不到，实测报
+    `2013: content[4].video_url: media url unreachable`。官方客户端走的是
+    「预签名 → PUT 到 COS → 把 download_url 填进去」，网关照抄这条路。
+    """
+
+    def setUp(self):
+        import wb_proxy
+        self.proxy = wb_proxy
+        self.calls = []
+        self._orig_upload = wb_proxy.wb_media_client.upload_reference_file
+        self._orig_pick = wb_proxy._pick_media_account_for
+
+    def tearDown(self):
+        self.proxy.wb_media_client.upload_reference_file = self._orig_upload
+        self.proxy._pick_media_account_for = self._orig_pick
+
+    def _fake(self, account, data, filename):
+        self.calls.append((len(data), filename))
+        return "https://cos.example.com/uploaded-%d.mp4" % len(self.calls)
+
+    def _patch(self):
+        self.proxy._pick_media_account_for = lambda *a, **k: object()
+        self.proxy.wb_media_client.upload_reference_file = self._fake
+
+    def _data_url(self, payload=b"x" * 64, mime="video/mp4"):
+        import base64
+        return "data:%s;base64,%s" % (mime, base64.b64encode(payload).decode())
+
+    def test_data_url_gets_uploaded_and_replaced(self):
+        self._patch()
+        body = {"reference_images": [{"image_url": "https://x/a.png"}],
+                "reference_videos": [{"video_url": self._data_url()}]}
+        out = self.proxy.resolve_reference_uploads(body, "cn", "minimax-video-h3")
+        self.assertEqual(out["reference_videos"],
+                         [{"video_url": "https://cos.example.com/uploaded-1.mp4"}])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_public_url_passes_through_untouched(self):
+        self._patch()
+        body = {"reference_videos": [{"video_url": "https://cdn.example.com/a.mp4"}]}
+        out = self.proxy.resolve_reference_uploads(body, "cn", "minimax-video-h3")
+        self.assertEqual(out["reference_videos"],
+                         [{"video_url": "https://cdn.example.com/a.mp4"}])
+        self.assertEqual(self.calls, [])
+
+    def test_audio_also_uploaded(self):
+        self._patch()
+        body = {"reference_audios": [{"audio_url": self._data_url(mime="audio/mpeg")}]}
+        self.proxy.resolve_reference_uploads(body, "cn", "minimax-video-h3")
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(self.calls[0][1].endswith(".mp3"))
+
+    def test_oversize_material_is_rejected_before_upload(self):
+        self._patch()
+        big = self._data_url(b"x" * (M.MAX_INPUT_IMAGE_BYTES + 10))
+        with self.assertRaises(M.MediaError) as ctx:
+            self.proxy.resolve_reference_uploads(
+                {"reference_videos": [{"video_url": big}]}, "cn", "minimax-video-h3")
+        self.assertIn("上限", str(ctx.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_no_reference_material_costs_no_account_pick(self):
+        def boom(*a, **k):
+            raise AssertionError("没有素材时不该去挑账号")
+        self.proxy._pick_media_account_for = boom
+        self.proxy.resolve_reference_uploads({"prompt": "x"}, "cn", "minimax-video-h3")
+
+
+class ReferencePriceTierTests(unittest.TestCase):
+    """带参考素材的任务按 2 倍计价，两档必须分开记账。
+
+    2026-11-02 实测：3 张参考图 + 1 段参考视频、5 秒 768P 实扣 142.86，
+    即 28.572/秒，正好是普通 768P（14.2857/秒）的 2.00 倍。共用一个键会把
+    普通档写成 2 倍价，之后所有普通任务报价翻倍。
+    """
+
+    def setUp(self):
+        import wb_proxy
+        self.proxy = wb_proxy
+        import tempfile, os
+        self.tmp = tempfile.TemporaryDirectory()
+        self._orig_path = wb_proxy._MEDIA_PRICES_PATH
+        wb_proxy._MEDIA_PRICES_PATH = os.path.join(self.tmp.name, "video-prices.json")
+        with wb_proxy._MEDIA_PRICES_LOCK:
+            wb_proxy._MEDIA_PRICES.clear()
+
+    def tearDown(self):
+        import wb_proxy
+        with wb_proxy._MEDIA_PRICES_LOCK:
+            wb_proxy._MEDIA_PRICES.clear()
+        wb_proxy._MEDIA_PRICES_PATH = self._orig_path
+        self.tmp.cleanup()
+
+    def test_two_tiers_do_not_overwrite_each_other(self):
+        self.proxy.learn_media_price("minimax-video-h3", "768P", 57.14, 4)
+        self.proxy.learn_media_price("minimax-video-h3", "768P", 142.86, 5,
+                                     with_reference=True)
+        self.assertAlmostEqual(
+            self.proxy.media_price_per_second("minimax-video-h3", "768P"), 14.285, places=3)
+        self.assertAlmostEqual(
+            self.proxy.media_price_per_second("minimax-video-h3", "768P",
+                                              with_reference=True), 28.572, places=3)
+
+    def test_fallback_never_crosses_tiers(self):
+        """普通档没观测值时，不许拿带参考素材的 2 倍价顶上。"""
+        self.proxy.learn_media_price("minimax-video-h3", "2K", 45.7, 2,
+                                     with_reference=True)
+        self.assertIsNone(
+            self.proxy.media_price_per_second("minimax-video-h3", "768P"))
+
+    def test_ref_tier_is_persisted_under_its_own_key(self):
+        """落盘格式要带 `|ref` 后缀，否则重启后两档又会被读成同一档。
+
+        直接看磁盘文件：`load_media_prices()` 会把路径改回默认目录，用它验证会
+        读到真实账本，测出来的东西和这个用例无关。
+        """
+        import json, os
+        self.proxy.learn_media_price("minimax-video-h3", "768P", 142.86, 5,
+                                     with_reference=True)
+        with self.proxy._MEDIA_PRICES_LOCK:
+            payload = json.load(open(self.proxy._MEDIA_PRICES_PATH, encoding="utf-8"))
+        self.assertIn("minimax-video-h3|768P|ref", payload)
+        self.assertAlmostEqual(payload["minimax-video-h3|768P|ref"], 28.572, places=3)
+        self.assertNotIn("minimax-video-h3|768P", payload)
 
 
 if __name__ == "__main__":

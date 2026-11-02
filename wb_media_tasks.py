@@ -187,6 +187,14 @@ class MediaTaskStore(object):
                 "aspect_ratio": params.get("aspect_ratio"),
                 "enable_audio": params.get("enable_audio"),
                 "image_to_video": bool(params.get("image_to_video")),
+                # 带参考素材的任务**按 2 倍计价**（实测 5 秒 768P 扣 142.86，
+                # 正好是普通 768P 的两倍）。这个标记必须在建行时就落盘：完成时
+                # 只拿得到 credit / seconds，body 早就没留了，事后无从判断是哪一档，
+                # 会把 2 倍价写进普通档、污染之后所有的报价。
+                "has_reference_materials": bool(
+                    isinstance(body, dict) and (
+                        body.get("reference_videos") or body.get("reference_audios")
+                        or body.get("reference_images"))),
                 "prompt_head": prompt[:80],
                 "prompt_len": len(prompt),
                 "created_at": int(now),

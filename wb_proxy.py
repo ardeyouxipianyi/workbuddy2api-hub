@@ -611,21 +611,26 @@ def load_media_prices():
         return
     with _MEDIA_PRICES_LOCK:
         for key, value in payload.items():
-            model, _, resolution = key.partition("|")
+            parts = (key or "").split("|")
+            model = parts[0]
+            resolution = parts[1] if len(parts) > 1 else ""
+            with_reference = len(parts) > 2 and parts[2] == "ref"
+            if len(parts) > 2 and parts[2] not in ("", "ref"):
+                continue
             try:
                 price = float(value)
             except (TypeError, ValueError):
                 continue
             if model and price > 0:
-                _MEDIA_PRICES[(model, resolution)] = price
+                _MEDIA_PRICES[(model, resolution, with_reference)] = price
 
 
 def _save_media_prices_locked():
     path = _MEDIA_PRICES_PATH
     if not path:
         return
-    payload = {"%s|%s" % (model, resolution): price
-               for (model, resolution), price in _MEDIA_PRICES.items()}
+    payload = {("%s|%s" % (model, resolution)) + ("|ref" if ref else ""): price
+               for (model, resolution, ref), price in _MEDIA_PRICES.items()}
     try:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
@@ -633,12 +638,17 @@ def _save_media_prices_locked():
         pass                                             # 落盘失败不影响派发
 
 
-def learn_media_price(model, resolution, credit, seconds):
+def learn_media_price(model, resolution, credit, seconds, with_reference=False):
     """用一次已完成任务的实扣反推单价。
 
     三个输入缺一不可：`credit` 为空说明上游没给结算值（failed / lost），
     `seconds` 缺失就无法换算成单价。**绝不按猜测补一个数**——错的价格比没有价格
     更坏，它会悄悄改变"付得起吗"的判断。
+
+    `with_reference` 单独一档：**带参考素材的任务按 2 倍计价**（2026-11-02 实测：
+    3 张参考图 + 1 段参考视频、5 秒 768P 实扣 142.86 = 28.572/秒，正好是普通
+    768P 14.2857/秒 的 2.00 倍）。两档共用同一个键会互相覆盖——那次实测就把
+    768P 的普通单价写成了 28.572，之后所有普通任务报价都会翻倍。
     """
     model = (model or "").strip()
     if not model:
@@ -652,12 +662,19 @@ def learn_media_price(model, resolution, credit, seconds):
         return None
     price = round(credit / span, 4)
     with _MEDIA_PRICES_LOCK:
-        _MEDIA_PRICES[(model, (resolution or "").strip())] = price
+        _MEDIA_PRICES[_price_key(model, resolution, with_reference)] = price
         _save_media_prices_locked()
     return price
 
 
-def media_price_per_second(model, resolution=None, exact_only=False):
+def _price_key(model, resolution, with_reference=False):
+    """账本键：(模型, 分辨率, 是否带参考素材)。"""
+    return ((model or "").strip(), (resolution or "").strip(),
+            bool(with_reference))
+
+
+def media_price_per_second(model, resolution=None, exact_only=False,
+                          with_reference=False):
     """实测单价（上游 credit ÷ 秒数）；没有观测值返回 None。
 
     精确匹配 `(模型, 分辨率)` 优先；只有别的分辨率的观测值时取该模型**最大值**
@@ -670,14 +687,17 @@ def media_price_per_second(model, resolution=None, exact_only=False):
     model = (model or "").strip()
     if not model:
         return None
+    tier = bool(with_reference)
     with _MEDIA_PRICES_LOCK:
-        exact = _MEDIA_PRICES.get((model, (resolution or "").strip()))
+        exact = _MEDIA_PRICES.get(_price_key(model, resolution, tier))
         if exact:
             return exact
         if exact_only:
             return None
-        same_model = [price for (name, _res), price in _MEDIA_PRICES.items()
-                      if name == model]
+        # 兜底只在**同一档**里取最大值：拿"带参考素材"的 2 倍价去估普通任务，
+        # 会把预算算成两倍，害得本来付得起的单子被拦下。
+        same_model = [price for (name, _res, ref), price in _MEDIA_PRICES.items()
+                      if name == model and ref == tier]
     return max(same_model) if same_model else None
 
 
@@ -701,8 +721,15 @@ def backfill_media_prices():
     for task in tasks:
         if not isinstance(task, dict) or task.get("status") != "completed":
             continue
+        # 老任务没有 `has_reference_materials` 这个字段，**无从判断是哪一档**。
+        # 当成普通档学就会把"带参考素材"的 2 倍价写进普通档——实测发生过一次：
+        # 一条 5 秒 768P 的带素材任务（142.86）把 768P 的普通单价从 14.2857
+        # 改成了 28.572，之后每次重启回填都会再写坏一遍。宁可少学一条。
+        if "has_reference_materials" not in task:
+            continue
         if learn_media_price(task.get("model"), task.get("resolution"),
-                             task.get("credit"), task.get("seconds")) is not None:
+                             task.get("credit"), task.get("seconds"),
+                             with_reference=bool(task.get("has_reference_materials"))) is not None:
             learned += 1
     # 生图没有任务表（同步调用），实扣只落在 usage.jsonl 里，也从那儿回填。
     try:
@@ -725,10 +752,16 @@ def backfill_media_prices():
     return learned
 
 
-def media_cost_hint(model, seconds, resolution=None):
-    """派发前的积分估计：有实测价按实测算，没有才退回 26/秒的上界。"""
-    return wb_media.estimate_cost("video", seconds,
-                                  price_per_second=media_price_per_second(model, resolution))
+def media_cost_hint(model, seconds, resolution=None, with_reference=False):
+    """派发前的积分估计：有实测价按实测算，没有才退回 26/秒的上界。
+
+    `with_reference` 要如实传：带参考素材是另一档价（实测 2 倍），拿普通档估它
+    会低估一半，等于把"付不起"的单子放过去。
+    """
+    return wb_media.estimate_cost(
+        "video", seconds,
+        price_per_second=media_price_per_second(model, resolution,
+                                                with_reference=with_reference))
 
 
 def media_task_finished(task):
@@ -746,10 +779,12 @@ def media_task_finished(task):
     media_key_spend_add(task.get("key"), credit)
     # 用实扣反推单价，下次估算就不必再用一刀切的 26/秒。
     learned = learn_media_price(task.get("model"), task.get("resolution"),
-                                credit, task.get("seconds"))
+                                credit, task.get("seconds"),
+                                with_reference=bool(task.get("has_reference_materials")))
     if learned is not None:
-        log("media: 学到 %s（%s）单价 %.4f 积分/秒（实扣 %.2f ÷ %s 秒）"
-            % (task.get("model"), task.get("resolution") or "默认", learned,
+        log("media: 学到 %s（%s%s）单价 %.4f 积分/秒（实扣 %.2f ÷ %s 秒）"
+            % (task.get("model"), task.get("resolution") or "默认",
+               "·带参考素材" if task.get("has_reference_materials") else "", learned,
                float(credit), task.get("seconds")), tag="media")
     record_usage(task.get("model") or "video", {"credit": credit}, stream=False,
                  account=task.get("account"), outcome="completed",
@@ -777,6 +812,46 @@ def media_account_by_uid(uid):
         return pool.get(uid)
     except Exception:
         return None
+
+
+#: 参考视频/音频里允许自动上传的素材上限（与图片同一档）
+def resolve_reference_uploads(body, realm, model_id, account=None):
+    """把 `body` 里参考视频/音频的 data URL 换成**上游抓得到**的 download_url。
+
+    为什么必须换：上游对 `video_url` 是**真去下载的**。data URL 与本地路径都抓不到，
+    实测报 `2013: content[4].video_url: media url unreachable`。官方客户端的做法是
+    「预签名 → PUT 到 COS → 把 download_url 填进 video_url」，这里照抄。
+
+    上传不花积分（只有提交任务才花），所以用一个临时挑出来的账号做也没关系。
+    签名 24 小时有效，因此队列里排队过夜的任务可能需要重传——上游那条路本来也躲不开。
+    """
+    kinds = (("reference_videos", "video_url", "参考视频"),
+             ("reference_audios", "audio_url", "参考音频"))
+    pending = [(kind, inner, label) for kind, inner, label in kinds
+               if any(wb_media.is_data_url((entry or {}).get(inner) or "")
+                      for entry in (body.get(kind) or ()))]
+    if not pending:
+        return body
+    if account is None:
+        account = _pick_media_account_for(realm, model_id, 0, set())
+    for kind, inner, label in pending:
+        resolved = []
+        for entry in body.get(kind) or ():
+            url = (entry or {}).get(inner) or ""
+            if not wb_media.is_data_url(url):
+                resolved.append(entry)
+                continue
+            data, filename = wb_media.split_data_url(url)
+            if len(data) > wb_media.MAX_INPUT_IMAGE_BYTES:
+                raise wb_media.MediaError(
+                    "INVALID_ARGS",
+                    "%s %d 字节，超过 %d 字节上限（先压缩再传）"
+                    % (label, len(data), wb_media.MAX_INPUT_IMAGE_BYTES))
+            download_url = wb_media_client.upload_reference_file(account, data, filename)
+            log("media: %s 已上传到上游 (%d 字节)" % (label, len(data)), tag="media")
+            resolved.append({inner: download_url})
+        body[kind] = resolved
+    return body
 
 
 def _pick_media_account_for(realm, model_id, cost_hint, excluded, config=None):
@@ -20912,10 +20987,30 @@ class Handler(BaseHTTPRequestHandler):
                 items = wb_media._reference_list(payload, kind)
                 if not items:
                     continue
-                # 参考视频/音频只能给公网地址：data URL 对这两类没有意义，
-                # 而本地路径放进来就是任意文件读取。
+                # 参考视频/音频：公网 URL 收，data URL **收但会被上传换地址**。
+                #
+                # 早先只收公网 URL，理由是"data URL 对这两类没有意义"。后来一度
+                # 放宽成"原样透传 data URL"并附了一段声称实测成功的注释——那段是
+                # 错的：账本里所有带参考视频的任务都是 failed / credit=None，唯一那条
+                # 128.57 是 11-01 22:34 一条与参考素材无关的 kling 任务。
+                #
+                # 真实情况（2026-11-02 查上游原始响应得到）：上游对 `video_url`
+                # **是真去下载的**，data URL 抓不到 →
+                #   2013: content[4].video_url: media url unreachable
+                # 正解是官方客户端那套：预签名 → PUT 到 COS → 填 download_url。
+                # 所以这里放行 data URL，但真正的替换在 `resolve_reference_uploads()`
+                # 里做（建 body 之后、排队之前，排队路径也能用到可抓的地址）。
+                #
+                # 本地路径仍然一律拒绝：那是任意文件读取的口子。
+                label = "参考视频" if kind == "reference_videos" else "参考音频"
                 for item in items:
-                    wb_media_client.assert_public_url(_as_text(item) or "")
+                    text = _as_text(item) or ""
+                    if wb_media.is_data_url(text):
+                        wb_media.assert_data_url_size(
+                            text, wb_media.MAX_INPUT_IMAGE_BYTES, label)
+                        continue
+                    # 报错要指名是哪类素材：说成"输入图"会把调用方引到首帧上排查。
+                    wb_media_client.assert_public_url(text, label)
                 request[kind] = items
             learned = learned_video_seconds(realm, model["id"])
             if learned is not None:
@@ -20929,8 +21024,16 @@ class Handler(BaseHTTPRequestHandler):
                     "本网关的媒体设置把视频时长限制在 %d 秒以内（给定 %d 秒）"
                     % (cap, params["seconds"]))
             body = wb_media.build_video_body(model["id"], request, params)
-            cost_hint = media_cost_hint(model["id"], params["seconds"],
-                                    params.get("resolution"))
+            # 参考视频/音频的 data URL 上游抓不到（2013 media url unreachable）：
+            # 在这里换成"先上传拿 download_url"。放在建 body 之后、排队之前，
+            # 是为了让**排队路径**存进任务表的也是已经可抓的地址——否则排到半夜
+            # 才提交时上游照样 2013，而且那时候调用方早已拿到 202、以为成了。
+            body = resolve_reference_uploads(body, realm, model["id"])
+            cost_hint = media_cost_hint(
+                model["id"], params["seconds"], params.get("resolution"),
+                with_reference=bool(body.get("reference_images")
+                                    or body.get("reference_videos")
+                                    or body.get("reference_audios")))
         except wb_media.MediaError as exc:
             return self._media_error(exc)
 
@@ -21171,6 +21274,16 @@ class Handler(BaseHTTPRequestHandler):
             # 2K 实扣 91.43（1.6 倍）。只报一个 creditPerSecond（默认分辨率的价）
             # 会让调用方按 768P 的价算 2K 的花费，差 60%。所以把每一档都列出来，
             # 没观测过的那档不出现（不要拿别档的价冒充）。
+            per_resolution_ref = {}
+            for name in (generation.get("resolutions") or ()):
+                price = media_price_per_second(model.get("id"), name,
+                                               exact_only=True, with_reference=True)
+                if price:
+                    per_resolution_ref[name] = price
+            if per_resolution_ref:
+                # 带参考素材是另一档价（实测正好 2 倍）。不列出来，调用方按
+                # creditsPerSecond 估"多图+参考视频"的花费会少算一半。
+                model["creditsPerSecondWithReference"] = per_resolution_ref
             per_resolution = {}
             for name in (generation.get("resolutions")
                          or [generation.get("defaultResolution")]):

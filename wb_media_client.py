@@ -33,7 +33,9 @@ import base64
 import ipaddress
 import json
 import os
+import random
 import re
+import string
 import socket
 import time
 import urllib.error
@@ -79,6 +81,9 @@ def set_identity(value):
 def current_identity():
     return _IDENTITY
 
+
+#: 预签名与 COS PUT 的超时（参考素材通常是几 MB，给足余量）
+UPLOAD_TIMEOUT_SECONDS = 120
 
 CONFIG_PATH = "/v3/config"
 IMAGE_GENERATIONS_PATH = "/v2/images/generations"
@@ -278,34 +283,109 @@ def is_public_ip(text):
                 or address.is_reserved or address.is_multicast or address.is_unspecified)
 
 
-def assert_public_url(url):
+#: 预签名上传接口（从官方客户端 `CosUploadService.getPresignedUrls` 逆向出来的：
+#: 客户端自己就是这么传参考视频的，所以这条路和官方行为一致）。
+UPLOAD_PRESIGN_PATH = "/console/as/support/presigned_url"
+
+
+def _upload_object_key(filename):
+    """客户端 `generateUploadObjectKey` 的同款格式：uploads/<毫秒>-<随机8>-<文件名>。"""
+    base = os.path.basename(filename or "") or "file"
+    stem, dot, ext = base.rpartition(".")
+    if not dot or not re.fullmatch(r"[A-Za-z0-9]{1,8}", ext or ""):
+        stem, ext = base, ""
+    # 只清洗主干、**扩展名单独保留**：中文名（"舞蹈 参考.mp4"）整段被清洗成下划线后
+    # 再 lstrip 会把 ".mp4" 一起吃掉，剩下 "mp4" —— 上游拿不到扩展名就判不出类型。
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem)
+    stem = re.sub(r"_{2,}", "_", stem).strip("._") or "file"
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    tail = ("." + ext) if ext else ""
+    return "uploads/%d-%s-%s%s" % (int(time.time() * 1000), suffix, stem[:110], tail)
+
+
+def upload_reference_file(account, data, filename, timeout=UPLOAD_TIMEOUT_SECONDS):
+    """把一段字节上传到上游 COS，返回**上游能抓到的** download_url。
+
+    为什么需要它：上游对 `reference_videos` / `reference_audios` 的 `video_url`
+    是**真去下载的**，本地路径与 data URL 都抓不到（实测 2013
+    `media url unreachable`）。官方客户端的做法是「预签名 → PUT 到 COS →
+    把 download_url 填进 video_url」，这里照抄同一套。
+
+    签名有效期 24 小时（接口返回 `expire: 86400`），所以上传后要尽快提交任务，
+    隔天再用旧地址会重新变成 2013。
+    """
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        raise wb_media.MediaError("INVALID_ARGS", "上传内容为空")
+    if len(data) > wb_media.MAX_INPUT_IMAGE_BYTES:
+        raise wb_media.MediaError(
+            "INVALID_ARGS",
+            "参考素材 %d 字节，超过 %d 字节上限"
+            % (len(data), wb_media.MAX_INPUT_IMAGE_BYTES))
+    object_key = _upload_object_key(filename)
+    headers = dict(account.headers(purpose="media", media_identity=_IDENTITY))
+    headers["Content-Type"] = "application/json"
+    body = json.dumps({"object_keys": [object_key]}).encode("utf-8")
+    request = urllib.request.Request(account.chat_base_url() + UPLOAD_PRESIGN_PATH,
+                                     method="POST", data=body, headers=headers)
+    try:
+        with wb_accounts.urlopen(request, timeout=timeout, proxy=account.proxy) as response:
+            payload = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        raise wb_media.MediaError(
+            "UPSTREAM", "预签名失败（HTTP %d）" % exc.code, status=exc.code)
+    items = ((payload or {}).get("data") or {}).get("items") or []
+    if not items:
+        raise wb_media.MediaError("UPSTREAM", "预签名没有返回上传地址")
+    item = items[0]
+    put = urllib.request.Request(item["upload_url"], method="PUT",
+                                 data=bytes(data),
+                                 headers={"Content-Type": "application/octet-stream"})
+    try:
+        with wb_accounts.urlopen(put, timeout=timeout, proxy=account.proxy) as response:
+            if response.status not in (200, 201, 204):
+                raise wb_media.MediaError(
+                    "UPSTREAM", "上传到 COS 失败（HTTP %d）" % response.status)
+    except urllib.error.HTTPError as exc:
+        raise wb_media.MediaError(
+            "UPSTREAM", "上传到 COS 失败（HTTP %d）" % exc.code, status=exc.code)
+    return item["download_url"]
+
+
+def assert_public_url(url, label="输入图"):
     """校验一个 http(s) URL 指向公网地址；不合法就抛 INVALID_ARGS。
 
     防的是 SSRF：网关可能监听在 LAN 上（`start-wb-proxy-lan.bat`），一个
     `image: "http://192.168.1.10:8080/admin"` 就能拿它当内网扫描器；
     `http://127.0.0.1:8788/accounts` 更直接——自己打自己。
+
+    `label` 只影响报错文案。参考视频/音频走同一个判据，但把它们说成"输入图"
+    会让调用方查错地方——传了本地 mp4 收到"输入图 URL 只支持 http/https"，
+    第一反应通常是去改首帧，而不是换掉那段视频。
     """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https"):
         raise wb_media.MediaError(
-            "INVALID_ARGS", "输入图 URL 只支持 http/https（给定 %s）" % parsed.scheme)
+            "INVALID_ARGS",
+            "%s URL 只支持 http/https（给定 %s）：本网关不接受本地文件或 data URL，"
+            "请先把素材放到公网 http(s) 地址" % (label, parsed.scheme))
     host = parsed.hostname
     if not host:
-        raise wb_media.MediaError("INVALID_ARGS", "输入图 URL 没有主机名：%s" % url)
+        raise wb_media.MediaError("INVALID_ARGS", "%s URL 没有主机名：%s" % (label, url))
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except Exception as exc:
         raise wb_media.MediaError(
-            "INVALID_ARGS", "输入图 URL 解析失败（%s）：%s" % (host, exc))
+            "INVALID_ARGS", "%s URL 解析失败（%s）：%s" % (label, host, exc))
     if not infos:
-        raise wb_media.MediaError("INVALID_ARGS", "输入图 URL 解析不到地址：%s" % host)
+        raise wb_media.MediaError(
+            "INVALID_ARGS", "%s URL 解析不到地址：%s" % (label, host))
     for info in infos:
         address = info[4][0]
         if not is_public_ip(address):
             raise wb_media.MediaError(
                 "INVALID_ARGS",
-                "输入图 URL 指向非公网地址 %s，已拒绝（防 SSRF）：%s" % (address, url))
+                "%s URL 指向非公网地址 %s，已拒绝（防 SSRF）：%s" % (label, address, url))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
