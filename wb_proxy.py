@@ -23587,6 +23587,11 @@ class Handler(BaseHTTPRequestHandler):
             record_error(model, 502, str(exc), elapsed_ms=int((time.time() - t_start) * 1000),
                          account=account.uid, realm=realm, key=self._key_id())
             return self._error(502, f"upstream stream error: {exc}")
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
         if egress_on and egress_key:
             wb_egress.note_success(egress_key)
         wall = int((time.time() - t_start) * 1000)

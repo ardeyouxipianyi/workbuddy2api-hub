@@ -1679,6 +1679,9 @@ def open_chat(config, body, session_key=None, allowed_accounts=None):
         acct = pool.pick(model, session_key=session_key, exclude=exclude,
                          allowed_accounts=allowed_accounts)
         if acct is None:
+            if pool.accounts and any(a.active_concurrent > 0 for a in pool.accounts):
+                time.sleep(0.05)
+                continue
             break
         if not pool.acquire(acct):
             exclude.add(acct.uid)
