@@ -184,12 +184,15 @@ class UnionInputTests(PricingTestCase):
             P.read_cached_remote_catalog = original
         # The new name comes through...
         self.assertIn("glm-5.3-flashx", ids)
-        # ...while the virtual aliases, the non-chat helper and the paid
-        # "-sg" build are dropped by the gateway's own curation, and a name
-        # the bundled catalogue already carries is not duplicated.
+        # ...while the virtual aliases and the non-chat helper are dropped by
+        # the gateway's own curation, and a name the bundled catalogue already
+        # carries is not duplicated.
         for dropped in ("default-model", "auto", "lite", "codewise-inline",
-                        "hy4-preview-sg", "glm-5.3-flash"):
+                        "glm-5.3-flash"):
             self.assertNotIn(dropped, ids, dropped)
+        # A "-sg" build stays when its base name is not in the same list: it
+        # is then the model itself, not a paid variant of one already shown.
+        self.assertIn("hy4-preview-sg", ids)
 
     def test_live_ids_ask_both_realms_and_dedupe(self):
         asked = []
@@ -297,7 +300,7 @@ class SingleGatewayInstanceTests(PricingTestCase):
 
             def curated_live_sources(self, realm):
                 self.realms.append(realm)
-                return ([("gpt-6-sol", {})], True, "remote")
+                return ([("gpt-6.2-nova", {})], True, "remote")
 
             def add_log_entry(self, message, tag=None):
                 self.lines.append((message, tag))
@@ -312,7 +315,7 @@ class SingleGatewayInstanceTests(PricingTestCase):
         self.assertEqual(fake.realms, ["intl", "cn"])
         # ...and the name the bundled catalogue has never seen is the one
         # that enters the price input.
-        self.assertEqual(ids, ["gpt-6-sol"])
+        self.assertEqual(ids, ["gpt-6.2-nova"])
 
     def test_the_pricing_lines_reach_the_running_gateway(self):
         fake = self._fake_gateway()
@@ -574,7 +577,13 @@ class GapReportTests(PricingTestCase):
     def test_the_report_categorises_every_kind(self):
         items, summary = wb_pricing.gap_items(OR, None, None, variants=True)
         by_model = {item["model"]: item for item in items}
-        for alias in ALIASES:
+        # An alias only shows up here when the catalogue still lists it: the
+        # gateway keeps retired alias names in VIRTUAL_ALIAS_MODELS so an old
+        # client request is never billed as a coverage gap, but a name the
+        # catalogue has dropped (deep-model, 2026-11) is not enumerated.
+        reported = [a for a in ALIASES if a in by_model]
+        self.assertTrue(reported, "no alias reached the gap report")
+        for alias in reported:
             self.assertEqual(by_model[alias]["reason"], "alias", alias)
             self.assertNotIn("candidates", by_model[alias])
         self.assertEqual(by_model["kimi-k2.8-preview"]["reason"], "or_missing")
@@ -582,11 +591,11 @@ class GapReportTests(PricingTestCase):
                          "variant_unmatched")
         # Aliases are reported but never counted into the gap total, which is
         # the number an operator chases.
-        self.assertEqual(summary["aliases"], len(ALIASES))
+        self.assertEqual(summary["aliases"], len(reported))
         self.assertEqual(summary["total"],
                          summary["or_missing"] + summary["variant_unmatched"])
         self.assertTrue(summary["variants_enabled"])
-        self.assertEqual(summary["total"], len(items) - len(ALIASES))
+        self.assertEqual(summary["total"], len(items) - len(reported))
 
     def test_a_variant_that_resolves_is_not_reported_at_all(self):
         items, _summary = wb_pricing.gap_items(OR, None, None, variants=True)
@@ -598,10 +607,13 @@ class GapReportTests(PricingTestCase):
     def test_with_the_switch_off_the_variant_names_are_reported(self):
         items, _summary = wb_pricing.gap_items(OR, None, None, variants=False)
         by_model = {item["model"]: item for item in items}
-        self.assertEqual(by_model["deepseek-r1-0528-lkeap"]["reason"],
+        # kimi-k2-instruct-taiji carries the -taiji suffix: stripping it finds
+        # no unique base, so it stays unmatched either way. The test pins that
+        # the suffix table (not the switch) decides the "variant" category.
+        self.assertEqual(by_model["kimi-k2-instruct-taiji"]["reason"],
                          "variant_unmatched")
         # A model in the factory snapshot is priced regardless of the switch.
-        self.assertNotIn("deepseek-v4.1-flash", by_model)
+        self.assertNotIn("deepseek-v4.1-flash-sg", by_model)
 
     def test_candidates_are_suggestions_never_applied(self):
         cands = wb_pricing.suggest_matches("glm-5.3-flash-20260101", OR)
@@ -660,7 +672,8 @@ class GapReportTests(PricingTestCase):
         row = by_model["glm-5.3-flash-20260101"]
         self.assertEqual(row["reason"], "or_missing")
         self.assertEqual(row["candidates"][0], "z-ai/glm-5.3-flash")
-        self.assertEqual(summary["total"], len(items) - len(ALIASES))
+        reported = [a for a in ALIASES if a in by_model]
+        self.assertEqual(summary["total"], len(items) - len(reported))
         # A live-only name that did resolve was priced by that very cycle, so
         # it is not a gap at all.
         self.assertNotIn("glm-5.3-flashx", by_model)

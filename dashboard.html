@@ -16259,7 +16259,7 @@ function renderPerfMatrix(usage, perf){
         // say). Decide from the model id itself: this table
         // spans both realms, so the gateway's current exit
         // would mislabel domestic-only models.
-        const isIntlOnly = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gemini-3.5-flash', 'grok-4.7'].includes(m.id);
+        const isIntlOnly = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gemini-3.8-flash', 'gemini-3.5-flash', 'grok-4.7'].includes(m.id);
         const isCnOnly = ['deepseek-v4-pro', 'glm-5.1', 'glm-5v-turbo', 'kimi-k3-1', 'kimi-k2.7', 'minimax-m3'].includes(m.id);
         realmCell = isIntlOnly ? '<span class="realm-badge-intl">国际版</span>'
           : (isCnOnly ? '<span class="realm-badge-cn">国内版</span>'

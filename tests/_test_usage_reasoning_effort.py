@@ -160,25 +160,24 @@ check("and that value lands on the usage row",
 
 # A model the catalog pins to one level runs there whether or not the client
 # says anything - and the gateway writes nothing into the body for it, so the
-# body alone reports no effort at all.
-check("the catalog pins gemini-3.5-flash", P.model_fixed_effort("gemini-3.5-flash") == "medium",
-      P.model_fixed_effort("gemini-3.5-flash"))
+# body alone reports no effort at all. kimi-k3 is the pinned sample: the old
+# gemini-3.5-flash left the catalogue in 2026-11.
+check("the catalog pins kimi-k3", P.model_fixed_effort("kimi-k3") == "medium",
+      P.model_fixed_effort("kimi-k3"))
 check("and it declares no default",
-      P.model_default_effort("gemini-3.5-flash") is None,
-      P.model_default_effort("gemini-3.5-flash"))
-plain = P.build_upstream_body(chat("gemini-3.5-flash"))
+      P.model_default_effort("kimi-k3") is None,
+      P.model_default_effort("kimi-k3"))
+plain = P.build_upstream_body(chat("kimi-k3"))
 check("a plain request to it carries no effort in the body",
       P.client_effort_of(plain) is None, P.client_effort_of(plain))
-effort = open_with(chat("gemini-3.5-flash"))
+effort = open_with(chat("kimi-k3"))
 check("open_upstream still reports the pinned level", effort == "medium", effort)
-P.record_usage("gemini-3.5-flash", USAGE, stream=False, elapsed_ms=900, effort=effort)
+P.record_usage("kimi-k3", USAGE, stream=False, elapsed_ms=900, effort=effort)
 check("so the pinned level reaches the usage row",
       rows()[-1].get("reasoning_effort") == "medium", rows()[-1].get("reasoning_effort"))
-check("kimi-k3 is pinned the same way", open_with(chat("kimi-k3")) == "medium",
-      open_with(chat("kimi-k3")))
 check("a pinned model ignores a level the request carries anyway",
-      open_with(chat("gemini-3.5-flash", reasoning_effort="max")) == "medium",
-      open_with(chat("gemini-3.5-flash", reasoning_effort="max")))
+      open_with(chat("kimi-k3", reasoning_effort="max")) == "medium",
+      open_with(chat("kimi-k3", reasoning_effort="max")))
 
 # A selectable model with no client value runs at its declared default, and the
 # client's own value wins when it sends one.

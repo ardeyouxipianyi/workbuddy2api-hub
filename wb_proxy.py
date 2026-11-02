@@ -197,8 +197,9 @@ def detect_model_realm(model_id):
         return CURRENT_REALM
     m = str(model_id).lower()
     intl_only = {
-        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-        "gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gemini-3.5-flash",
+        "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gemini-3.8-flash", "gemini-3.5-flash",
         "grok-4.7"
     }
     if m in intl_only or any(m.startswith(p) for p in ("gpt-", "gemini-")):
@@ -222,8 +223,9 @@ def detect_model_realm(model_id):
 INTL_EXCLUSIVE_PREFIXES = ("gpt-", "gemini-")
 CN_EXCLUSIVE_PREFIXES = ("deepseek-v4-pro",)
 INTL_EXCLUSIVE = {
-    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-    "gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gemini-3.5-flash",
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gemini-3.8-flash", "gemini-3.5-flash",
     "grok-4.7",
 }
 CN_EXCLUSIVE = {
@@ -10895,11 +10897,14 @@ VIRTUAL_ALIAS_MODELS = {
 }
 NON_CHAT_MODELS = {"lite"} | VIRTUAL_ALIAS_MODELS
 NON_CHAT_PREFIXES = ("codewise-", "completion-")
+# 纯媒体生成模型：上游目录里它们不带 credits、没有对话规格，只有生成参数
+# （如 kling-video-v3 的 videoGeneration）。名字上无法用前后缀区分，只能列名。
 NON_CHAT_SUFFIXES = ("-image-alpha", "-image-alpha-edit", "-taco-completion")
+NON_CHAT_IDS = {"hy-image-3.5", "kling-video-v3"}
 def is_chat_model(mid):
     if not mid:
         return False
-    if mid in NON_CHAT_MODELS:
+    if mid in NON_CHAT_MODELS or mid in NON_CHAT_IDS:
         return False
     if mid.startswith(NON_CHAT_PREFIXES):
         return False
@@ -10923,23 +10928,24 @@ CN_UI_ORDER = [
     "deepseek-v4-pro",
 ]
 INTL_UI_ORDER = [
-    "hy4-preview-f",
+    "deepseek-v4.1-flash-sg",
+    "hy4-preview",
     "hy3",
-    "deepseek-v4.1-flash",
     "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
     "grok-4.7",
-    "gemini-3.5-flash",
-    "glm-5.3-flash",
+    "gemini-3.8-flash",
     "glm-5.3",
-    "glm-5.2",
+    "glm-5.3-flash",
+    "kimi-k3.1-pro",
+    "kimi-k3.1-pro-highspeed",
     "kimi-k3",
-    "kimi-k2.6",
-    "kimi-k2.8-preview",
+    "minimax-m3.1-flash",
 ]
 def merge_reasoning(base, live):
     """Field-level merge of one model's reasoning block.
@@ -11422,8 +11428,11 @@ def curate_remote_catalog(realm, ids, meta=None):
     """Trim a remote catalogue to the models the picker should offer.
 
       - virtual aliases (default-model ... auto) are not models;
-      - "-sg" / "-x" builds are the paid variant of a name the list already
-        carries;
+      - a "-sg" / "-x" build is dropped only when the same list also carries
+        the plain name: it is then just the paid variant of a model the picker
+        already shows. When the plain name is gone (upstream renamed
+        deepseek-v4.1-flash to -sg in 2026-11 and no longer lists the base),
+        the suffixed build *is* the model, so it must stay;
       - when a free ("x0.00") sibling exists, the free one is the one the
         picker shows, so the paid sibling is dropped;
       - everything else keeps its upstream order. Names the upstream does not
@@ -11436,15 +11445,24 @@ def curate_remote_catalog(realm, ids, meta=None):
             credits[mid] = str(item.get("credits") or "").strip().lower()
     order = CN_UI_ORDER if realm == "cn" else INTL_UI_ORDER
     known = set(ids) | set(credits) | set(order)
+    listed = set(ids)
 
     def free(mid):
         return credits.get(mid) in ("x0.00", "x0", "0", "0.00")
+
+    def variant_base(mid):
+        for suffix in VARIANT_SUFFIXES:
+            if mid.endswith(suffix) and mid != suffix:
+                return mid[:-len(suffix)]
+        return ""
 
     out = []
     for mid in ids:
         if not is_chat_model(mid):
             continue
-        if mid.endswith(VARIANT_SUFFIXES):
+        base = variant_base(mid)
+        if base and base in listed:
+            # 同名基名也在本次目录里 → 它是付费变体，交给下面的免费档规则
             continue
         if mid.endswith("-f"):
             base = mid[:-2]

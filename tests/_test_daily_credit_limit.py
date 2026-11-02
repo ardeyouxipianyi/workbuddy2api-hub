@@ -292,13 +292,16 @@ class CreditGuardPoolTests(unittest.TestCase):
 class FreeModelViewTests(unittest.TestCase):
     def test_free_table_is_built_per_realm_from_the_catalogue(self):
         view = P.free_models_by_realm()
-        # The bundled snapshot marks this one free on the international exit;
-        # the domestic catalogue carries it as paid, so it must not appear
-        # there - the same id, two answers.
-        self.assertIn("deepseek-v4.1-flash", view["intl"])
-        self.assertNotIn("deepseek-v4.1-flash", view["cn"])
-        self.assertIn("hy4-preview-f", view["intl"])
+        # hy3 is the free model on both exits in the current catalogue.
+        self.assertIn("hy3", view["intl"])
+        self.assertIn("hy3", view["cn"])
+        # hy4-preview-f is free on the domestic exit only; the international
+        # catalogue no longer lists it at all.
         self.assertIn("hy4-preview-f", view["cn"])
+        self.assertNotIn("hy4-preview-f", view["intl"])
+        # deepseek-v4.1-flash-sg carries x0.11 on the international exit now,
+        # so it is not free there.
+        self.assertNotIn("deepseek-v4.1-flash-sg", view["intl"])
         # A paid id is in neither table.
         self.assertNotIn("gpt-6-astra", view["intl"])
         self.assertTrue(P.credits_is_free("x0.00"))
