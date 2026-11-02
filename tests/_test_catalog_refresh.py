@@ -257,9 +257,9 @@ class CatalogProvenanceTests(unittest.TestCase):
         P.fetch_remote_product_config = lambda realm: None
         P.read_cached_remote_catalog = lambda realm: None
         P.read_product_config_models = lambda realm=None: []
-        P.fetch_endpoint_models = lambda: ["gpt-5.5"]
+        P.fetch_endpoint_models = lambda: ["gpt-6-sol"]
         entries = dict(P.fetch_models("intl"))
-        self.assertIn("gpt-5.5", entries)
+        self.assertIn("gpt-6-sol", entries)
         self.assertEqual(P.catalog_meta("intl")["source"], "endpoint")
 
     def test_provenance_is_per_realm(self):

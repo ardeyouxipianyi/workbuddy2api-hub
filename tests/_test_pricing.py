@@ -62,19 +62,21 @@ class PricingEngineTests(unittest.TestCase):
             for band in entry.get("bands") or []:
                 self.assertIsInstance(band.get("flat"), dict, mid)
                 # A band carries one condition: a length threshold or a UTC
-                # window, never both and never neither.
+                # window, never both and never neither. A UTC window may wrap
+                # past midnight (OpenRouter encodes 15:00->01:00 as
+                # start=1500 end=100), so only equal endpoints are invalid.
                 if "min_prompt_tokens" in band:
                     self.assertGreater(band["min_prompt_tokens"], 0, mid)
                     self.assertNotIn("start", band, mid)
                 else:
-                    self.assertLess(band["start"], band["end"], mid)
+                    self.assertNotEqual(band["start"], band["end"], mid)
 
     def test_snapshot_keeps_the_sources_conditional_bands(self):
         # These are priced conditionally upstream. If the bands were lost in
         # transit the estimate would silently revert to the base price for
         # exactly the models where that is wrong.
-        for mid in ("hy4-preview-f", "hy3", "hy3-x", "gpt-6-astra",
-                    "gpt-5.5", "grok-4.7"):
+        for mid in ("hy4-preview", "hy3", "hy3-x", "gpt-6-astra",
+                    "gpt-6-sol", "grok-4.7"):
             entry = self.pricing["models"].get(mid)
             self.assertIsNotNone(entry, mid)
             self.assertIn("bands", entry, mid)

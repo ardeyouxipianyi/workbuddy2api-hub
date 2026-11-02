@@ -55,7 +55,7 @@ import urllib.request
 _JSON = r'''
 {
   "meta": {
-    "generated_at": "2026-10-02T01:39:39",
+    "generated_at": "2026-11-02T22:55:18",
     "base_currency": "CNY",
     "usd_cny": 7.1,
     "sources": {
@@ -64,16 +64,30 @@ _JSON = r'''
     "note": "单价均为「每百万 token」的美元价，取自 OpenRouter 公布的模型级价（OpenRouter 定义为该模型 top provider 的价，多 provider 模型通常接近最低档；它是参考价，不等于 WorkBuddy 官方价或结算价）；按 usd_cny 折算成人民币；按条件定价的模型（输入长度阈值或 UTC 时段）另带 bands，按每条请求的输入长度与时间取档。OpenRouter 的缓存写入价与音频价，本地 usage 日志没有对应的 token 数，未计入。"
   },
   "models": {
-    "deepseek-v4.1-flash": {
-      "display": "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash-sg": {
+      "display": "deepseek-v4.1-flash-sg",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
       "or_id": "deepseek/deepseek-v4.1-flash",
       "flat": {
-        "input_cache_hit": 0.01,
-        "input_cache_miss": 0.03,
+        "input_cache_hit": 0.006,
+        "input_cache_miss": 0.045,
         "output": 0.5
+      },
+      "via": "variant",
+      "inherited_from": "deepseek-v4.1-flash"
+    },
+    "glm-5.3-flash": {
+      "display": "glm-5.3-flash",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "z-ai/glm-5.3-flash",
+      "flat": {
+        "input_cache_hit": 0.0285,
+        "input_cache_miss": 0.0285,
+        "output": 0.0923
       }
     },
     "gpt-6-astra": {
@@ -98,40 +112,6 @@ _JSON = r'''
         }
       ]
     },
-    "hy4-preview-f": {
-      "display": "hy4-preview-f",
-      "source": "openrouter",
-      "currency": "USD",
-      "unit": 1000000,
-      "or_id": "tencent/hy4-preview",
-      "flat": {
-        "input_cache_hit": 0.0378,
-        "input_cache_miss": 0.7506,
-        "output": 2.2509
-      },
-      "bands": [
-        {
-          "flat": {
-            "input_cache_hit": 0.042,
-            "input_cache_miss": 0.834,
-            "output": 2.501
-          },
-          "days": null,
-          "start": 0,
-          "end": 1600
-        },
-        {
-          "flat": {
-            "input_cache_hit": 0.0378,
-            "input_cache_miss": 0.7506,
-            "output": 2.2509
-          },
-          "days": null,
-          "start": 1600,
-          "end": 2400
-        }
-      ]
-    },
     "hy4-preview": {
       "display": "hy4-preview",
       "source": "openrouter",
@@ -139,9 +119,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "tencent/hy4-preview",
       "flat": {
-        "input_cache_hit": 0.0378,
-        "input_cache_miss": 0.7506,
-        "output": 2.2509
+        "input_cache_hit": 0.042,
+        "input_cache_miss": 0.834,
+        "output": 2.501
       },
       "bands": [
         {
@@ -173,9 +153,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "tencent/hy3",
       "flat": {
-        "input_cache_hit": 0.020625,
-        "input_cache_miss": 0.0825,
-        "output": 0.33
+        "input_cache_hit": 0.033,
+        "input_cache_miss": 0.132,
+        "output": 0.528
       },
       "bands": [
         {
@@ -207,16 +187,16 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "openai/gpt-5.6-sol",
       "flat": {
-        "input_cache_hit": 0.2,
-        "input_cache_miss": 2.0,
-        "output": 10.0
+        "input_cache_hit": 0.4,
+        "input_cache_miss": 4.0,
+        "output": 20.0
       },
       "bands": [
         {
           "flat": {
-            "input_cache_hit": 0.4,
-            "input_cache_miss": 4.0,
-            "output": 15.0
+            "input_cache_hit": 0.8,
+            "input_cache_miss": 8.0,
+            "output": 30.0
           },
           "min_prompt_tokens": 272000
         }
@@ -266,49 +246,75 @@ _JSON = r'''
         }
       ]
     },
-    "gpt-5.5": {
-      "display": "gpt-5.5",
+    "glm-5.3": {
+      "display": "glm-5.3",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
-      "or_id": "openai/gpt-5.5",
+      "or_id": "z-ai/glm-5.3",
       "flat": {
-        "input_cache_hit": 0.5,
-        "input_cache_miss": 5.0,
-        "output": 30.0
+        "input_cache_hit": 0.076,
+        "input_cache_miss": 0.08,
+        "output": 3.6
+      }
+    },
+    "minimax-m3.1-flash": {
+      "display": "minimax-m3.1-flash",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "minimax/minimax-m3.1-flash",
+      "flat": {
+        "input_cache_hit": 0.015,
+        "input_cache_miss": 0.15,
+        "output": 0.6
       },
       "bands": [
         {
           "flat": {
-            "input_cache_hit": 1.0,
-            "input_cache_miss": 10.0,
-            "output": 45.0
+            "input_cache_hit": 0.0075,
+            "input_cache_miss": 0.075,
+            "output": 0.3
           },
-          "min_prompt_tokens": 272000
+          "days": null,
+          "start": 1500,
+          "end": 100
+        },
+        {
+          "flat": {
+            "input_cache_hit": 0.015,
+            "input_cache_miss": 0.15,
+            "output": 0.6
+          },
+          "days": null,
+          "start": 100,
+          "end": 1500
         }
       ]
     },
-    "gpt-5.4": {
-      "display": "gpt-5.4",
+    "kimi-k3.1-pro": {
+      "display": "kimi-k3.1-pro",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
-      "or_id": "openai/gpt-5.4",
+      "or_id": "moonshotai/kimi-k3.1-pro",
       "flat": {
-        "input_cache_hit": 0.25,
-        "input_cache_miss": 2.5,
+        "input_cache_hit": 0.2,
+        "input_cache_miss": 2.0,
+        "output": 10.0
+      }
+    },
+    "kimi-k3": {
+      "display": "kimi-k3",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "moonshotai/kimi-k3",
+      "flat": {
+        "input_cache_hit": 0.182,
+        "input_cache_miss": 0.192,
         "output": 15.0
-      },
-      "bands": [
-        {
-          "flat": {
-            "input_cache_hit": 0.5,
-            "input_cache_miss": 5.0,
-            "output": 22.5
-          },
-          "min_prompt_tokens": 272000
-        }
-      ]
+      }
     },
     "grok-4.7": {
       "display": "grok-4.7",
@@ -332,89 +338,83 @@ _JSON = r'''
         }
       ]
     },
-    "gpt-5.3-codex": {
-      "display": "gpt-5.3-codex",
+    "gemini-3.8-flash": {
+      "display": "gemini-3.8-flash",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
-      "or_id": "openai/gpt-5.3-codex",
+      "or_id": "google/gemini-3.8-flash",
       "flat": {
-        "input_cache_hit": 0.175,
-        "input_cache_miss": 1.75,
-        "output": 14.0
+        "input_cache_hit": 0.0825,
+        "input_cache_miss": 0.825,
+        "output": 4.125
       }
     },
-    "gemini-3.5-flash": {
-      "display": "gemini-3.5-flash",
+    "gpt-6-sol": {
+      "display": "gpt-6-sol",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
-      "or_id": "google/gemini-3.5-flash",
+      "or_id": "openai/gpt-6-sol",
       "flat": {
-        "input_cache_hit": 0.15,
-        "input_cache_miss": 1.5,
-        "output": 9.0
-      }
-    },
-    "glm-5.3": {
-      "display": "glm-5.3",
-      "source": "openrouter",
-      "currency": "USD",
-      "unit": 1000000,
-      "or_id": "z-ai/glm-5.3",
-      "flat": {
-        "input_cache_hit": 0.192,
-        "input_cache_miss": 0.24,
-        "output": 3.39
-      }
-    },
-    "glm-5.3-flash": {
-      "display": "glm-5.3-flash",
-      "source": "openrouter",
-      "currency": "USD",
-      "unit": 1000000,
-      "or_id": "z-ai/glm-5.3-flash",
-      "flat": {
-        "input_cache_hit": 0.03,
-        "input_cache_miss": 0.15,
-        "output": 0.5
-      }
-    },
-    "glm-5.2": {
-      "display": "glm-5.2",
-      "source": "openrouter",
-      "currency": "USD",
-      "unit": 1000000,
-      "or_id": "z-ai/glm-5.2",
-      "flat": {
-        "input_cache_hit": 0.26,
-        "input_cache_miss": 0.41,
-        "output": 3.99
-      }
-    },
-    "kimi-k3": {
-      "display": "kimi-k3",
-      "source": "openrouter",
-      "currency": "USD",
-      "unit": 1000000,
-      "or_id": "moonshotai/kimi-k3",
-      "flat": {
-        "input_cache_hit": 0.6635,
-        "input_cache_miss": 0.6635,
+        "input_cache_hit": 0.2,
+        "input_cache_miss": 2.0,
         "output": 10.0
-      }
+      },
+      "bands": [
+        {
+          "flat": {
+            "input_cache_hit": 0.4,
+            "input_cache_miss": 4.0,
+            "output": 15.0
+          },
+          "min_prompt_tokens": 272000
+        }
+      ]
     },
-    "kimi-k2.6": {
-      "display": "kimi-k2.6",
+    "gpt-6-luna": {
+      "display": "gpt-6-luna",
       "source": "openrouter",
       "currency": "USD",
       "unit": 1000000,
-      "or_id": "moonshotai/kimi-k2.6",
+      "or_id": "openai/gpt-6-luna",
       "flat": {
-        "input_cache_hit": 0.07312,
-        "input_cache_miss": 0.43415,
-        "output": 1.828
-      }
+        "input_cache_hit": 0.01,
+        "input_cache_miss": 0.1,
+        "output": 0.5
+      },
+      "bands": [
+        {
+          "flat": {
+            "input_cache_hit": 0.02,
+            "input_cache_miss": 0.2,
+            "output": 0.75
+          },
+          "min_prompt_tokens": 272000
+        }
+      ]
+    },
+    "gpt-6.1-sol": {
+      "display": "gpt-6.1-sol",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "openai/gpt-6.1-sol",
+      "flat": {
+        "input_cache_hit": 0.1,
+        "input_cache_miss": 2.0,
+        "output": 10.0
+      },
+      "bands": [
+        {
+          "flat": {
+            "input_cache_hit": 0.2,
+            "input_cache_miss": 4.0,
+            "output": 15.0
+          },
+          "min_prompt_tokens": 272000
+        }
+      ]
     },
     "hy3-x": {
       "display": "hy3-x",
@@ -423,9 +423,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "tencent/hy3",
       "flat": {
-        "input_cache_hit": 0.020625,
-        "input_cache_miss": 0.0825,
-        "output": 0.33
+        "input_cache_hit": 0.033,
+        "input_cache_miss": 0.132,
+        "output": 0.528
       },
       "bands": [
         {
@@ -448,7 +448,9 @@ _JSON = r'''
           "start": 1600,
           "end": 2400
         }
-      ]
+      ],
+      "via": "override",
+      "override_from": "hy3-x"
     },
     "hy4-preview-dev": {
       "display": "hy4-preview-dev",
@@ -457,9 +459,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "tencent/hy4-preview",
       "flat": {
-        "input_cache_hit": 0.0378,
-        "input_cache_miss": 0.7506,
-        "output": 2.2509
+        "input_cache_hit": 0.042,
+        "input_cache_miss": 0.834,
+        "output": 2.501
       },
       "bands": [
         {
@@ -482,7 +484,45 @@ _JSON = r'''
           "start": 1600,
           "end": 2400
         }
-      ]
+      ],
+      "via": "override",
+      "override_from": "hy4-preview-dev"
+    },
+    "hy4-preview-f": {
+      "display": "hy4-preview-f",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "tencent/hy4-preview",
+      "flat": {
+        "input_cache_hit": 0.042,
+        "input_cache_miss": 0.834,
+        "output": 2.501
+      },
+      "bands": [
+        {
+          "flat": {
+            "input_cache_hit": 0.042,
+            "input_cache_miss": 0.834,
+            "output": 2.501
+          },
+          "days": null,
+          "start": 0,
+          "end": 1600
+        },
+        {
+          "flat": {
+            "input_cache_hit": 0.0378,
+            "input_cache_miss": 0.7506,
+            "output": 2.2509
+          },
+          "days": null,
+          "start": 1600,
+          "end": 2400
+        }
+      ],
+      "via": "override",
+      "override_from": "hy4-preview-f"
     },
     "hy4-preview-x": {
       "display": "hy4-preview-x",
@@ -491,9 +531,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "tencent/hy4-preview",
       "flat": {
-        "input_cache_hit": 0.0378,
-        "input_cache_miss": 0.7506,
-        "output": 2.2509
+        "input_cache_hit": 0.042,
+        "input_cache_miss": 0.834,
+        "output": 2.501
       },
       "bands": [
         {
@@ -516,7 +556,9 @@ _JSON = r'''
           "start": 1600,
           "end": 2400
         }
-      ]
+      ],
+      "via": "override",
+      "override_from": "hy4-preview-x"
     },
     "minimax-m2.5": {
       "display": "minimax-m2.5",
@@ -525,9 +567,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "minimax/minimax-m2.5",
       "flat": {
-        "input_cache_hit": 0.027,
+        "input_cache_hit": 0.03,
         "input_cache_miss": 0.27,
-        "output": 1.08
+        "output": 0.95
       }
     },
     "glm-5v-turbo": {
@@ -542,6 +584,18 @@ _JSON = r'''
         "output": 4.0
       }
     },
+    "glm-5.2": {
+      "display": "glm-5.2",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "z-ai/glm-5.2",
+      "flat": {
+        "input_cache_hit": 0.005,
+        "input_cache_miss": 0.006,
+        "output": 6.8
+      }
+    },
     "glm-5.1": {
       "display": "glm-5.1",
       "source": "openrouter",
@@ -549,9 +603,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "z-ai/glm-5.1",
       "flat": {
-        "input_cache_hit": 0.17914,
-        "input_cache_miss": 0.9646,
-        "output": 3.0316
+        "input_cache_hit": 0.26,
+        "input_cache_miss": 1.4,
+        "output": 4.4
       }
     },
     "glm-5.0-turbo": {
@@ -564,7 +618,9 @@ _JSON = r'''
         "input_cache_hit": 0.24,
         "input_cache_miss": 1.2,
         "output": 4.0
-      }
+      },
+      "via": "override",
+      "override_from": "glm-5.0-turbo"
     },
     "glm-4.6v": {
       "display": "glm-4.6v",
@@ -573,7 +629,7 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "z-ai/glm-4.6v",
       "flat": {
-        "input_cache_hit": 0.05,
+        "input_cache_hit": 0.055,
         "input_cache_miss": 0.3,
         "output": 0.9
       }
@@ -585,10 +641,12 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "moonshotai/kimi-k3",
       "flat": {
-        "input_cache_hit": 0.6635,
-        "input_cache_miss": 0.6635,
-        "output": 10.0
-      }
+        "input_cache_hit": 0.182,
+        "input_cache_miss": 0.192,
+        "output": 15.0
+      },
+      "via": "override",
+      "override_from": "kimi-k3-1"
     },
     "kimi-k2.7": {
       "display": "kimi-k2.7",
@@ -597,9 +655,23 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "moonshotai/kimi-k2.7-code",
       "flat": {
-        "input_cache_hit": 0.18,
-        "input_cache_miss": 0.6712,
-        "output": 3.35
+        "input_cache_hit": 0.15,
+        "input_cache_miss": 0.6,
+        "output": 3.5
+      },
+      "via": "override",
+      "override_from": "kimi-k2.7"
+    },
+    "kimi-k2.6": {
+      "display": "kimi-k2.6",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "moonshotai/kimi-k2.6",
+      "flat": {
+        "input_cache_hit": 0.15,
+        "input_cache_miss": 0.65,
+        "output": 3.41
       }
     },
     "kimi-k2.5": {
@@ -609,9 +681,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "moonshotai/kimi-k2.5",
       "flat": {
-        "input_cache_hit": 0.07,
-        "input_cache_miss": 0.45,
-        "output": 2.25
+        "input_cache_hit": 0.15,
+        "input_cache_miss": 0.5,
+        "output": 2.5
       }
     },
     "kimi-k2-thinking": {
@@ -621,7 +693,7 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "moonshotai/kimi-k2-thinking",
       "flat": {
-        "input_cache_hit": null,
+        "input_cache_hit": 0.15,
         "input_cache_miss": 0.6,
         "output": 2.5
       }
@@ -645,9 +717,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "minimax/minimax-m2.7",
       "flat": {
-        "input_cache_hit": 0.042,
-        "input_cache_miss": 0.21,
-        "output": 0.84
+        "input_cache_hit": 0.06,
+        "input_cache_miss": 0.3,
+        "output": 1.2
       }
     },
     "glm-4.6": {
@@ -657,9 +729,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "z-ai/glm-4.6",
       "flat": {
-        "input_cache_hit": 0.08,
-        "input_cache_miss": 0.43,
-        "output": 1.75
+        "input_cache_hit": 0.1,
+        "input_cache_miss": 0.5,
+        "output": 2.0
       }
     },
     "deepseek-v4-flash": {
@@ -669,9 +741,21 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "deepseek/deepseek-v4-flash",
       "flat": {
-        "input_cache_hit": 0.008372,
-        "input_cache_miss": 0.04186,
-        "output": 0.08372
+        "input_cache_hit": 0.0182,
+        "input_cache_miss": 0.091,
+        "output": 0.182
+      }
+    },
+    "deepseek-v4.1-flash": {
+      "display": "deepseek-v4.1-flash",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "deepseek/deepseek-v4.1-flash",
+      "flat": {
+        "input_cache_hit": 0.006,
+        "input_cache_miss": 0.045,
+        "output": 0.5
       }
     },
     "deepseek-v4-pro": {
@@ -681,9 +765,9 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "deepseek/deepseek-v4-pro",
       "flat": {
-        "input_cache_hit": 0.0174,
-        "input_cache_miss": 0.2088,
-        "output": 0.4176
+        "input_cache_hit": 0.135,
+        "input_cache_miss": 1.6,
+        "output": 3.2
       }
     },
     "deepseek-v3-2-volc": {
@@ -693,10 +777,12 @@ _JSON = r'''
       "unit": 1000000,
       "or_id": "deepseek/deepseek-v3.2",
       "flat": {
-        "input_cache_hit": 0.028,
-        "input_cache_miss": 0.28,
-        "output": 0.42
-      }
+        "input_cache_hit": 0.13,
+        "input_cache_miss": 0.26,
+        "output": 0.38
+      },
+      "via": "override",
+      "override_from": "deepseek-v3-2-volc"
     },
     "deepseek-v3-1-volc": {
       "display": "deepseek-v3-1-volc",
@@ -708,7 +794,23 @@ _JSON = r'''
         "input_cache_hit": 0.13,
         "input_cache_miss": 0.25,
         "output": 0.95
-      }
+      },
+      "via": "override",
+      "override_from": "deepseek-v3-1-volc"
+    },
+    "deepseek-v3-1-lkeap": {
+      "display": "deepseek-v3-1-lkeap",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "deepseek/deepseek-chat-v3.1",
+      "flat": {
+        "input_cache_hit": 0.13,
+        "input_cache_miss": 0.25,
+        "output": 0.95
+      },
+      "via": "variant",
+      "inherited_from": "deepseek-v3-1"
     },
     "deepseek-v3-1": {
       "display": "deepseek-v3-1",
@@ -720,7 +822,37 @@ _JSON = r'''
         "input_cache_hit": 0.13,
         "input_cache_miss": 0.25,
         "output": 0.95
-      }
+      },
+      "via": "override",
+      "override_from": "deepseek-v3-1"
+    },
+    "deepseek-v3-0324-lkeap": {
+      "display": "deepseek-v3-0324-lkeap",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "deepseek/deepseek-chat-v3-0324",
+      "flat": {
+        "input_cache_hit": 0.11,
+        "input_cache_miss": 0.29,
+        "output": 1.14
+      },
+      "via": "variant",
+      "inherited_from": "deepseek-v3-0324"
+    },
+    "deepseek-r1-0528-lkeap": {
+      "display": "deepseek-r1-0528-lkeap",
+      "source": "openrouter",
+      "currency": "USD",
+      "unit": 1000000,
+      "or_id": "deepseek/deepseek-r1-0528",
+      "flat": {
+        "input_cache_hit": 0.35,
+        "input_cache_miss": 0.5,
+        "output": 2.15
+      },
+      "via": "variant",
+      "inherited_from": "deepseek-r1-0528"
     },
     "deepseek-r1-0528": {
       "display": "deepseek-r1-0528",
@@ -744,7 +876,9 @@ _JSON = r'''
         "input_cache_hit": 0.11,
         "input_cache_miss": 0.29,
         "output": 1.14
-      }
+      },
+      "via": "override",
+      "override_from": "deepseek-v3-0324"
     },
     "hunyuan-2.0-instruct": {
       "display": "hunyuan-2.0-instruct",
@@ -756,7 +890,9 @@ _JSON = r'''
         "input_cache_hit": null,
         "input_cache_miss": 0.14,
         "output": 0.57
-      }
+      },
+      "via": "override",
+      "override_from": "hunyuan-2.0-instruct"
     },
     "hunyuan-chat": {
       "display": "hunyuan-chat",
@@ -768,7 +904,9 @@ _JSON = r'''
         "input_cache_hit": null,
         "input_cache_miss": 0.14,
         "output": 0.57
-      }
+      },
+      "via": "override",
+      "override_from": "hunyuan-chat"
     }
   }
 }
@@ -849,6 +987,10 @@ def _band_applies(band, prompt_tokens, day, hhmm):
 
     A band carries one of two conditions - a minimum input length, or a UTC
     window; the source never mixes the two within one entry.
+
+    窗口允许跨午夜：OpenRouter 用 start=1500 / end=100 表达「15:00 到次日
+    01:00」（minimax-m3.1-flash 实测）。此时 start > end，按普通区间判断会
+    永远不命中，该档位就静默失效，估价回落到基准价 —— 所以这里拆成两段。
     """
     threshold = band.get("min_prompt_tokens")
     if threshold is not None:
@@ -858,6 +1000,9 @@ def _band_applies(band, prompt_tokens, day, hhmm):
         return False
     start = _as_float(band.get("start"))
     end = _as_float(band.get("end")) or 2400.0
+    if end <= start:
+        # 跨午夜窗口：命中 [start, 2400) 或 [0, end)
+        return hhmm >= start or hhmm < end
     return start <= hhmm < end
 
 
