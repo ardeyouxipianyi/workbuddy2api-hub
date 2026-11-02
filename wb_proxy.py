@@ -845,7 +845,7 @@ def _best_cached_tokens(usage):
 
 def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_ms=None, fp=None,
                 account=None, outcome="completed", key=None, effort=None,
-                requested_model=None, realm=None):
+                requested_model=None, realm=None, proxy_slot=None, proxy_exit=None):
     """Record one finished request as exactly one JSONL row.
 
     A request without a usage block still gets a row (flagged usage_missing):
@@ -888,6 +888,10 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         row.update(fp)
     if account:
         row["account"] = account
+    if proxy_slot:
+        row["proxy_slot"] = proxy_slot
+    if proxy_exit:
+        row["proxy_exit"] = proxy_exit
     acc = POOL.get(account) if (account and POOL) else None
     row["realm"] = realm or (acc.realm if acc else CURRENT_REALM)
     # The refresher visits one account per tick, so on a large pool the cached
@@ -922,10 +926,12 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
         t_tokens = fields.get("total_tokens", 0)
         dur = f" {elapsed_ms:.0f}ms" if elapsed_ms is not None else ""
         acc_tag = f" acct={account[:8]}" if account else ""
+        egress_tag = (f" slot={proxy_slot} egress={proxy_exit}"
+                      if proxy_slot or proxy_exit else "")
         key_tag = f" key={key_label(key)}" if key else ""
         speed_tag = f" {row.get('tokens_per_sec', 0)}t/s" if row.get("tokens_per_sec") else ""
         miss_tag = " usage=missing" if usage_missing else ""
-        log(f"chat done: model={model}{acc_tag}{key_tag}{dur} tokens={t_tokens} (in={fields.get('prompt_tokens',0)} out={fields.get('completion_tokens',0)}){speed_tag}{miss_tag}", tag="chat")
+        log(f"chat done: model={model}{acc_tag}{egress_tag}{key_tag}{dur} tokens={t_tokens} (in={fields.get('prompt_tokens',0)} out={fields.get('completion_tokens',0)}){speed_tag}{miss_tag}", tag="chat")
     except Exception:
         pass
     return row
@@ -934,6 +940,11 @@ def record_usage(model, usage, stream=None, elapsed_ms=None, ttft_ms=None, gen_m
 def record_upstream_usage(upstream, requested_model, usage, **kwargs):
     """Record the model actually billed upstream, preserving the client alias."""
     billed_model = getattr(upstream, "_wb_billed_model", requested_model)
+    # 出口归因（#743）：每条完成行都带上响应对象的账号槽位与实际出口。
+    account = POOL.get(getattr(upstream, "_wb_account_uid", "")) if POOL else None
+    if account is not None:
+        kwargs.setdefault("proxy_slot", account.proxy_slot)
+        kwargs.setdefault("proxy_exit", egress_exit(account.proxy))
     record_usage(billed_model, usage, requested_model=requested_model, **kwargs)
 
 
@@ -978,7 +989,8 @@ def upstream_failure_response(handler, model, exc, t_start, key_id=None):
 
 def record_error(model, status, message, elapsed_ms=None, account=None,
                  usage=None, stream=None, ttft_ms=None, gen_ms=None, fp=None,
-                 outcome="failed", key=None, realm=None):
+                 outcome="failed", key=None, realm=None, proxy_slot=None,
+                 proxy_exit=None):
     """Record one failed request as exactly one JSONL row.
 
     Passing the account uid records which account the request was bound to, so
@@ -1025,6 +1037,10 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
         acc = POOL.get(account) if POOL else None
         if not realm:
             row["realm"] = acc.realm if acc else CURRENT_REALM
+    if proxy_slot:
+        row["proxy_slot"] = proxy_slot
+    if proxy_exit:
+        row["proxy_exit"] = proxy_exit
     row["key"] = key or ""
     _persist_usage(row, "error persist failed")
     dur = f" {elapsed_ms:.0f}ms" if elapsed_ms is not None else ""
@@ -1032,7 +1048,9 @@ def record_error(model, status, message, elapsed_ms=None, account=None,
     # 行一直没打出来——出错时最想知道的「哪个账号、什么终态」反而要回去翻
     # usage.jsonl，而 chat done 那条早就有 acct= 了，两侧不对称。
     acc_tag = f" acct={account[:8]}" if account else ""
-    log(f"request error: model={model}{dur}{acc_tag} status={status} outcome={outcome} msg={str(message)[:180]}",
+    egress_tag = (f" slot={proxy_slot} egress={proxy_exit}"
+                  if proxy_slot or proxy_exit else "")
+    log(f"request error: model={model}{dur}{acc_tag}{egress_tag} status={status} outcome={outcome} msg={str(message)[:180]}",
         level="ERROR", tag="chat")
     return row
 def _pct(values, q):
@@ -6429,6 +6447,21 @@ def probe_proxy_exit(proxy_url, timeout=12):
             return resp.read().decode("utf-8", "replace").strip(), ""
     except Exception as exc:
         return "", str(exc)[:160]
+
+
+def egress_exit(proxy_url):
+    """代理串的出口标识（host:port），日志与用量行共用；不打用户名密码。"""
+    raw = str(proxy_url or "").strip()
+    if not raw:
+        return "direct"
+    try:
+        info = wb_upstream_pool._split_proxy(raw)
+        if info and info.get("host"):
+            return "%s:%s" % (info["host"], info.get("port") or "")
+        parts = urllib.parse.urlsplit(raw if "://" in raw else "http://" + raw)
+        return parts.netloc.rpartition("@")[2] or raw
+    except Exception:
+        return raw.rpartition("@")[2]
 
 
 def probe_proxy_intel(proxy_url, timeout=12):
@@ -11876,14 +11909,19 @@ SANITIZE_FEATURES = (
 SANITIZE_REWRITES = (
     ("You are Claude Code, Anthropic's official CLI for Claude",
      "You are Claude Code, Anthropic's official CLI tool for Claude"),
-    ("Main branch (you will usually use this for PRs)",
+    ("Default branch (you will usually use this for PRs)",
      "Default branch (you will usually use this for PRs)"),
-    ("You are a coding agent running in the Codex CLI, a terminal-based coding assistant.",
-     "You are a coding agent running in the Codex CLI tool, a terminal-based coding assistant."),
-    ("To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+    ("To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
      "To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues"),
-    ("11128", "11-128"),
+    ("11-128", "11-128"),
 )
+# Codex CLI 的自述首段（#743）：上游按「身份句 + Codex CLI」判 11-128。
+# 旧规则把中性句改写成这段自述，反过来把指纹注入出站 body；这里整句中性化，
+# 改写后不再命中 has_fingerprint()。
+SANITIZE_CODEX_INTRO_RE = re.compile(
+    r"(?i)You are a coding agent running in the Codex CLI(?: tool)?"
+    r"[^.\n]*\.")
+SANITIZE_CODEX_INTRO_REPLACEMENT = "You are a helpful AI assistant."
 SANITIZE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header:[^;\r\n]*;?\s*")
 SANITIZE_BARE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header")
 SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
@@ -12031,6 +12069,8 @@ def sanitize_text(text, identity=True):
     # neutralized.
     text = SANITIZE_OMO_JUNIOR_RE.sub("Sisyphus-Junior - Focused executor", text)
     if identity:
+        # Codex 自述首段先整句换掉：它本身就是 SANITIZE_FEATURES 里的指纹。
+        text = SANITIZE_CODEX_INTRO_RE.sub(SANITIZE_CODEX_INTRO_REPLACEMENT, text)
         text = SANITIZE_IDENTITY_RE.sub(SANITIZE_IDENTITY_REPLACEMENT, text)
         # GUI 描述段单独一条规则：锚定整句，只调整句尾语序。
         text = SANITIZE_DSH_GUI_RE.sub(SANITIZE_DSH_GUI_REPLACEMENT, text)
@@ -15047,12 +15087,24 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
             # 头之后还要读几十秒，那段时间上游仍算这个账号在跑）。绑定后本地
             # 标记置空，循环开头就不会再重复归还。
             bind_account_slot_to_response(resp, account)
+            try:
+                resp._wb_account_uid = account.uid
+            except Exception:
+                pass
             slot_held = None
             # The third element is the reasoning effort this request ran at: the
             # body is rebuilt per attempt, but the effort is a property of the
             # model and the request, and the callers record it on the usage row.
             return resp, account, upstream_effort_of(upstream_body, model)
         except urllib.error.HTTPError as exc:
+            # 归因（#743）：所有 HTTPError 分支共用，exit 的 raise 路径也能
+            # 带回实际账号与出口；400 分支因此不再需要单独补一次。
+            try:
+                exc.account_uid = account.uid
+                exc.proxy_slot = account.proxy_slot
+                exc.proxy_exit = egress_exit(account.proxy)
+            except Exception:
+                pass
             if exc.code == 429:
                 try:
                     detail = read_http_error(exc, 600).decode("utf-8", "replace")
@@ -22452,6 +22504,8 @@ class Handler(BaseHTTPRequestHandler):
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),
+                         proxy_slot=getattr(exc, "proxy_slot", None),
+                         proxy_exit=getattr(exc, "proxy_exit", None),
                          key=self._key_id())
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
@@ -22804,6 +22858,8 @@ class Handler(BaseHTTPRequestHandler):
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),
+                         proxy_slot=getattr(exc, "proxy_slot", None),
+                         proxy_exit=getattr(exc, "proxy_exit", None),
                          key=self._key_id())
             return self._anthropic_error(exc.code,
                                          "upstream %s: %s" % (exc.code, detail))
@@ -23209,6 +23265,8 @@ class Handler(BaseHTTPRequestHandler):
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),
+                         proxy_slot=getattr(exc, "proxy_slot", None),
+                         proxy_exit=getattr(exc, "proxy_exit", None),
                          key=self._key_id())
             return self._error(exc.code, f"upstream {exc.code}: {detail}")
         except Exception as exc:
