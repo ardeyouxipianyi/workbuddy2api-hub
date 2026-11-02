@@ -2008,16 +2008,36 @@ def oauth_callback(config, session_id, callback_url):
 
 
 def oauth_callback_get(config, query):
-    """浏览器 GET /oauth/callback 的处理；返回 HTML。"""
+    """浏览器 GET /oauth/callback 的处理；返回 HTML。
+
+    华为云的授权回调会把授权链接里的 `ticket_id` 改写成 `state` 再送回来
+    （实测：授权 URL 带 `ticket_id=<32 hex>`，回调带 `state=<hex>.pkg`），
+    所以这里必须两个名字都认；只认 `ticket_id` 会让每一个浏览器回调都
+    撞上「回调缺少会话标识」，用户只能手工拼 URL 才能登录。
+
+    刻意**不做**「猜最近一个 pending 会话」的兜底：没有会话标识的回调按
+    设计就该被拒（既有测试 `_test_codearts_admin.py` 钉住了这条），用过期
+    或陌生的回调去兑换 token 只会把错误搅浑。这里只做精确匹配。
+    """
     def value(key):
         raw = query.get(key)
         if isinstance(raw, list):
             return raw[0] if raw else ""
         return raw or ""
     ticket_id, callback_secret = value("ticket_id"), value("secret")
-    if not ticket_id and not callback_secret:
+    state = value("state")
+    if not ticket_id and not callback_secret and not state:
         return 400, "<h3>回调缺少会话标识，请回到看板粘贴完整回调地址。</h3>"
-    session = _find_session(ticket_id=ticket_id, secret=callback_secret)
+    session = None
+    if ticket_id or callback_secret:
+        session = _find_session(ticket_id=ticket_id, secret=callback_secret)
+    if session is None and state:
+        # 华为云的回调形态：ticket_id 被改名成 state。逐级尝试，
+        # 全部精确匹配，不做「随便找一个 pending」的猜测。
+        for candidate in _state_candidates(state):
+            session = _find_session(ticket_id=candidate)
+            if session is not None:
+                break
     if session is None:
         return 400, "<h3>登录会话不存在或已过期，请回到看板重新发起。</h3>"
     code = value("code")
@@ -2043,6 +2063,26 @@ def oauth_callback_get(config, query):
         import html as html_module
         return 400, "<h3>登录失败：%s</h3>" % html_module.escape(str(exc))
     return 400, "<h3>回调地址缺少 code 或 secret。</h3>"
+
+
+def _state_candidates(state):
+    """把回调的 `state` 展开成若干可能的 ticket_id，按可信度排列。
+
+    实测华为云回传的 `state` 是 `<ticket_id>.pkg` 形状（ticket_id 为 32 位
+    hex），同时也见过原样回传。这里两种形状都给出来，由 `_find_session()`
+    做精确匹配——一个都匹配不上就返回 None，绝不会登进错误的会话。
+    """
+    text = str(state or "").strip()
+    if not text:
+        return []
+    out = []
+    head = text.split(".", 1)[0]
+    if head and head != text:
+        out.append(head)
+    out.append(text)
+    # 去重但保序；ticket_id 只可能是 hex，非 hex 的候选留着也无害（匹配不上）。
+    seen = set()
+    return [x for x in out if x and not (x in seen or seen.add(x))]
 
 
 # ---------------------------------------------------------------------------

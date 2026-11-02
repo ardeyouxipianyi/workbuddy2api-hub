@@ -202,7 +202,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 246 个套件：183 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 247 个套件：184 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -510,6 +510,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
 - **v1.10.1 发布**：429 响应带上绝对恢复时刻（#720）、工具名称校验丢弃非法条目防 11133（#726）、CodeArts 发送会话头修掉并发上限与排队（#723）、代理槽账号密码认证与格式规整（#648）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1101)**；下一版的改动继续写在本段。
+- **修复 CodeArts OAuth 浏览器回调必然失败**（#734）：授权链接里带 `ticket_id=<32 hex>`，而华为云把回调里的这个参数改名成 `state=<同一个 hex>.pkg`，`oauth_callback_get()` 只认 `ticket_id` / `secret`，于是每一个真实浏览器回调都撞上「回调缺少会话标识」，用户只能自己把 URL 里的 `state` 手工改成 `ticket_id` 才能登录。现在 `state` 会被展开成裸 hex 与原值两个候选做精确匹配；`ticket_id` / `secret` 两种老形态不受影响，仍然不做「猜最近一个 pending 会话」的兜底（没有会话标识、或用陌生标识的回调照旧拒绝）。新增 `tests/_test_codearts_oauth_state.py`（15 项）。 / Fix the CodeArts OAuth browser callback always failing (#734): the authorize link carries `ticket_id=<32 hex>`, but Huawei Cloud renames that parameter to `state=<the same hex>.pkg` on the callback, and `oauth_callback_get()` only accepted `ticket_id` / `secret` — so every real browser callback hit "回调缺少会话标识" and users had to hand-edit the URL before they could sign in. `state` is now expanded into both the bare hex and the raw value and matched exactly; the `ticket_id` / `secret` shapes are unchanged, and there is still no "guess the most recent pending session" fallback (a callback with no identifier, or an unknown one, is still refused). Covered by `tests/_test_codearts_oauth_state.py` (15 checks).
 - **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
 - **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。
 - **v1.9.1 发布**：集成 #692 与 #693，详见 [更新记录](docs/CHANGELOG.md#v191)。
