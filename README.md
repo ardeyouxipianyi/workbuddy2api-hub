@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.3-2496ED?style=flat-square" alt="Version 1.10.3"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.4-2496ED?style=flat-square" alt="Version 1.10.4"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -509,7 +509,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-- **v1.10.3 发布**：同步国际版模型目录与计费快照（#738/#739）、修复 CodeArts 浏览器授权回调丢失会话标识（#735）、修复 CodeArts 非流式提前释放账号并发竞争（#740）、429 恢复时刻测试夹具解耦（#737）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1103)**；下一版的改动继续写在本段。
+- **v1.10.4 发布**：成长中心全能引擎与 Buddy 盲盒自动化扩展。补齐工作台搭建师、电商运营等 6 项官方新任务，支持动态专家深链解析；解除资料库与桌面对话跳过限制；支持成长能量自动开启 Buddy 盲盒（/buddy/open）；支持微信小程序链式任务（Sequential_Tasks_1~6 / 校园日）自动化。本功能参考并致谢开源项目 [L0NE-6/WorkBuddy-Daily](https://github.com/L0NE-6/WorkBuddy-Daily) 与 [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（MIT License）。完整变更、验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1104)**；下一版的改动继续写在本段。
 - **v1.10.1 发布**：429 响应带上绝对恢复时刻（#720）、工具名称校验丢弃非法条目防 11133（#726）、CodeArts 发送会话头修掉并发上限与排队（#723）、代理槽账号密码认证与格式规整（#648）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1101)**；下一版的改动继续写在本段。
 - **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
 - **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。

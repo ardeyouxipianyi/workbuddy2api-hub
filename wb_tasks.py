@@ -1,5 +1,11 @@
 """wb_tasks.py —— 国内版成长任务与日常福利全自动完成引擎
 
+致谢与开源参考：
+- 本模块任务事件模型、小程序埋点指纹与动态专家解析参考并致谢开源项目：
+  https://github.com/L0NE-6/WorkBuddy-Daily (MIT License)
+- 猫猫旅行与 Buddy 盲盒安全生命周期参考并致谢开源项目：
+  https://github.com/88lin/workbuddy-auto-signin (MIT License)
+
 包含功能：
 1. 成长任务查询、批量接取 (accept)、构造事件上报点亮 (report)、领奖入账 (claim)。
 2. 连续打卡 (streak) 与能量 (energy) 余额查询。
@@ -23,6 +29,32 @@ WEB_BASE = "https://www.workbuddy.cn"
 #: 版本号（国际版 5.8.4 对齐时就是这么漏掉一份的）。
 DESKTOP_UA = wb_identity.DESKTOP_UA_CN
 WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+LIB_DOC_URL = "https://www.workbuddy.cn/space/d/o0KWYeynteVv06UnAZqIFm"
+_EXPERT_ID_RE = re.compile(r"^ex_[A-Za-z0-9]{6,64}$")
+
+MP_HEADERS = {
+    "X-Client-Platform": "miniprogram",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 14; MicroMessenger/8.0.49 WeChat/0.8.0 MiniProgramEnv/android; wkbrowser xweb)"
+}
+
+MP_REPORT_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "X-Client-Product": "workbuddy-mp",
+    "X-Client-Version": "2.4.0",
+    "X-Client-Platform": "mp-weixin",
+    "X-Platform": "wechatmp",
+}
+
+MP_TASK_SPECS = {
+    "Sequential_Tasks_1": {"name": "小程序对话", "target": 1, "reward": 100},
+    "Sequential_Tasks_2": {"name": "小程序专家对话", "target": 1, "reward": 200},
+    "Sequential_Tasks_3": {"name": "小程序对话5次", "target": 5, "reward": 300},
+    "Sequential_Tasks_4": {"name": "小程序定时任务", "target": 1, "reward": 100},
+    "Sequential_Tasks_5": {"name": "小程序GLM5.2", "target": 1, "reward": 100},
+    "Sequential_Tasks_6": {"name": "小程序对话10次", "target": 10, "reward": 400},
+    "school_season": {"name": "校园日活动", "target": 1, "reward": 100},
+}
 
 
 _log = lambda msg: None
@@ -63,6 +95,23 @@ TASK_SPECS = {
     "WorkBuddy_Valorant": {"kind": "expert", "target": 1, "reward": 100,
                            "expert": ("ex_xQHHD1u5Jkua", "无畏契约拼豆专家"),
                            "name": "体验「无畏契约拼豆专家」"},
+    "workstation_expert": {"kind": "expert", "target": 1, "reward": 100,
+                           "expert": ("WorkspaceBuilder", "工作台搭建师"),
+                           "name": "工作台搭建师"},
+    "expert_use_maidehao": {"kind": "expert", "target": 1, "reward": 100,
+                            "expert": ("ex_GDl31WahyIH0", "中国电商运营专家"),
+                            "name": "中国电商运营专家"},
+    "expert_use_douyinyin": {"kind": "expert", "target": 1, "reward": 100,
+                             "expert": ("ex_FbY5nlWTqDod", "抖音策略师"),
+                             "name": "抖音策略师"},
+    "expert_use_shangjia_xuanchuan": {"kind": "expert", "target": 1, "reward": 100,
+                                      "expert": ("ex_Weo3x2EZuSDm", "商家宣传页与海报设计师"),
+                                      "name": "商家宣传页与海报设计师"},
+    "expert_use_bowangwang": {"kind": "expert", "target": 1, "reward": 100,
+                              "expert": ("ex_WZY136wV5aMt", "直播电商教练"),
+                              "name": "直播电商教练"},
+    "Sequential_Tasks_7": {"kind": "playbook", "target": 1, "reward": 100,
+                           "name": "PC灵感功能"},
     "wb_wechat_oa_subscribe_task": {"unforgeable": True, "reward": 100,
                                     "reason": "需在微信关注「腾讯 WorkBuddy」公众号满 24 小时",
                                     "name": "关注官方公众号"},
@@ -76,8 +125,6 @@ TASK_SPECS = {
 # 需要真实点击进入对应页面)。伪造 /v2/report 事件会被忽略或落到 heartbeat,
 # 进度永远是 0/1, claim 必然返回 400 "task not completed"。诚实地跳过并给出深链。
 DESKTOP_ONLY_TASKS = {
-    "RichMeow_Chat": "在桌面端发起 1 次对话",
-    "Library_read": "在桌面端打开「资料库」并读完介绍文档",
     "Buddy_App": "在桌面端左上角「发现应用」进入任意一个 Buddy 应用",
     "Buddy_App_QQ": "在桌面端「发现应用」进入「企鹅教师助手」",
 }
@@ -113,20 +160,24 @@ TEAM_ID_POOL = [
 ]
 
 
-def fetch_growth_tasks(account):
-    """查询成长任务列表及当前状态。"""
+def fetch_growth_tasks(account, mp=False):
+    """查询成长任务列表及当前状态。mp=True 时使用小程序专属标头查询。"""
     if getattr(account, "is_enterprise", lambda: False)():
         return []
     url = CHAT_BASE + "/v2/activity/growth/tasks"
-    req = urllib.request.Request(url, headers=account.headers("chat"))
+    hdrs = account.headers("chat")
+    if mp:
+        hdrs.update(MP_HEADERS)
+    req = urllib.request.Request(url, headers=hdrs)
     try:
         with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             raw_tasks = (data.get("data") or {}).get("tasks") or []
             tasks = []
+            specs = MP_TASK_SPECS if mp else TASK_SPECS
             for t in raw_tasks:
                 code = t.get("task_code") or ""
-                spec = TASK_SPECS.get(code, {})
+                spec = specs.get(code, {})
                 prog = t.get("progress") or {}
                 tasks.append({
                     "task_code": code,
@@ -213,7 +264,7 @@ def fetch_streak_days(account):
         _log(f"fetch_streak_days failed: {exc}")
         return None
 
-def accept_tasks(account, codes, chunk=20):
+def accept_tasks(account, codes, chunk=20, mp=False):
     """批量接取任务。
 
     上游按批返回 results, 单个任务可能 status=accepted / already_accepted /
@@ -229,8 +280,11 @@ def accept_tasks(account, codes, chunk=20):
     for i in range(0, len(codes), max(1, chunk)):
         part = codes[i:i + max(1, chunk)]
         body = json.dumps({"task_codes": part}).encode("utf-8")
+        hdrs = account.headers("chat")
+        if mp:
+            hdrs.update(MP_HEADERS)
         req = urllib.request.Request(url, data=body, method="POST",
-                                     headers=account.headers("chat"))
+                                     headers=hdrs)
         try:
             with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
                 d = json.loads(resp.read().decode("utf-8"))
@@ -277,10 +331,13 @@ def accept_tasks(account, codes, chunk=20):
     return out
 
 
-def claim_task(account, code):
-    """领取任务奖励。支持 copilot.tencent.com -> www.workbuddy.cn 自动降级。"""
+def claim_task(account, code, mp=False):
+    """领取任务奖励。支持小程序口径与 copilot.tencent.com -> www.workbuddy.cn 自动降级。"""
     url = f"{CHAT_BASE}/activity/growth/tasks/{code}/claim"
-    req = urllib.request.Request(url, data=b"{}", method="POST", headers=account.headers("chat"))
+    hdrs = account.headers("chat")
+    if mp:
+        hdrs.update(MP_HEADERS)
+    req = urllib.request.Request(url, data=b"{}", method="POST", headers=hdrs)
     try:
         with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
             d = json.loads(resp.read().decode("utf-8"))
@@ -327,6 +384,109 @@ def claim_task(account, code):
     except Exception as exc:
         _log(f"task {code} claim failed: {exc}")
     return {"ok": False, "credit": 0, "energy": 0}
+
+
+def extract_expert_from_task(task):
+    """从任务 code 或 jump_url 中动态提取专家 ID 与名称。"""
+    jump_url = str(task.get("jump_url") or "")
+    if jump_url:
+        import urllib.parse
+        try:
+            parsed = urllib.parse.urlparse(jump_url)
+            query = urllib.parse.parse_qs(parsed.query)
+            if "deeplink" in query and query["deeplink"]:
+                inner = urllib.parse.urlparse(query["deeplink"][0])
+                inner_q = urllib.parse.parse_qs(inner.query)
+                if "expertId" in inner_q and inner_q["expertId"]:
+                    eid = inner_q["expertId"][0].strip()
+                    if _EXPERT_ID_RE.match(eid):
+                        return (eid, task.get("name") or task.get("title") or "专家")
+            if "expertId" in query and query["expertId"]:
+                eid = query["expertId"][0].strip()
+                if _EXPERT_ID_RE.match(eid):
+                    return (eid, task.get("name") or task.get("title") or "专家")
+        except Exception:
+            pass
+    code = task.get("task_code") or ""
+    if code.startswith("expert_use_"):
+        slug = code[len("expert_use_"):]
+        return (f"ex_{slug}", task.get("name") or task.get("title") or slug)
+    return None
+
+
+def build_desktop_chat_events(account, idx=0, model_id="fast-model", model_name="fast-model"):
+    """6 连桌面端成功对话事件链（点亮 RichMeow_Chat）。"""
+    now = int(time.time() * 1000)
+    cid = f"wb-richmeow-{now}-{idx}"
+    rid = f"{cid}-req"
+    mid = f"msg-{now}-{idx}"
+    uid = account.uid
+    nick = getattr(account, "nickname", "") or ""
+    return [
+        {"eventCode": "agent_task_created", "timestamp": now, "userId": uid, "userNickname": nick,
+         "source": "LOCAL", "name": "working", "task_target": "local", "mode": "craft",
+         "requestModelId": model_id, "requestModelName": model_name,
+         "has_repo": False, "repo_type": "none", "workspace_type": "empty",
+         "has_connector": False, "connector_types": [], "has_mention": False, "mention_types": [],
+         "has_template": False, "action": "", "template_name": "", "has_expert": False,
+         "expert_id": "", "expert_name": "", "expert_industry_id": "", "has_skill": False,
+         "skill_names": [], "conversationId": cid, "messageId": mid, "buddyId": "", "buddyName": ""},
+        {"eventCode": "chat_message_send", "timestamp": now + 20, "userId": uid, "userNickname": nick,
+         "messageId": mid + "-ast", "historyCount": 0, "isContextTruncated": False,
+         "currentStepCount": 1, "traceId": rid, "rootRequestId": rid, "parentConversationId": cid,
+         "agentName": "cli", "agentType": "main"},
+        {"eventCode": "chat_request_send", "timestamp": now + 40, "userId": uid, "userNickname": nick,
+         "inputLength": 24, "isPlan": False, "isAutoExecuteTerminal": False, "isAutoModify": False,
+         "codebaseEnable": False, "maxToken": 0, "maxSteps": 500, "temperature": 0,
+         "maxRetries": 0, "mentionContexts": [], "knowledgeId": [], "knowledgeName": [],
+         "codebaseId": "", "mentionContextCount": 0, "command": "", "recommendId": "",
+         "skillId": "", "skillCount": 0, "totalCount": 0, "traceId": rid, "rootRequestId": rid,
+         "parentConversationId": cid, "conversationId": cid, "messageId": mid,
+         "agentName": "cli", "agentType": "main"},
+        {"eventCode": "chat_message_response", "timestamp": now + 60, "userId": uid, "userNickname": nick,
+         "messageId": mid + "-resp", "conversationId": cid, "requestId": rid, "agentName": "cli"},
+        {"eventCode": "chat_request_response", "timestamp": now + 80, "userId": uid, "userNickname": nick,
+         "conversationId": cid, "requestId": rid, "requestModelId": model_id,
+         "requestModelName": model_name, "toolCallCount": 0, "inputToken": 6, "outputToken": 12,
+         "duration": 50, "agentName": "cli"},
+        {"eventCode": "agent_task_completed", "timestamp": now + 100, "userId": uid, "userNickname": nick,
+         "conversationId": cid, "messageId": mid, "status": "success"},
+    ]
+
+
+def mp_base(uid, nick):
+    now = int(time.time() * 1000)
+    return {
+        "timestamp": now, "ideType": "WorkBuddy_MP", "ideVersion": "2.4.0",
+        "extName": "workbuddy-mp", "extVersion": "2.4.0", "product": "SaaS",
+        "ideName": "wx_app_cloud", "platform": "mini_program", "source": "mini_program",
+        "os": "android", "osVersion": "14", "arch": "arm64",
+        "machineId": f"mp-{uid[:16] if uid else 'guest'}", "timezone": "Asia/Shanghai",
+        "userId": uid, "userNickname": nick or "",
+    }
+
+
+def report_mp_events(account, events, base=None):
+    if base is None:
+        base = CHAT_BASE
+    url = base + "/v2/report"
+    base_ev = mp_base(account.uid, getattr(account, "nickname", ""))
+    arr = []
+    for e in events:
+        m = dict(base_ev)
+        m.update(e)
+        arr.append(m)
+    body = json.dumps(arr).encode("utf-8")
+    headers = account.headers("chat")
+    headers.update(MP_REPORT_HEADERS)
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    try:
+        with _accounts.urlopen(req, timeout=15, proxy=account.proxy) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+            return d.get("code") == 0
+    except Exception as exc:
+        _log(f"report_mp_events failed: {exc}")
+        return False
 
 
 def build_event(account, kind, idx=0, expert=None):
@@ -376,11 +536,24 @@ def build_event(account, kind, idx=0, expert=None):
                 "conversationId": cid, "requestId": rid,
                 "schedule": {"type": "recurring", "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0"},
                 "prompt": "每周五自动整理本周工作", "userId": uid}
+    if kind == "library":
+        return {"eventCode": "web_element_click", "timestamp": now, "reportDelay": 0,
+                "pageURL": LIB_DOC_URL, "elementId": "library_doc_intro_click",
+                "elementName": "WorkBuddy资料库介绍", "os": "Win32", "arch": "",
+                "osVersion": "10.0", "userAgent": "Mozilla/5.0", "userId": uid}
     if kind == "playbook":
-        return {"eventCode": "playbook_prompt_send", "timestamp": now, "reportDelay": 0,
+        cta = {"eventCode": "playbook_cta_click", "timestamp": now, "reportDelay": 0,
+               "id": "worker-ledger-freedom-dashboard", "name": "打工人小账本",
+               "type": "document", "categoryId": "", "categoryName": "",
+               "source": "discover", "position": 0, "conversationId": cid,
+               "requestId": rid, "messageId": rid, "userId": uid}
+        send = {"eventCode": "playbook_prompt_send", "timestamp": now + 50, "reportDelay": 0,
                 "id": "worker-ledger-freedom-dashboard", "name": "打工人小账本",
-                "type": "other", "promptLength": 10, "isOfficial": 1,
-                "source": "discover", "conversationId": cid, "requestId": rid, "userId": uid}
+                "type": "document", "categoryId": "", "categoryName": "",
+                "promptLength": 30, "isOfficial": 1, "source": "discover",
+                "conversationId": cid, "requestId": rid, "messageId": rid,
+                "skills": "", "skillNames": "", "userId": uid}
+        return [cta, send]
     if kind == "skin":
         return {"eventCode": "appearance_skin_apply", "timestamp": now, "reportDelay": 0,
                 "action": "apply", "source": "settings_close", "id": "theme-tkmw7j",
@@ -541,6 +714,11 @@ def _progress_one(account, t, logs, gap, claim=True):
     """
     code = t["task_code"]
     spec = TASK_SPECS.get(code)
+    if not spec:
+        dyn_expert = extract_expert_from_task(t)
+        if dyn_expert:
+            spec = {"kind": "expert", "target": t.get("target") or 1, "reward": 100,
+                    "expert": dyn_expert, "name": t.get("name") or t.get("title") or code}
     if not spec or spec.get("unforgeable"):
         if spec and spec.get("reason"):
             logs.append(f"⏭ 任务 [{spec.get('name') or code}] 需真实操作完成: {spec['reason']}, 跳过")
@@ -603,8 +781,12 @@ def _progress_one(account, t, logs, gap, claim=True):
         if expert is None and id_pool:
             pid, pnm = id_pool[(cur + i) % len(id_pool)]
             expert = (pid, pnm)
-        ev = build_event(account, kind, idx=i, expert=expert)
-        if not report_events(account, [ev]):
+        if kind == "richmeow":
+            ev_list = build_desktop_chat_events(account, idx=i)
+        else:
+            ev = build_event(account, kind, idx=i, expert=expert)
+            ev_list = ev if isinstance(ev, list) else [ev]
+        if not report_events(account, ev_list):
             report_ok = False
         if i < need - 1:
             time.sleep(gap)
@@ -648,6 +830,164 @@ def _progress_one(account, t, logs, gap, claim=True):
     logs.append(f"! 任务 [{spec['name']}] 进度已达 {prog}/{tgt} 但领奖失败: {res.get('msg') or '未知原因'}")
     time.sleep(gap)
     return 0
+
+
+def do_buddy_open(account):
+    """成长能量开 Buddy 盲盒（消耗能量获取宠物）。
+
+    对齐 88lin/workbuddy-auto-signin 的开盒流程：在猫猫空闲/领奖后，将积累的能量
+    自动开启 Buddy 盲盒（/v2/activity/growth/buddy/open），避免成长能量闲置。
+    """
+    if getattr(account, "is_enterprise", lambda: False)():
+        return {"ok": True, "action": "skip", "msg": "企业版账号无成长体系，跳过"}
+    if not hasattr(account, "headers"):
+        return {"ok": True, "action": "skip", "msg": "账号缺少 headers 方法，跳过"}
+    headers = account.headers("chat")
+    try:
+        req_q = urllib.request.Request(CHAT_BASE + "/v2/activity/growth/buddy/quota", headers=headers)
+        with _accounts.urlopen(req_q, timeout=10, proxy=account.proxy) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+            quota_data = (d.get("data") or {}) if d.get("code") == 0 else {}
+            affordable = int(quota_data.get("affordable") or 0)
+            max_open = int(quota_data.get("max_open_count") or 1)
+        if affordable <= 0:
+            return {"ok": True, "action": "idle", "opened": 0, "msg": "成长能量不足以开启 Buddy 盲盒"}
+        count = min(affordable, max(1, max_open))
+        import uuid
+        payload = {"count": count, "client_token": str(uuid.uuid4())}
+        req_o = urllib.request.Request(
+            CHAT_BASE + "/v2/activity/growth/buddy/open",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST", headers=headers
+        )
+        with _accounts.urlopen(req_o, timeout=15, proxy=account.proxy) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+        if res.get("code") == 0:
+            data = res.get("data") or {}
+            name = data.get("buddy") or data.get("name") or data.get("buddies") or "新 Buddy"
+            if isinstance(name, list) and name:
+                name = ", ".join(str(x) for x in name)
+            return {"ok": True, "action": "open", "opened": count,
+                    "name": str(name), "msg": f"开启 Buddy 盲盒 ×{count} 成功 ({name})"}
+        return {"ok": False, "action": "error", "opened": 0,
+                "msg": f"开盲盒失败: {res.get('msg') or res.get('code')}"}
+    except Exception as exc:
+        return {"ok": False, "action": "error", "opened": 0, "msg": f"Buddy 盲盒异常: {exc}"}
+
+
+def run_miniprogram_tasks(account, gap=1.0, claim=True):
+    """小程序链式任务自动化（Sequential_Tasks 系列与校园日活动）。
+
+    参考并致谢 L0NE-6/WorkBuddy-Daily 的小程序埋点协议与任务链设计。
+    """
+    if account.realm != "cn" or getattr(account, "is_enterprise", lambda: False)():
+        return {"ok": True, "logs": [], "earned_credit": 0}
+    logs = []
+    mp_tasks = fetch_growth_tasks(account, mp=True)
+    if not mp_tasks:
+        return {"ok": True, "logs": logs, "earned_credit": 0}
+
+    supported = [t for t in mp_tasks if t["task_code"] in MP_TASK_SPECS
+                 or t["task_code"].startswith("Sequential_Tasks_")]
+    if not supported:
+        return {"ok": True, "logs": logs, "earned_credit": 0}
+
+    logs.append(f"📱 发现 {len(supported)} 个小程序成长任务，开始执行自动化...")
+    unaccepted = [t["task_code"] for t in supported if t["status"] == "not_accepted"]
+    if unaccepted:
+        acc = accept_tasks(account, unaccepted, mp=True)
+        if acc.get("accepted"):
+            logs.append(f"✓ 已接取小程序任务: {', '.join(acc['accepted'])}")
+        time.sleep(gap)
+        mp_tasks = fetch_growth_tasks(account, mp=True)
+
+    total_earned = 0
+    now = int(time.time() * 1000)
+
+    for t in mp_tasks:
+        code = t["task_code"]
+        if code not in MP_TASK_SPECS and not code.startswith("Sequential_Tasks_"):
+            continue
+        status = t["status"]
+        cur = t.get("current", 0)
+        tgt = t.get("target", 1)
+        name = t.get("name") or code
+
+        if status == "claimed":
+            continue
+
+        if status == "completed" or cur >= tgt:
+            if claim:
+                res = claim_task(account, code, mp=True)
+                if res.get("ok"):
+                    cr = res.get("credit", 0)
+                    total_earned += cr
+                    logs.append(f"✓ 小程序任务 [{name}] 领奖成功: +{cr} 积分")
+                else:
+                    logs.append(f"! 小程序任务 [{name}] 领奖失败: {res.get('msg') or '未知原因'}")
+            continue
+
+        if status == "not_accepted":
+            continue
+
+        need = max(1, tgt - cur)
+        events = []
+        for i in range(need):
+            cid = f"wb-mp-{now}-{code}-{i}"
+            rid = f"req-{now}-{code}-{i}"
+            if code in ("Sequential_Tasks_1", "Sequential_Tasks_3", "Sequential_Tasks_6", "school_season"):
+                events.append({
+                    "eventCode": "chat_request_send", "mode": "chat", "inputLength": 12,
+                    "isPlan": False, "isAutoExecuteTerminal": False, "isAutoModify": False,
+                    "codebaseEnable": False, "maxToken": 0, "maxSteps": 500, "temperature": 0,
+                    "maxRetries": 0, "mentionContexts": [], "knowledgeId": [], "knowledgeName": [],
+                    "codebaseId": "", "mentionContextCount": 0, "command": "",
+                    "requestId": rid, "traceId": rid, "rootRequestId": rid,
+                    "parentConversationId": cid, "conversationId": cid,
+                    "messageId": f"msg-{now}-{i}", "agentName": "mp", "agentType": "main",
+                    "codebuddy.session_id": cid, "codebuddy.conversation_request_id": rid,
+                })
+            elif code == "Sequential_Tasks_2":
+                events.append({
+                    "eventCode": "expert_actual_use", "id": "WorkspaceBuilder", "name": "WorkspaceBuilder",
+                    "expertTitle": "工作台搭建师", "type": "send_message", "characterCount": 12,
+                    "expertType": "agent", "extVersion": "2.2.8",
+                })
+            elif code == "Sequential_Tasks_4":
+                events.append({
+                    "eventCode": "automated_task_create_suc", "mode": "CLOUD",
+                    "name": "每日任务提醒", "source": "manually", "skills": "",
+                    "skillCount": 0, "scheduleType": "daily",
+                })
+            elif code == "Sequential_Tasks_5":
+                events.append({
+                    "eventCode": "chat_request_send", "mode": "chat", "inputLength": 12,
+                    "isPlan": False, "isAutoExecuteTerminal": False, "isAutoModify": False,
+                    "codebaseEnable": False, "maxToken": 0, "maxSteps": 500, "temperature": 0,
+                    "maxRetries": 0, "mentionContexts": [], "knowledgeId": [], "knowledgeName": [],
+                    "codebaseId": "", "mentionContextCount": 0, "command": "",
+                    "requestId": rid, "traceId": rid, "rootRequestId": rid,
+                    "parentConversationId": cid, "conversationId": cid,
+                    "messageId": f"msg-{now}-{i}", "agentName": "mp", "agentType": "main",
+                    "codebuddy.session_id": cid, "codebuddy.conversation_request_id": rid,
+                    "requestModelId": "glm-5.2", "requestModelName": "GLM-5.2",
+                })
+
+        if events:
+            logs.append(f"正在点亮小程序任务 [{name}] (需上报 {need} 次)...")
+            report_mp_events(account, events)
+            time.sleep(1.5)
+            if claim:
+                res = claim_task(account, code, mp=True)
+                if res.get("ok"):
+                    cr = res.get("credit", 0)
+                    total_earned += cr
+                    logs.append(f"✓ 小程序任务 [{name}] 点亮并领奖成功: +{cr} 积分")
+                else:
+                    logs.append(f"? 小程序任务 [{name}] 已上报，领奖将在下轮重试")
+            time.sleep(gap)
+
+    return {"ok": True, "logs": logs, "earned_credit": total_earned}
 
 
 def run_growth_tasks(account, gap=1.0, claim=True):
@@ -718,12 +1058,33 @@ def run_growth_tasks(account, gap=1.0, claim=True):
             continue
         total_earned += _progress_one(account, t, logs, gap, claim=claim)
 
-    # 3. 顺手检查猫猫旅行
+    # 2b. 运行微信小程序链式成长任务（Sequential_Tasks 系列）
+    try:
+        mp_res = run_miniprogram_tasks(account, gap=gap, claim=claim)
+        total_earned += mp_res.get("earned_credit", 0)
+        logs.extend(mp_res.get("logs", []))
+    except Exception as exc:
+        logs.append(f"! 小程序成长任务执行异常: {exc}")
+
+    # 3. 顺手检查猫猫旅行与 Buddy 盲盒
     tr_res = do_cat_travel(account)
     if tr_res.get("msg"):
         logs.append(f"猫猫日常: {tr_res.get('msg')}")
         if tr_res.get("credit"):
             total_earned += tr_res.get("credit", 0)
+    if tr_res.get("action") == "claim":
+        time.sleep(gap)
+        bo_res = do_buddy_open(account)
+        if bo_res.get("action") == "open":
+            logs.append(f"Buddy 盲盒: {bo_res.get('msg')}")
+        time.sleep(gap)
+        tr2 = do_cat_travel(account)
+        if tr2.get("msg") and tr2.get("action") == "depart":
+            logs.append(f"猫猫日常: {tr2.get('msg')}")
+    else:
+        bo_res = do_buddy_open(account)
+        if bo_res.get("action") == "open":
+            logs.append(f"Buddy 盲盒: {bo_res.get('msg')}")
 
     # 4. 刷新积分余额
     account.fetch_credits()

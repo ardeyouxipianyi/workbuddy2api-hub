@@ -478,11 +478,27 @@ class Scheduler:
                         time.sleep(1.0)
 
                 if run_travel:
-                    # 检查猫猫旅行
+                    # 检查猫猫旅行与 Buddy 盲盒
                     tr = do_cat_travel(acc)
-                    if tr.get("action") in ("claim", "depart"):
+                    if tr.get("action") == "claim":
                         travel_count += 1
                         self.log(f"🐱 账号 [{uid8}] 猫猫日常处理: {tr.get('msg')}")
+                        time.sleep(1.0)
+                        bo = wb_tasks.do_buddy_open(acc)
+                        if bo.get("action") == "open":
+                            self.log(f"🎁 账号 [{uid8}] {bo.get('msg')}")
+                            time.sleep(1.0)
+                        tr2 = do_cat_travel(acc)
+                        if tr2.get("action") == "depart":
+                            self.log(f"🐱 账号 [{uid8}] 猫猫日常处理: {tr2.get('msg')}")
+                    elif tr.get("action") == "depart":
+                        travel_count += 1
+                        self.log(f"🐱 账号 [{uid8}] 猫猫日常处理: {tr.get('msg')}")
+                    else:
+                        bo = wb_tasks.do_buddy_open(acc)
+                        if bo.get("action") == "open":
+                            self.log(f"🎁 账号 [{uid8}] {bo.get('msg')}")
+                            time.sleep(1.0)
                     time.sleep(1.0)
 
                     # 连登管家闭环（补签保连登 -> 礼包/补偿 -> 连登兑换 -> 自动抽奖）

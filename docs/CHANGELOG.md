@@ -1,3 +1,16 @@
+## v1.10.4
+
+国内版成长任务全能引擎与 Buddy 盲盒自动化扩展，并致谢社区开源项目：
+
+- **开源致谢与架构对齐**：
+  - 本模块任务事件模型、小程序专属埋点指纹与动态专家解析参考并致谢开源项目 [L0NE-6/WorkBuddy-Daily](https://github.com/L0NE-6/WorkBuddy-Daily)（MIT License）。
+  - 猫猫旅行与成长能量开盲盒（Buddy 盲盒）安全生命周期参考并致谢开源项目 [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（MIT License）。
+- **补齐官方新增任务支持**：新增工作台搭建师（workstation_expert）、中国电商运营专家（xpert_use_maidehao）、抖音策略师（xpert_use_douyinyin）、商家宣传设计师（xpert_use_shangjia_xuanchuan）、直播电商教练（xpert_use_bowangwang）、PC灵感功能（Sequential_Tasks_7）。
+- **动态专家深链解析**：遇到未预录入但上游临时下发的专家类任务（如带有 jump_url / deeplink），自动提取真实专家 ID（x_xxx）并构造 xpert_actual_use 事件推进进度，避免上游新增专家任务时被漏掉。
+- **解除资料库与桌面对话的跳过限制**：体验资料库（Library_read）接入官方文档点击事件（web_element_click）上报点亮；桌面对话（RichMeow_Chat）接入 6 连桌面端对话事件链点亮并领奖。
+- **成长能量自动开 Buddy 盲盒（do_buddy_open）**：检测到猫猫空闲或旅行归来领奖后，自动调用 /v2/activity/growth/buddy/quota 查询可开数量，并调用 /v2/activity/growth/buddy/open 开出宠物，消耗闲置能量；领奖后自动衔接开盒并立即派出新一轮旅行。
+- **微信小程序链式成长任务自动化**：支持使用小程序专属标头（X-Client-Platform: miniprogram）与埋点指纹（workbuddy-mp）对 Sequential_Tasks_1 ~ Sequential_Tasks_6 以及校园日活动进行扫描、接取、事件上报与领奖。
+
 ## v1.10.3
 
 - **同步国际版模型目录与计费快照到上游现状**（#738 / #739）：对齐上游最新模型发布与下线，对话模型由 24 项收敛至 22 项；新增 `deepseek-v4.1-flash-sg`（x0.11）、`gpt-6.1-sol`（x1.33）、`gpt-6-sol`（x1.33）、`gpt-6-luna`（x0.07）、`gemini-3.8-flash`（x0.95）、`kimi-k3.1-pro`（x0.97）、`kimi-k3.1-pro-highspeed`（x1.56）、`minimax-m3.1-flash`（x0.08）；移除上游已下线的旧版本模型；排除纯生图/生视频模型（`hy-image-3.5`、`kling-video-v3`）；修复 `-sg` 变体在无同名基名时被丢弃的问题；修复时段定价跨午夜窗口失效问题。

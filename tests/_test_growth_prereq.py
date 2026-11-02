@@ -305,5 +305,115 @@ class GrowthPrereqTests(unittest.TestCase):
         self.assertEqual(earned, 100)
 
 
+    def test_new_task_specs_registered(self):
+        self.assertIn("workstation_expert", T.TASK_SPECS)
+        self.assertIn("expert_use_maidehao", T.TASK_SPECS)
+        self.assertIn("expert_use_douyinyin", T.TASK_SPECS)
+        self.assertIn("expert_use_shangjia_xuanchuan", T.TASK_SPECS)
+        self.assertIn("expert_use_bowangwang", T.TASK_SPECS)
+        self.assertIn("Sequential_Tasks_7", T.TASK_SPECS)
+        self.assertNotIn("RichMeow_Chat", T.DESKTOP_ONLY_TASKS)
+        self.assertNotIn("Library_read", T.DESKTOP_ONLY_TASKS)
+
+    def test_dynamic_expert_extraction_and_progress(self):
+        task = {
+            "task_code": "expert_use_custom",
+            "name": "自定义电商专家",
+            "jump_url": "https://www.workbuddy.cn/chat?deeplink=workbuddy%3A%2F%2Fexperts%3FexpertId%3Dex_custom999",
+            "status": "accepted",
+            "current": 0,
+            "target": 1,
+        }
+        expert = T.extract_expert_from_task(task)
+        self.assertEqual(expert, ("ex_custom999", "自定义电商专家"))
+
+        events = []
+        original = (T.fetch_growth_tasks, T.report_events, T.claim_task)
+        T.fetch_growth_tasks = lambda acc: [dict(task, status="completed", current=1)]
+        T.report_events = lambda acc, evs, base=None: (events.extend(evs), True)[1]
+        T.claim_task = lambda acc, code: {"ok": True, "credit": 100}
+        try:
+            earned = T._progress_one(FakeAccount(), task, [], 0)
+        finally:
+            (T.fetch_growth_tasks, T.report_events, T.claim_task) = original
+        self.assertEqual(earned, 100)
+        self.assertEqual(events[0]["id"], "ex_custom999")
+
+    def test_library_read_builds_web_element_click(self):
+        ev = T.build_event(FakeAccount(), "library")
+        self.assertEqual(ev["eventCode"], "web_element_click")
+        self.assertEqual(ev["elementId"], "library_doc_intro_click")
+        self.assertEqual(ev["pageURL"], T.LIB_DOC_URL)
+
+    def test_richmeow_builds_desktop_chat_chain(self):
+        evs = T.build_desktop_chat_events(FakeAccount())
+        codes = [e["eventCode"] for e in evs]
+        self.assertEqual(codes, [
+            "agent_task_created", "chat_message_send", "chat_request_send",
+            "chat_message_response", "chat_request_response", "agent_task_completed"
+        ])
+
+    def test_buddy_open_when_affordable(self):
+        calls = []
+        def fake_urlopen(req, timeout=10, proxy=""):
+            calls.append(req.full_url)
+            if "/buddy/quota" in req.full_url:
+                return _Resp({"code": 0, "data": {"affordable": 2, "max_open_count": 1}})
+            if "/buddy/open" in req.full_url:
+                return _Resp({"code": 0, "data": {"buddy": "猫咪学霸"}})
+            return _Resp({"code": 0, "data": {}})
+        orig = T._accounts.urlopen
+        T._accounts.urlopen = fake_urlopen
+        try:
+            res = T.do_buddy_open(FakeAccount())
+        finally:
+            T._accounts.urlopen = orig
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["action"], "open")
+        self.assertEqual(res["opened"], 1)
+        self.assertIn("/buddy/quota", calls[0])
+        self.assertIn("/buddy/open", calls[1])
+
+    def test_miniprogram_tasks_lifecycle(self):
+        calls = []
+        mp_tasks_state = [
+            {"task_code": "Sequential_Tasks_1", "status": "not_accepted", "current": 0, "target": 1, "title": "小程序对话"}
+        ]
+        def fake_fetch(acc, mp=False):
+            calls.append(("fetch", mp))
+            return list(mp_tasks_state)
+        def fake_accept(acc, codes, chunk=20, mp=False):
+            calls.append(("accept", tuple(codes), mp))
+            for t in mp_tasks_state:
+                if t["task_code"] in codes:
+                    t["status"] = "accepted"
+            return {"ok": True, "accepted": list(codes)}
+        def fake_report_mp(acc, evs, base=None):
+            calls.append(("report_mp", len(evs)))
+            for t in mp_tasks_state:
+                t["status"] = "completed"
+                t["current"] = 1
+            return True
+        def fake_claim(acc, code, mp=False):
+            calls.append(("claim", code, mp))
+            return {"ok": True, "credit": 100}
+
+        orig = (T.fetch_growth_tasks, T.accept_tasks, T.report_mp_events, T.claim_task)
+        T.fetch_growth_tasks = fake_fetch
+        T.accept_tasks = fake_accept
+        T.report_mp_events = fake_report_mp
+        T.claim_task = fake_claim
+        try:
+            res = T.run_miniprogram_tasks(FakeAccount(), gap=0)
+        finally:
+            (T.fetch_growth_tasks, T.accept_tasks, T.report_mp_events, T.claim_task) = orig
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["earned_credit"], 100)
+        actions = [c[0] for c in calls]
+        self.assertIn("accept", actions)
+        self.assertIn("report_mp", actions)
+        self.assertIn("claim", actions)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
