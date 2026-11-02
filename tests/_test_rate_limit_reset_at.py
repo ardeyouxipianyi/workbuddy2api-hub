@@ -40,21 +40,36 @@ import wb_proxy as P          # noqa: E402
 
 MODEL = "deepseek-v4.1-flash"
 
+
+def _future_stamp(hours=2):
+    """一个「两小时后」的 UTC+8 墙钟，按上游正文的格式。
+
+    写死日期的版本会随时间失效：`_usable_reset_epoch` 会丢掉已经过去的恢复
+    时刻（客户端照着重试等于没等），于是测试在某个时刻之后必然开始失败。
+    这里按当前时钟生成，断言只依赖「解析出来的就是写进去的那个时刻」。
+    """
+    epoch = int(time.time()) + hours * 3600
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(epoch + 8 * 3600))
+
+
 # 上游 6004 的真实形状：英文与中文各一（parse_rate_limit_reset 认这两种）。
+_STAMP = _future_stamp()
 DETAIL_EN = ("usage exceeds frequency limit, but don't worry, your usage will "
-             "reset at 2026-11-02 03:04:05 UTC+8")
-DETAIL_CN = "您的使用量已超出频率限制，将在 2026-11-02 03:04:05 UTC+8 重置"
+             "reset at %s UTC+8" % _STAMP)
+DETAIL_CN = "您的使用量已超出频率限制，将在 %s UTC+8 重置" % _STAMP
 
 
 class HeaderHelperTests(unittest.TestCase):
     """纯函数：头怎么拼，拿不到时刻时怎么退避。"""
 
     def test_both_absolute_headers_are_emitted(self):
-        headers = dict(P.rate_limit_headers(1793600000))
-        self.assertEqual(headers["X-RateLimit-Reset"], "1793600000")
+        # 用未来时刻：过去的恢复时刻会被 _usable_reset_epoch 丢掉。
+        epoch = int(time.time()) + 3600
+        headers = dict(P.rate_limit_headers(epoch))
+        self.assertEqual(headers["X-RateLimit-Reset"], str(epoch))
         self.assertEqual(headers["X-RateLimit-Reset-At"],
                          time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                       time.gmtime(1793600000)))
+                                       time.gmtime(epoch)))
 
     def test_no_instant_means_no_headers(self):
         """宁可不说，也不能编一个恢复时刻出来。"""
@@ -67,9 +82,9 @@ class HeaderHelperTests(unittest.TestCase):
 
     def test_note_is_empty_without_an_instant(self):
         self.assertEqual(P.rate_limit_reset_note(None), "")
-        self.assertIn("resets at 2026-11-02T",
-                      P.rate_limit_reset_note(1793600000))
-
+        epoch = int(time.time()) + 3600
+        self.assertIn("resets at " + time.strftime("%Y-%m-%dT", time.gmtime(epoch)),
+                      P.rate_limit_reset_note(epoch))
 
 class ResetSourceTests(unittest.TestCase):
     """时刻从哪来：上游正文 > 本地窗口换算；都没有就不编。"""
