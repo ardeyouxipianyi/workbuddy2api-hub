@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.2-2496ED?style=flat-square" alt="Version 1.10.2"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.3-2496ED?style=flat-square" alt="Version 1.10.3"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -509,7 +509,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-- **v1.10.2 发布**：同步国际版模型目录与计费快照（#738/#739）、修复 CodeArts 浏览器授权回调丢失会话标识（#735）、429 恢复时刻测试夹具解耦（#737）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1102)**；下一版的改动继续写在本段。
+- **v1.10.3 发布**：同步国际版模型目录与计费快照（#738/#739）、修复 CodeArts 浏览器授权回调丢失会话标识（#735）、修复 CodeArts 非流式提前释放账号并发竞争（#740）、429 恢复时刻测试夹具解耦（#737）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1103)**；下一版的改动继续写在本段。
 - **v1.10.1 发布**：429 响应带上绝对恢复时刻（#720）、工具名称校验丢弃非法条目防 11133（#726）、CodeArts 发送会话头修掉并发上限与排队（#723）、代理槽账号密码认证与格式规整（#648）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1101)**；下一版的改动继续写在本段。
 - **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
 - **v1.9.2 发布**：数据看板轮询防慢堆叠（#656）、更新卡片操作提示优化（#696）、密码组件环境异常明确报错（#658），详见 [更新记录](docs/CHANGELOG.md#v192)。
@@ -610,7 +610,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 - **DSH 一键配置放宽限流重试，修掉「对话到一半链接中断」**：WorkBuddy 的 429 冷却通常约一分钟，而 DSH 的默认 `retryPolicy` 是 `normal` / 最多 5 次 / 退避 500ms 起翻倍、封顶 10s——加起来不到 16 秒就放弃，冷却还没结束回合就以 `RATE_LIMIT` 失败。一键配置现在给 `wb-proxy` 单独写 `retryPolicy: {mode: normal, maxRetries: 8, backoff: {initialDelayMs: 2000, maxDelayMs: 30000, jitterRatio: 0.1}}`（合计约 2 分半），只影响 `wb-proxy`，其它 provider 仍用默认策略；字段与取值按 `@deepseek-ai/dsh-llm` 的 `RetryPolicySchema`。已经接入过的机器重新点一次「一键配置」即可补上这段（幂等），重启 DSH 生效。
   DSH's default per-provider retry policy (normal, at most 5 retries, 500ms→10s backoff, under 16 seconds in total) gives up before WorkBuddy's ~60s rate-limit cooldown ends, so the turn dies with `RATE_LIMIT` — which the user sees as the conversation breaking mid-flight. The one-click config now writes a wider `retryPolicy` for `wb-proxy` only (8 retries, 2s initial delay, 30s cap, ~2.5 minutes in total); other providers keep the default policy. Field names and bounds follow `@deepseek-ai/dsh-llm`'s `RetryPolicySchema`. Re-running the one-click config on an already-integrated machine adds it idempotently, and a DSH restart applies it.
 
-已发布版本的完整记录（v1.4.5 ~ v1.10.2，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+已发布版本的完整记录（v1.4.5 ~ v1.10.3，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
 ## 七、致谢与引用声明 (Credits & References)
 
