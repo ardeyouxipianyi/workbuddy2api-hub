@@ -279,12 +279,14 @@ class RowDetailTests(PricingFixtureMixin):
     def test_builtin_fallback_still_explains_itself(self):
         """出厂快照兜底的行也要给全明细，via 按直接匹配记。"""
         shipped = wb_pricing.load_pricing().get("models") or {}
+        # 必须挑一条「直接匹配」的行：变体继承（via="variant"）或人工映射
+        # （via="override"）本来就该报别的 via，拿它们验 "direct" 是错的。
         pick = None
         for model, entry in shipped.items():
-            if entry.get("flat"):
+            if entry.get("flat") and not entry.get("via"):
                 pick = model
                 break
-        self.assertIsNotNone(pick, "出厂快照里没有带价的模型")
+        self.assertIsNotNone(pick, "出厂快照里没有带价的直接匹配模型")
         # 一个还没有任何策略与时间线的数据目录 = 出厂快照兜底那条路径。
         empty = tempfile.mkdtemp(prefix="wb-tooltip-empty-")
         wb_pricing.set_data_dir(empty)
