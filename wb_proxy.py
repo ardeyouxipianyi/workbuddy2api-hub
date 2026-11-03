@@ -24858,6 +24858,7 @@ class Handler(BaseHTTPRequestHandler):
     def _codearts_error(self, model, exc, t_start, realm):
         """把 CodeArts 异常落一条用量行，再回一个可读的 OpenAI 错误。"""
         elapsed = int((time.time() - t_start) * 1000)
+        err_type = "invalid_request_error"
         if isinstance(exc, wb_codearts.CodeArtsBadRequest):
             status = 400
         elif isinstance(exc, wb_codearts.CodeArtsAuthError):
@@ -24866,11 +24867,13 @@ class Handler(BaseHTTPRequestHandler):
             status = 409
         elif isinstance(exc, wb_codearts.CodeArtsConflict):
             status = 409
+        elif isinstance(exc, wb_codearts.CodeArtsError) and exc.status == 429:
+            status, err_type = 429, "rate_limit_error"
         else:
             status = 502
         record_error(model, status, str(exc)[:200], elapsed_ms=elapsed,
                      realm=realm, key=self._key_id())
-        return self._error(status, str(exc), "invalid_request_error")
+        return self._error(status, str(exc), err_type)
 
     def _handle_codearts_chat(self, payload, session_key, realm):
         """`/v1/chat/completions` 的 CodeArts 分支。"""
