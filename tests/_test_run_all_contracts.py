@@ -296,7 +296,7 @@ def read_pids(path, seconds=15.0):
 #: host that cannot kill it still leaves the scenario directory removable.
 TREE_PROBE = (
     "import json, os, subprocess, sys, tempfile, time\n"
-    "child = subprocess.Popen([sys.executable, '-c',\n"
+    "child = subprocess.Popen([sys.executable, '-I', '-c',\n"
     "    'import time; time.sleep(%d)'], cwd=tempfile.gettempdir())\n"
     "with open(os.environ['PROBE_PID_FILE'], 'w', encoding='utf-8') as fh:\n"
     "    json.dump({'parent': os.getpid(), 'child': child.pid}, fh)\n"
@@ -323,8 +323,12 @@ def host_can_kill_trees():
     os.close(handle)
     os.unlink(pid_file)
     env["PROBE_PID_FILE"] = pid_file
-    proc = subprocess.Popen([sys.executable, "-c", TREE_PROBE % (ORPHAN_SECONDS,
-                                                                 ORPHAN_SECONDS)],
+    # The probe runs with the shared temp directory as cwd. A stray module
+    # dropped there (for example an unrelated `bisect.py`) would shadow the
+    # stdlib on sys.path and the probe would die before registering its pids.
+    # -I keeps cwd out of sys.path without changing what the probe measures.
+    proc = subprocess.Popen([sys.executable, "-I", "-c",
+                             TREE_PROBE % (ORPHAN_SECONDS, ORPHAN_SECONDS)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             cwd=tempfile.gettempdir(), env=env,
                             **new_group_kwargs())
