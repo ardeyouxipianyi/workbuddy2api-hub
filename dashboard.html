@@ -156,11 +156,14 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 /* 网关模型清单：固定列布局 + 百分比列宽 → 占满整行、消除右侧空位；
    单元格 nowrap 防止长模型 ID / 思考档位换行，超长用省略号兜底。 */
 #modelsTable{table-layout:fixed}
+#modelsTable{min-width:980px}
 #modelsTable th,#modelsTable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 消费倍率列可能同时放「倍率」和「Pro Only」两枚胶囊；固定列宽下
    nowrap 会把第二枚裁掉，允许换行只让这一类行变高（#527）。 */
 #modelsTable td.rate-cell{white-space:normal;line-height:1.8}
-#modelsTable td[data-label="思考档位"]{white-space:nowrap}
+#modelsTable td[data-label="思考档位"],
+#modelsTable td[data-label="名称"],
+#modelsTable td[data-label="模型类型"]{white-space:normal;line-height:1.4;word-break:break-word}
 /* 采样参数：放不下时 chips 折行显示完整，不截断 */
 #modelsTable td[data-label="默认采样参数"]{white-space:normal}
 /* 模型 ID 前的「一键配置」勾选框。勾选只决定一键配置写进客户端的模型清单，
