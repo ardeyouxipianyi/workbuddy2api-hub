@@ -342,8 +342,11 @@ try:
             check("a peer that %s fails the read" % stall, raised)
             # Loose on purpose: the ceiling only has to separate "gave up" from
             # "hung", and a loaded runner may be slow to schedule the wakeup.
+            # The floor is loose too: a 0.5s deadline can wake a few
+            # milliseconds early once the OS timer granularity is applied, so
+            # an exact 0.5 lower bound reports a flake under parallel load.
             check("and gives up on its deadline, not eventually",
-                  0.5 <= waited < 8.0, "%.2fs" % waited)
+                  0.4 <= waited < 8.0, "%.2fs" % waited)
     finally:
         quiet.close()
         silent.close()
