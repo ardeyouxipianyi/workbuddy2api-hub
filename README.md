@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.5-2496ED?style=flat-square" alt="Version 1.10.5"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.6-2496ED?style=flat-square" alt="Version 1.10.6"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -516,6 +516,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
+- **v1.10.6 发布**：生图与异步生视频媒体能力集成（#728）、并发日志原子追加加固、设置页二级分类胶囊导航。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1106)**；下一版的改动继续写在本段。
 - **新增生图 / 生视频能力（默认关闭）**：`POST /v1/images/generations`、`/v1/images/edits`、`/v1/videos`（+ `/{id}` 查状态、`/{id}/content` 下 mp4）、`GET /v1/media/models`。视频是**异步任务**：提交立刻 202，后台 worker 轮询到完成再下载，`?wait=1` 可阻塞。复用现有账号池（面板权重 / 临期积分优先 / 轮转 / 熔断全部继承），单次调用约 5.7 积分一张图、57–129 积分一条 5 秒视频，所以默认关闭、按 Key 限每分钟次数与每日积分、且一次只出一张/一条。输入图只接受 data URL 与公网 http(s)——本地路径会让网关把服务器上的文件发给上游。设计、实现与测试记录见 `docs/MEDIA-PLAN.md`、`docs/MEDIA-IMPL.md`、`docs/MEDIA-TEST-PLAN.md`。**注意：媒体接口目前不幂等，请勿对超时请求自动重试**（会重复扣费）。
 - **v1.10.5 发布**：国际版 DeepSeek 免费通道恢复与出站节点切换、Codex 首段脱敏去指纹修复与出口归因（#743/#744）、glm-5.1 推理档位自动补齐防 11150（#742）、临期积分优先权重按剩余积分对数优化（#741）。完整变更与验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1105)**；下一版的改动继续写在本段。
 - **v1.10.4 发布**：成长中心全能引擎与 Buddy 盲盒自动化扩展。补齐工作台搭建师、电商运营等 6 项官方新任务，支持动态专家深链解析；解除资料库与桌面对话跳过限制；支持成长能量自动开启 Buddy 盲盒（/buddy/open）；支持微信小程序链式任务（Sequential_Tasks_1~6 / 校园日）自动化。本功能参考并致谢开源项目 [L0NE-6/WorkBuddy-Daily](https://github.com/L0NE-6/WorkBuddy-Daily) 与 [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（MIT License）。完整变更、验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1104)**；下一版的改动继续写在本段。
