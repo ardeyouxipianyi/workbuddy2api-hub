@@ -92,12 +92,25 @@ try:
     status, payload = get(HUB + "/v1/models?realm=codearts", "hub-key-1234")
     check("status 200", status == 200, (status, payload))
     ids = [m["id"] for m in payload["data"]]
-    check("ids", set(ids) == {"GLM-5.2", "GLM-4.7", "deepseek-v4-pro-0813"}, ids)
+    check("ids", set(ids) == {"GLM-5.2", "GLM-4.7", "Qwen3-VL-235B",
+                              "deepseek-v4-pro-0813"}, ids)
     check("owned_by", payload["data"][0]["owned_by"] == "codearts")
     check("provider", payload["data"][0]["provider"] == "codearts")
     check("catalog source", payload["catalog"]["source"] == "codearts")
     check("benefit flag", any(m.get("benefit") for m in payload["data"]
                               if m["id"] == "deepseek-v4-pro-0813"), payload)
+    vision = next(m for m in payload["data"] if m["id"] == "Qwen3-VL-235B")
+    text = next(m for m in payload["data"] if m["id"] == "GLM-5.2")
+    check("vision flag", vision.get("supports_vision") is True, vision)
+    check("vision image modality", "image" in vision.get("input_modalities", []),
+          vision)
+    check("vision architecture",
+          vision.get("architecture", {}).get("modality") == "text+image->text",
+          vision)
+    check("text model not vision", text.get("supports_vision") is False, text)
+    check("context limits exposed",
+          vision.get("context_window") == 131072
+          and vision.get("max_output_tokens") == 8192, vision)
 
     # Key 模型限制
     wb_settings.set_filter_models_by_key(ACCOUNTS, True)

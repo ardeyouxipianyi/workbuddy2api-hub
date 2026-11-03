@@ -42,6 +42,9 @@ class FakeState(object):
             {"model_id": "GLM-5.2", "model_name": "GLM-5.2",
              "context_window": 131072, "max_tokens": 8192},
             {"model_id": "GLM-4.7", "model_name": "GLM-4.7"},
+            {"model_id": "Qwen3-VL-235B", "model_name": "Qwen3-VL-235B",
+             "context_window": 131072, "max_tokens": 8192,
+             "supports_images": True, "model_category": "图片理解"},
         ]
         self.agent_models = [
             {"model_name": "GLM-5.2", "model_id": "GLM-5.2",
