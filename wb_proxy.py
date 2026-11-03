@@ -16776,6 +16776,14 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                 # catalogue label; the tier map from `/v3/config` now drives
                 # both the scheduler and that label, so the request never gets
                 # this far for a gated model.
+                #
+                # `raise` skips the slot release after the loop, so hand the
+                # concurrency seat back first: without this the account stays
+                # "serving 1 request" forever and every later pick skips it
+                # (`account_max_concurrent=1` makes one leaked seat fatal).
+                if slot_held is not None:
+                    account_slot_release(slot_held)
+                    slot_held = None
                 raise
             if exc.code >= 500:
                 detail = http_error_detail(exc)
@@ -16816,6 +16824,12 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                     POOL.affinity.demote(session_key, account.uid)
                 last_error = exc
                 continue
+            # Same leak as the 400 branch above: an unhandled status (e.g. 404
+            # from a wrong chat path) escapes the loop, so release the seat
+            # before unwinding.
+            if slot_held is not None:
+                account_slot_release(slot_held)
+                slot_held = None
             raise
         except Exception as exc:
             if wb_accounts.is_tls_verify_error(exc):
