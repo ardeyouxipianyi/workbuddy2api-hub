@@ -482,6 +482,23 @@ class CodeArtsAccount(object):
         now = now or time.time()
         return (not self.disabled) and now >= self.cool_until
 
+    def checked_in_today(self, now=None):
+        """Whether this account already completed a successful check-in today.
+
+        A failed attempt (``ok`` false) does not count, so a later slot can
+        retry after an earlier failure. The timestamp is local time, matching
+        the scheduler's clock.
+        """
+        entry = self.checkin if isinstance(self.checkin, dict) else {}
+        if not entry.get("ok"):
+            return False
+        text = str(entry.get("checked_at") or "")
+        if len(text) < 10:
+            return False
+        today = time.strftime("%Y-%m-%d",
+                              time.localtime(now if now is not None else time.time()))
+        return text[:10] == today
+
     def has_model(self, model):
         mid = str(model or "").lower()
         if not mid:

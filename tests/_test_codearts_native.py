@@ -363,6 +363,14 @@ try:
     reloaded = C.CodeArtsPool(ACCOUNTS, C.load_config(ACCOUNTS))
     check("checkin persisted", reloaded.get("u1").checkin == acct.checkin,
           reloaded.get("u1").checkin)
+    saved_checkin = acct.checkin
+    check("checked_in_today true", acct.checked_in_today() is True)
+    acct.checkin = {"ok": True, "checked_at": "2000-01-01T00:00:00"}
+    check("checked_in_today old false", acct.checked_in_today() is False)
+    acct.checkin = {"ok": False,
+                    "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    check("checked_in_today failed false", acct.checked_in_today() is False)
+    acct.checkin = saved_checkin
 
     print("== oauth ==")
     started = C.oauth_start(C.load_config(ACCOUNTS), port=8788)
