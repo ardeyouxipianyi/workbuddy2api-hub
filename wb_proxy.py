@@ -2613,7 +2613,12 @@ _STATS_TTL = float(os.environ.get("WB_STATS_TTL", 15))
 # reads rows that arrived since the last scan.
 # ---------------------------------------------------------------------------
 _daily_usage = {"day": "", "totals": None, "credits": None, "models": None,
-                "offset": 0, "at": 0.0}
+                "offset": 0, "at": 0.0,
+                # See _scan_daily_usage's caller: (size, dev, inode) of the log
+                # the cached offset was taken against, plus the 64 bytes just
+                # before it. Without these a rewritten-then-regrown log (log
+                # rotation with copytruncate) looked like a plain append.
+                "key": None, "tail": None}
 _daily_usage_lock = threading.Lock()
 
 
@@ -2699,11 +2704,23 @@ def daily_usage_stats(ttl=None):
         else:
             state = {"tokens": {}, "credits": {}, "models": {}}
         offset = int(c["offset"] or 0)
-        try:
-            size = os.path.getsize(USAGE_LOG)
-        except OSError:
-            size = 0
-        if offset > size:
+        log_key = _usage_log_key(USAGE_LOG)
+        # Resume the cached fold only when the bytes it counted are provably
+        # still there. `offset > size` alone misses the case that actually
+        # bites: log rotation with `copytruncate` empties the file in place
+        # (same inode) and it then grows past the old offset, so the size test
+        # passes while the bytes underneath were replaced. The daily counters
+        # would then keep yesterday's numbers *and* silently skip every row in
+        # the first `offset` bytes of today's file - which parks accounts on
+        # the daily guard while the panel shows a total that never happened.
+        # `_log_offset_holds` covers size/device/inode and
+        # `_log_tail_signature` re-reads the seam, which is what tells an
+        # append apart from a rewrite. Same rule, same two helpers, as the
+        # perf/aggregate/recent folds above.
+        if offset and not (c.get("key") is not None
+                           and c.get("tail") is not None
+                           and _log_offset_holds(c["key"], log_key, offset)
+                           and _log_tail_signature(offset, USAGE_LOG) == c["tail"]):
             state = {"tokens": {}, "credits": {}, "models": {}}
             offset = 0
         try:
@@ -2711,11 +2728,15 @@ def daily_usage_stats(ttl=None):
         except Exception as exc:
             log("daily token scan failed: %s" % exc)
             _daily_usage.update({"day": day, "totals": None, "offset": 0,
-                                 "at": time.time()})
+                                 "key": None, "tail": None, "at": time.time()})
             return None
+        # Record the position we consumed *and* the seam behind it, so the next
+        # call can prove this prefix still holds the same bytes.
         _daily_usage.update({"day": day, "totals": state["tokens"],
                              "credits": state["credits"],
                              "models": state["models"], "offset": offset,
+                             "key": _usage_log_key(USAGE_LOG),
+                             "tail": _log_tail_signature(offset, USAGE_LOG),
                              "at": time.time()})
         return _daily_state_copy(_daily_usage)
 
