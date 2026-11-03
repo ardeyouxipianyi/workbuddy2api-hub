@@ -111,6 +111,9 @@ try:
     check("context limits exposed",
           vision.get("context_window") == 131072
           and vision.get("max_output_tokens") == 8192, vision)
+    glm = next(m for m in payload["data"] if m["id"] == "GLM-5.2")
+    check("reasoning metadata", glm.get("supports_reasoning") is True
+          and "high" in glm.get("reasoning_efforts", []), glm)
 
     # Key 模型限制
     wb_settings.set_filter_models_by_key(ACCOUNTS, True)
