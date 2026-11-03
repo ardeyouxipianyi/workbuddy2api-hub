@@ -106,6 +106,27 @@ try:
               (status, body))
     check("account still in pool", C.pool_for(ACCOUNTS).get("u1") is not None)
 
+    print("== account admin ==")
+    status, body = call("POST", "/codearts/accounts/note",
+                        {"uid": "u1", "note": "hello"}, token=token)
+    check("note saved", status == 200 and body.get("note") == "hello",
+          (status, body))
+    status, body = call("POST", "/codearts/accounts/tasks",
+                        {"uid": "u1", "enabled": False}, token=token)
+    check("tasks disabled", status == 200
+          and body.get("tasks_enabled") is False, (status, body))
+    status, body = call("POST", "/codearts/accounts/test",
+                        {"uid": "u1"}, token=token)
+    check("account test", status == 200 and body.get("ok") is True,
+          (status, body))
+    status, body = call("POST", "/codearts/credits/refresh", {}, token=token)
+    check("credits refresh", status == 200 and body.get("ok") is True,
+          (status, body))
+    status, body = call("GET", "/codearts/overview", token=token)
+    acct = (body.get("accounts") or [{}])[0]
+    check("overview note", acct.get("note") == "hello", acct)
+    check("overview tasks flag", acct.get("tasks_enabled") is False, acct)
+
     print("== proxy slots ==")
     import wb_settings
     wb_settings.set_proxy_slots(ACCOUNTS, [

@@ -369,6 +369,8 @@ class CodeArtsAccount(object):
         self.model_benefit = {}
         self.models_fetched_at = 0.0
         self.checkin = None
+        self.note = ""
+        self.tasks_enabled = True
         self.info = None
         self.info_fetched_at = 0.0
         self._lock = threading.RLock()
@@ -471,6 +473,8 @@ class CodeArtsAccount(object):
             "models": len(self.models),
             "proxy_slot": self.proxy_slot,
             "proxy": self.proxy,
+            "note": self.note,
+            "tasks_enabled": bool(self.tasks_enabled),
         }
 
     def healthy(self, now=None):
@@ -521,6 +525,8 @@ class CodeArtsPool(object):
             acct.disabled = bool(entry.get("disabled"))
             acct.disabled_reason = str(entry.get("reason") or "")
             acct.last_error = str(entry.get("last_error") or "")
+            acct.note = str(entry.get("note") or "")[:200]
+            acct.tasks_enabled = bool(entry.get("tasks_enabled", True))
             if isinstance(entry.get("checkin"), dict):
                 acct.checkin = entry["checkin"]
             accounts.append(acct)
@@ -556,6 +562,8 @@ class CodeArtsPool(object):
                 "reason": acct.disabled_reason,
                 "last_error": acct.last_error,
                 "checkin": acct.checkin,
+                "note": acct.note,
+                "tasks_enabled": bool(acct.tasks_enabled),
             })
         try:
             _atomic_write(self.state_file, items)
@@ -678,6 +686,22 @@ class CodeArtsPool(object):
             return False
         acct.cool_until = 0
         acct.err_count = 0
+        self.save_state()
+        return True
+
+    def set_note(self, uid, note):
+        acct = self.get(uid)
+        if acct is None:
+            return False
+        acct.note = str(note or "").strip()[:200]
+        self.save_state()
+        return True
+
+    def set_tasks_enabled(self, uid, enabled):
+        acct = self.get(uid)
+        if acct is None:
+            return False
+        acct.tasks_enabled = bool(enabled)
         self.save_state()
         return True
 
@@ -2315,6 +2339,66 @@ def clear_cooldown(config, uid):
         raise CodeArtsNotFound("account not found")
     invalidate_overview()
     return {"ok": True, "message": "已清冷却 %s" % uid}
+
+
+def set_note(config, uid, note):
+    pool = pool_for(config["accounts_dir"])
+    if not pool.set_note(uid, note):
+        raise CodeArtsNotFound("account not found")
+    invalidate_overview()
+    return {"ok": True, "uid": uid, "note": pool.get(uid).note}
+
+
+def set_tasks_enabled(config, uid, enabled):
+    pool = pool_for(config["accounts_dir"])
+    if not pool.set_tasks_enabled(uid, enabled):
+        raise CodeArtsNotFound("account not found")
+    invalidate_overview()
+    return {"ok": True, "uid": uid,
+            "tasks_enabled": bool(pool.get(uid).tasks_enabled)}
+
+
+def refresh_credits(config):
+    pool = pool_for(config["accounts_dir"])
+    refreshed = 0
+    errors = []
+    for acct in list(pool.accounts):
+        if acct.disabled:
+            continue
+        try:
+            _ensure_token(acct)
+            ensure_account_info(acct, force=True, timeout=15.0)
+            refreshed += 1
+        except CodeArtsError as exc:
+            errors.append("%s: %s" % (acct.nickname, str(exc)[:160]))
+    invalidate_overview()
+    return {
+        "ok": not errors,
+        "refreshed": refreshed,
+        "errors": errors[:3],
+        "message": "已刷新 %d 个账号的积分" % refreshed,
+    }
+
+
+def test_account(config, uid):
+    pool = pool_for(config["accounts_dir"])
+    acct = pool.get(uid)
+    if acct is None:
+        raise CodeArtsNotFound("account not found")
+    try:
+        _ensure_token(acct)
+        ensure_models(acct, force=True, timeout=15.0)
+        info = fetch_account_info(acct, timeout=15.0)
+        total = (info.get("credits") or {}).get("total") or {}
+        return {
+            "ok": True,
+            "uid": uid,
+            "models": len(acct.models),
+            "credits": total.get("remain"),
+            "message": "连接正常",
+        }
+    except CodeArtsError as exc:
+        return {"ok": False, "uid": uid, "message": str(exc)[:300]}
 
 
 def apply_proxy_slots(accounts_dir, slots=None):
