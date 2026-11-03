@@ -58,8 +58,9 @@ assert.ok(names(mainTabs[1]).includes('accounts'), 'accounts 必须在主标签�
 
 // 切到账号页要顺手把签到记录拉起来；开关关掉（默认）时账号区就在
 // 「网关与账号」页，切到网关页同样要拉。
-assert.ok(/if\(tab === 'accounts' \|\| \(!_accountsSeparateTab && tab === 'gateway'\)\)\{ loadActivityBoard\(\); \}/.test(script),
-  '切到账号页（或合并后的网关页）应触发 loadActivityBoard');
+assert.ok(script.includes("if(tab === 'accounts' || (!_accountsSeparateTab && tab === 'overview')){ loadActivityBoard(); }")
+  || script.includes("if(tab === 'accounts' || (!_accountsSeparateTab && tab === 'gateway')){ loadActivityBoard(); }"),
+  '切到账号页（或合并后的网关/总览页）应触发 loadActivityBoard');
 
 // 签到记录区块的骨架
 for(const id of ['activityRange', 'activityTask', 'activityResult', 'activityAccount',
@@ -118,8 +119,8 @@ assert.ok(/data\.accounts_separate_tab === true/.test(script),
 assert.ok(/postJSON\('\/settings\/save', \{accounts_separate_tab: value\}\)/.test(script),
   '保存应只 patch accounts_separate_tab 一个键');
 // 合并之后「账号」的书签不能停在内容已经不在了的空页上
-assert.ok(/if\(tab === 'accounts' && !_accountsSeparateTab\) tab = 'gateway';/.test(script),
-  '合并模式下 ?tab=accounts 应退回「网关与账号」页');
+assert.ok(/if\(tab === 'accounts' && !_accountsSeparateTab\) tab = '(?:gateway|overview)';/.test(script),
+  '合并模式下 ?tab=accounts 应退回「网关与账号」/总览页');
 
 /* ---- 1c. 一键切换所有出站身份 --------------------------------------- */
 
