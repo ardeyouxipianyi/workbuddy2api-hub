@@ -1903,27 +1903,11 @@ def set_enable_anthropic_messages(accounts_dir, enabled):
 
 
 def deepseek_flash_force_sg(accounts_dir):
-    """Whether requests for deepseek-v4.1-flash are rewritten to deepseek-v4.1-flash-sg upstream.
-
-    Off by default (False): deepseek-v4.1-flash is sent as-is to the upstream
-    free channel (0 credit). When enabled (True), the gateway rewrites the
-    model to deepseek-v4.1-flash-sg to route through the Singapore paid node.
-    Can also be enabled via WB_DEEPSEEK_FLASH_FORCE_SG=1.
-    """
-    env = os.environ.get("WB_DEEPSEEK_FLASH_FORCE_SG", "").strip().lower()
-    if env in ("1", "true", "yes", "on"):
-        return True
-    return load(accounts_dir).get("deepseek_flash_force_sg") is True
+    return False
 
 
 def set_deepseek_flash_force_sg(accounts_dir, enabled):
-    """Persist the deepseek_flash_force_sg toggle. Returns the stored boolean."""
-    enabled = bool(enabled)
-    with _lock:
-        data = load(accounts_dir)
-        data["deepseek_flash_force_sg"] = enabled
-        save(accounts_dir, data)
-    return enabled
+    return False
 
 
 def free_model_credit_fallback(accounts_dir):

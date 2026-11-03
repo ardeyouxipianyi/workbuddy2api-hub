@@ -5341,27 +5341,6 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
-            <h2 style="margin:0">国际版 DeepSeek 后台出站模型 <em id="setDeepseekFlashForceSgState"></em></h2>
-            <div style="font-size:12px;color:var(--dim);margin-top:4px">
-              控制客户端请求 <code>deepseek-v4.1-flash</code> 时，网关实际向上游发起的模型。
-            </div>
-            <div style="font-size:12px;color:var(--dim);margin-top:2px">
-              未勾选（默认）：出站走 <code>deepseek-v4.1-flash</code> 免费通道（0 积分）；勾选后出站强制转为 <code>deepseek-v4.1-flash-sg</code>（新加坡节点，扣除 0.01~0.02 积分）。
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
-              <input id="setDeepseekFlashForceSg" type="checkbox" style="width:16px;height:16px">
-              强制出站为 deepseek-v4.1-flash-sg
-            </label>
-            <button onclick="saveDeepseekFlashForceSg(this)">保存</button>
-          </div>
-        </div>
-      </section>
-
-      <section data-cat="models">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
             <h2 style="margin:0">免费额度耗尽回退积分版 <em id="setCreditFallbackState"></em></h2>
             <div style="font-size:12px;color:var(--dim);margin-top:4px">
               国际版 deepseek-v4.1-flash 免费额度在所有账号均耗尽（6004 撞线）后，自动回退到 deepseek-v4.1-flash-sg 付费通道。默认关闭。
@@ -7489,10 +7468,7 @@ function renderAvailableModels(){
     //    兜底显示写死的 0.79x。现在取不到就不显示数字。
     let credBadge = '-';
     let credText = (m.credits == null ? '' : String(m.credits)).trim();
-    const forceSg = window.CURRENT_SETTINGS && window.CURRENT_SETTINGS.deepseek_flash_force_sg === true;
-    if(m.id === 'deepseek-v4.1-flash' && forceSg && window.VIEW_REALM === 'intl'){
-      credText = 'x0.11';
-    }
+
     const c = credText.toLowerCase().replace('x', '');
     if(c === '0.00' || c === '0'){
       credBadge = '<span class="badge ok" style="background:var(--accent2-soft);color:var(--accent2)">限时免费 0.00x</span>';
@@ -7503,11 +7479,7 @@ function renderAvailableModels(){
         ? ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span>' : '';
       credBadge = '<span class="badge s">' + esc(raw) + night + '</span>';
     }
-    if(m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl'){
-      credBadge += forceSg
-        ? ' <span class="badge warn" style="font-size:11px;background:var(--warn-soft);color:var(--warn);border-color:rgba(183,121,31,.35)" title="网关设置已强制出站为 deepseek-v4.1-flash-sg">出站: 强制 -sg</span>'
-        : ' <span class="badge ok" style="font-size:11px" title="当前走原生 deepseek-v4.1-flash 免积分通道">出站: 原生免费</span>';
-    }
+    
     // #505: 只标「Pro Only」（与上游徽章同名），不标「可用」。没有 entitlement 就什么都不显示。
     // 标注由 /v1/models 给出：source=catalog 是上游目录 modelTiers 的声明（与
     // 调度器拦人用的是同一份数据），source=runtime 是历史上真撞到过 11158。
@@ -7631,18 +7603,11 @@ function renderAvailableModels(){
     //    清单（选择全局一份，见 AGENT_MODEL_SELECTION）。服务端还没存过勾选时
     //    isModelPicked() 一律返回 true——默认全部勾选，首屏不必等 GET 回来。
     const picked = isModelPicked(m.id);
-    let idPill = '';
-    if(m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl'){
-      idPill = '<div style="margin-top:4px;display:inline-flex;align-items:center;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:1px 3px">'
-        + '<button type="button" class="sec mini" style="padding:1px 7px;font-size:10px;line-height:16px;border-radius:9px;border:none;cursor:pointer;' + (!forceSg ? 'background:var(--accent2);color:#fff;font-weight:600' : 'background:transparent;color:var(--dim)') + '" onclick="setDeepseekFlashTarget(false)" title="网关后台出站使用 deepseek-v4.1-flash（免积分通道）">原生免费</button>'
-        + '<button type="button" class="sec mini" style="padding:1px 7px;font-size:10px;line-height:16px;border-radius:9px;border:none;cursor:pointer;' + (forceSg ? 'background:var(--warn);color:#fff;font-weight:600' : 'background:transparent;color:var(--dim)') + '" onclick="setDeepseekFlashTarget(true)" title="网关后台出站强制重写为 deepseek-v4.1-flash-sg（新加坡付费节点）">强制 -sg</button>'
-        + '</div>';
-    }
     return '<tr>'
       + '<td style="text-align:left" class="mono model-id-cell" data-label="模型 ID" title="' + esc(m.id) + '">'
       + '<label><input type="checkbox" class="model-pick" data-model-id="' + esc(m.id) + '"'
       + (picked ? ' checked' : '')
-      + ' title="勾选后该模型才会写入 DSH 等客户端的一键配置"><b>' + esc(m.id) + '</b></label>' + idPill + '</td>'
+      + ' title="勾选后该模型才会写入 DSH 等客户端的一键配置"><b>' + esc(m.id) + '</b></label>' + '</td>'
       + nameCell
       + '<td style="text-align:center" class="rate-cell" data-label="消费倍率">' + credBadge + '</td>'
       + '<td style="text-align:center" data-label="能力">' + capHtml + '</td>'
@@ -12709,14 +12674,7 @@ async function loadSettings(showToast){
         if(gaps) gaps.innerHTML = '';
       }
       window.CURRENT_SETTINGS = data;
-    const dsFlashForceSg = data.deepseek_flash_force_sg === true;
-    const dsFlashForceSgInput = document.getElementById('setDeepseekFlashForceSg');
-    if(dsFlashForceSgInput) dsFlashForceSgInput.checked = dsFlashForceSg;
-    const dsFlashForceSgState = document.getElementById('setDeepseekFlashForceSgState');
-    if(dsFlashForceSgState){
-      dsFlashForceSgState.textContent = dsFlashForceSg ? '(强制 -sg)' : '(原生免费)';
-      dsFlashForceSgState.style.color = dsFlashForceSg ? 'var(--warn)' : 'var(--accent2)';
-    }
+    
     const autoSwitch = data.auto_switch_product === true;
       const creditFallback = data.free_model_credit_fallback === true;
       const anthropicMsg = data.enable_anthropic_messages === true;
@@ -13538,48 +13496,7 @@ async function saveFilterModelsByKey(btn){
   }
 }
 
-async function saveDeepseekFlashForceSg(btn){
-  const el = document.getElementById('setDeepseekFlashForceSg');
-  const value = !!(el && el.checked);
-  if(btn) btn.disabled = true;
-  try {
-    await postJSON('/settings/save', {deepseek_flash_force_sg: value});
-    toast(value ? '已启用：出站强制为 deepseek-v4.1-flash-sg' : '已恢复：出站为原生 deepseek-v4.1-flash 免费通道', 'ok');
-    if(!window.CURRENT_SETTINGS) window.CURRENT_SETTINGS = {};
-    window.CURRENT_SETTINGS.deepseek_flash_force_sg = value;
-    const st = document.getElementById('setDeepseekFlashForceSgState');
-    if(st){
-      st.textContent = value ? '(强制 -sg)' : '(原生免费)';
-      st.style.color = value ? 'var(--warn)' : 'var(--accent2)';
-    }
-    renderAvailableModels();
-    loadSettings();
-  } catch(e) {
-    toast('保存失败: ' + e.message, 'bad');
-  } finally {
-    if(btn) btn.disabled = false;
-  }
-}
 
-async function setDeepseekFlashTarget(forceSg){
-  forceSg = !!forceSg;
-  try {
-    await postJSON('/settings/save', {deepseek_flash_force_sg: forceSg});
-    if(!window.CURRENT_SETTINGS) window.CURRENT_SETTINGS = {};
-    window.CURRENT_SETTINGS.deepseek_flash_force_sg = forceSg;
-    const chk = document.getElementById('setDeepseekFlashForceSg');
-    if(chk) chk.checked = forceSg;
-    const st = document.getElementById('setDeepseekFlashForceSgState');
-    if(st){
-      st.textContent = forceSg ? '(强制 -sg)' : '(原生免费)';
-      st.style.color = forceSg ? 'var(--warn)' : 'var(--accent2)';
-    }
-    renderAvailableModels();
-    toast('DeepSeek 后台出站已切换为: ' + (forceSg ? '强制 -sg 节点 (0.11x)' : '原生免费通道 (0.00x)'), 'ok');
-  } catch(e) {
-    toast('切换失败: ' + e.message, 'bad');
-  }
-}
 
 async function saveCreditFallback(btn){
   const el = document.getElementById('setCreditFallback');

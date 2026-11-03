@@ -104,7 +104,7 @@ _JSON = r'''
     "name": "Deepseek-V4.1-Flash",
     "descriptionEn": "DeepSeek flagship model, supporting 1M context window, native multimodal model",
     "descriptionZh": "DeepSeek 旗舰模型，支持 1M 上下文窗口，原生多模态",
-    "credits": "x0.00",
+    "credits": "x0.11",
     "maxInputTokens": 1000000,
     "maxOutputTokens": 128000,
     "maxAllowedSize": 1000000,

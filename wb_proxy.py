@@ -1000,27 +1000,7 @@ BACKGROUND_MODEL_NAMES = tuple(
 
 
 def _apply_deepseek_flash_target(payload, realm=None):
-    """Rewrite client deepseek-v4.1-flash to -sg when deepseek_flash_force_sg is on.
-
-    International only: the domestic catalog has no -sg variant, and its
-    deepseek-v4.1-flash is a metered model on its own exit.
-    """
-    if (realm or CURRENT_REALM) != "intl":
-        return
-    if not isinstance(payload, dict):
-        return
-    name = payload.get("model")
-    if not isinstance(name, str):
-        return
-    if name.strip().lower() != "deepseek-v4.1-flash":
-        return
-    try:
-        force_sg = wb_settings.deepseek_flash_force_sg(ACCOUNTS_DIR)
-    except Exception:
-        force_sg = False
-    if force_sg:
-        payload["model"] = "deepseek-v4.1-flash-sg"
-        log("route: deepseek-v4.1-flash -> deepseek-v4.1-flash-sg (force_sg)")
+    return
 
 
 def _apply_background_model_alias(payload):
@@ -11022,7 +11002,6 @@ def runtime_settings_view():
         "pricing_enabled": wb_settings.pricing_enabled(ACCOUNTS_DIR),
         "auto_switch_product": wb_settings.auto_switch_product(ACCOUNTS_DIR),
         "auto_switch_products": wb_settings.auto_switch_products(ACCOUNTS_DIR),
-        "deepseek_flash_force_sg": wb_settings.deepseek_flash_force_sg(ACCOUNTS_DIR),
         "free_model_credit_fallback": wb_settings.free_model_credit_fallback(ACCOUNTS_DIR),
         "enable_anthropic_messages": wb_settings.enable_anthropic_messages(ACCOUNTS_DIR),
         "filter_models_by_key": wb_settings.filter_models_by_key(ACCOUNTS_DIR),
@@ -11999,22 +11978,7 @@ def model_entry(mid, meta, realm=None):
     if meta.get("onlyReasoning") is not None:
         item["always_reasoning"] = bool(meta.get("onlyReasoning"))
     # ---- misc ----
-    # deepseek-v4.1-flash is the international free channel (credit 0). The
-    # same id in the domestic catalog is a 0.11x metered model, so the free /
-    # forced -sg rules must stay international-only.
-    if mid == "deepseek-v4.1-flash" and realm == "intl":
-        force_sg = False
-        try:
-            force_sg = wb_settings.deepseek_flash_force_sg(ACCOUNTS_DIR)
-        except Exception:
-            pass
-        if force_sg:
-            item["credits"] = "x0.11"
-            item["upstream_target"] = "deepseek-v4.1-flash-sg"
-        else:
-            item["credits"] = "x0.00"
-            item["upstream_target"] = "deepseek-v4.1-flash"
-    elif meta.get("credits"):
+    if meta.get("credits"):
         item["credits"] = meta["credits"]
     if meta.get("vendor"):
         item["vendor"] = meta["vendor"]
@@ -22030,15 +21994,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(exc), "invalid_request_error")
             wb_identity.configure_versions(stored)
             reply["identity_versions"] = stored
-        if "deepseek_flash_force_sg" in payload:
-            raw = payload.get("deepseek_flash_force_sg")
-            if not isinstance(raw, bool):
-                return self._error(400, "deepseek_flash_force_sg must be true or false", "invalid_request_error")
-            wb_settings.set_deepseek_flash_force_sg(ACCOUNTS_DIR, raw)
-            reply["deepseek_flash_force_sg"] = raw
-            with _lock:
-                _models_cache["intl"] = {"at": 0.0, "data": None}
-                _models_cache["cn"] = {"at": 0.0, "data": None}
         if "free_model_credit_fallback" in payload:
             raw = payload.get("free_model_credit_fallback")
             if not isinstance(raw, bool):
