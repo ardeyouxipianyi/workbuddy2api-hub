@@ -61,6 +61,9 @@ wb_fingerprint.py
 wb_identity.py
 wb_ipintel.py
 wb_logstore.py
+wb_media.py
+wb_media_client.py
+wb_media_tasks.py
 wb_modelsdev.py
 wb_pricing.py
 wb_probes.py
@@ -70,6 +73,7 @@ wb_quota_scan.py
 wb_scheduler.py
 wb_settings.py
 wb_tasks.py
+wb_usage_io.py
 wb_tiers.py
 wb_updates.py
 wb_update_apply.py

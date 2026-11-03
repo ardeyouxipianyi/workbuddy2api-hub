@@ -18,6 +18,13 @@ catalog/*.json
 catalog/*.tmp
 !catalog/README.txt
 
+# 媒体产物（生图的临时文件、生视频的 mp4 与任务表；删除安全，只是丢了历史）
+media/out/
+media/*.json
+media/*.json.tmp
+# 生视频产物（mp4 是运行时资产，不进仓库；tasks.json 已单独忽略）
+media/*.mp4
+
 # 运行时日志文件
 logs/
 

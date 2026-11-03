@@ -1897,11 +1897,13 @@ class Account(object):
         return self.product == wb_identity.PRODUCT_CLI
 
     def headers(self, purpose="chat", session_key=None, turn_request_id=None,
-                model=None, conversation_id=None):
+                model=None, conversation_id=None, media_identity=None):
         """组出这一轮的出站标头。
 
         chat 用途走 wb_identity（CLI 头 / WorkBuddy 头 / VSCode 头，可切换）；
-        billing 用途维持原本的轻量标头，计费端点不吃那套身分。
+        billing 用途维持原本的轻量标头，计费端点不吃那套身分；media 用途复用
+        chat 那份身分再加三个媒体端点特有的头（生图 / 生视频的 /v2/images/*、
+        /v2/videos/*），见该分支里的注释。
 
         `model` / `conversation_id` 只对 chat 用途有意义：官方 VSCode 扩展在
         model 请求上带 `X-Model-ID`（值就是本次 model），`X-Conversation-ID`
@@ -1933,6 +1935,57 @@ class Account(object):
         cfg = get_realm_config(self.realm)
 
         if purpose != "chat":
+            if purpose == "media":
+                # 媒体端点（/v2/images/*、/v2/videos/*）的出站标头。
+                #
+                # 组法：直接复用本账号 chat 那份身分（build_identity_headers，与
+                # chat 分支同一个函数），再补三个媒体端点要的头。理由两条：
+                #   1) 同一个客户端发的所有请求，头形状一致最自然；chat 已经在同一
+                #      个 host（copilot.tencent.com / www.workbuddy.ai）上稳定 200；
+                #   2) dsh 插件的 imageHeaders 是拿 **CLI 身份**的账号实测出来的，
+                #      本仓库账号是桌面身份（product=workbuddy），照抄它的 UA 反而
+                #      是猜测。要切到 CLI 形状就把 media_identity="cli" 传进来，
+                #      P0 取证之后由配置决定默认值，不用改这里。
+                #
+                # 差异只有三处，都是媒体端点特有的：Accept 用列表形态、补
+                # X-Requested-With、补企业标识（chat 的桌面分支不发 X-Enterprise-Id）。
+                # 刻意**不带** Origin / Referer：dsh 的取证探针就是不带这两个头拿到
+                # 200 的，多带两个头只多一个可能被网关拒掉的变量，没有收益。
+                product = wb_identity.normalize_product(
+                    media_identity or self.product)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/plain, */*",
+                    "X-Requested-With": "XMLHttpRequest",
+                }
+                headers.update(wb_identity.build_identity_headers(
+                    product=product,
+                    realm=self.realm,
+                    uid=self.uid,
+                    token=self.access_token,
+                    enterprise_id=self.enterprise_id,
+                    tenant_id=self.enterprise_id,
+                    private_data=(wb_settings.identity_private_data(
+                        os.path.dirname(self.path)) if self.path else "auto"),
+                ))
+                if self.enterprise_id:
+                    headers["X-Enterprise-Id"] = self.enterprise_id
+                    headers["X-Tenant-Id"] = self.enterprise_id
+                else:
+                    headers["X-No-Enterprise-Id"] = "1"
+                if self.realm == "cn":
+                    headers["X-Product"] = "SaaS"
+                if self.is_api_key:
+                    # 与 chat / billing 两条路口径一致：静态 Key 两个鉴权头都发。
+                    headers["X-API-Key"] = self.access_token
+                # 国内版才发设备 token（国际版客户端本来就没有这个头，见 #448）；
+                # CLI 身份全包没有设备 token 逻辑。
+                device_token = (self._device_token()
+                                if self.realm == "cn" and not self.is_cli_identity()
+                                else "")
+                if device_token:
+                    headers["X-Device-Token"] = device_token
+                return headers
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/plain, */*",
