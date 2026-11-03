@@ -24894,10 +24894,15 @@ class Handler(BaseHTTPRequestHandler):
         want_stream = bool(payload.get("stream"))
         t_start = time.time()
         fp = prompt_fingerprint(chat_req.get("messages"))
+        # Log the level the request will actually run at, not just what the
+        # client typed: when the client omits `reasoning_effort` the gateway
+        # fills in the model's default (deepseek-* get one), so a bare
+        # `effort=None` reads as "no reasoning" even though it ran at `high`.
         log(
-            "responses: model=%s stream=%s msgs=%d effort=%r tools=%d/%d custom_tools=%s compaction=%s key=%s"
+            "responses: model=%s stream=%s msgs=%d effort=%r -> upstream_effort=%r tools=%d/%d custom_tools=%s compaction=%s key=%s"
             % (model, want_stream, len(chat_req.get("messages") or []),
-               chat_req.get("reasoning_effort"),
+               client_effort_of(chat_req),
+               upstream_effort_of(chat_req, model),
                len(chat_req.get("tools") or []), len(all_tools),
                sorted(custom_names) or "-", compaction, key_label(self._key_id()) or "-")
         )
