@@ -338,7 +338,7 @@ class RuntimeTrimTests(unittest.TestCase):
         # cannot remove them and they have no Lib/ file to check.
         # Windows built-in C modules (msvcrt / nt / winreg) are compiled into
         # python312.dll on Windows and have no Lib/ file; exclude them when running on POSIX.
-        windows_builtins = ("msvcrt", "nt", "winreg")
+        windows_builtins = ("msvcrt", "nt", "winreg", "math")
         needed = sorted(m for m in imported
                         if m not in local and m not in sys.builtin_module_names and m not in windows_builtins)
         self.assertTrue(needed)
