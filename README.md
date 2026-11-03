@@ -44,6 +44,20 @@ This project is for protocol research and personal use only. Prefer the official
 
 ---
 
+## 💖 赞助商
+
+<table>
+<tr>
+<td width="180" align="center" valign="middle">
+  <a href="https://agentrouter.org/register?aff=unrV"><img src="https://raw.githubusercontent.com/88lin/picx-images-hosting/master/90C5FAD072EA247822CB88BB32512A41.webp" alt="Agent Router" width="150"></a>
+</td>
+<td valign="middle"><b><a href="https://agentrouter.org/register?aff=unrV">Agent Router</a></b>&nbsp;是免费公益大模型 API 平台，支持 Claude-opus-5.5、GPT-6 Astra、GPT-6.1 Sol、deepseek-v4-flash 等主流模型，国内直连。注册送 ＄175（每日签到得 ＄25，被邀得 ＄50），支持 GitHub / LinuxDo 登录。</td>
+</tr>
+</table>
+
+
+---
+
 ## 一、快速启动
 
 ### 1. 本机运行
