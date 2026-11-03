@@ -109,6 +109,43 @@ DEFAULTS = {
     "credits_auto_claim": False,
 }
 
+#: Verified with the upstream validation error: reasoning_effort must be one of
+#: none/low/medium/high/xhigh/max. `minimal` is accepted but not in that list;
+#: `auto` is rejected.
+REASONING_EFFORTS = {
+    "deepseek-v4.1-flash": ["none", "low", "medium", "high", "xhigh", "max"],
+    "deepseek-v4.1-flash-1017": ["none", "low", "medium", "high",
+                                 "xhigh", "max"],
+    # Verified from the upstream validation message for the GLM backend.
+    "glm-5.2": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    "glm-5.2-sft-harmony": ["none", "minimal", "low", "medium", "high",
+                            "xhigh", "max"],
+    "glm-5.3": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    # Always-thinking model: upstream explicitly says only low/high/max.
+    "glm-5.3-flash": ["low", "high", "max"],
+}
+
+
+def _requested_effort(payload):
+    """Resolve the client's reasoning level under every common spelling."""
+    if not isinstance(payload, dict):
+        return ""
+    effort = payload.get("reasoning_effort")
+    if effort is None:
+        effort = payload.get("reasoningEffort")
+    if effort is not None:
+        return str(effort).strip().lower()
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict):
+        kind = str(thinking.get("type") or "").strip().lower()
+        if kind == "disabled":
+            return "none"
+        if kind == "enabled":
+            return "high"
+    if "enable_thinking" in payload:
+        return "high" if payload.get("enable_thinking") else "none"
+    return ""
+
 _LOCK = threading.RLock()
 
 
@@ -1231,6 +1268,16 @@ def model_entries(config):
             entry["max_tokens"] = item["max_tokens"]
         if item.get("benefit"):
             entry["benefit"] = True
+        efforts = REASONING_EFFORTS.get(str(item["id"]).lower())
+        if efforts:
+            entry["reasoning_efforts"] = list(efforts)
+            entry["supports_reasoning"] = True
+            capabilities = entry.setdefault(
+                "capabilities", {"vision": False, "tool_calls": True})
+            capabilities["reasoning"] = True
+        if str(item["id"]).lower() == "glm-5.3-flash":
+            entry["reasoning_can_disable"] = False
+            entry["always_reasoning"] = True
         out.append(entry)
     return out
 
@@ -1331,9 +1378,28 @@ def build_chat_body(payload, session_key=None):
     allowed = {
         "model", "messages", "temperature", "top_p", "max_tokens",
         "max_completion_tokens", "reasoning_effort", "tools", "tool_choice",
+        # Verified against the CodeArts upstream: it accepts these and applies
+        # them, but the earlier narrow allow-list silently dropped them.
+        "stop", "frequency_penalty", "presence_penalty", "seed",
+        "response_format", "top_k", "parallel_tool_calls",
     }
     body = {str(k): v for k, v in payload.items() if str(k) in allowed}
     body["model"] = str(payload.get("model") or "GLM-5.2")
+    effort_text = _requested_effort(payload)
+    allowed_efforts = REASONING_EFFORTS.get(body["model"].lower())
+    if effort_text:
+        if allowed_efforts and effort_text not in allowed_efforts:
+            if effort_text == "none" and "none" not in allowed_efforts:
+                # Always-thinking models cannot disable reasoning; use their
+                # first accepted level instead of failing the whole request.
+                effort_text = allowed_efforts[0]
+            else:
+                raise CodeArtsBadRequest(
+                    "reasoning_effort must be one of %s for %s"
+                    % ("/".join(allowed_efforts), body["model"]))
+        body["reasoning_effort"] = effort_text
+    else:
+        body.pop("reasoning_effort", None)
     messages = normalize_roles(payload.get("messages") or [])
     messages = [m for m in messages if isinstance(m, dict)]
     flattened = []

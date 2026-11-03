@@ -98,6 +98,9 @@ try:
     check("catalog source", payload["catalog"]["source"] == "codearts")
     check("benefit flag", any(m.get("benefit") for m in payload["data"]
                               if m["id"] == "deepseek-v4-pro-0813"), payload)
+    glm = next(m for m in payload["data"] if m["id"] == "GLM-5.2")
+    check("reasoning metadata", glm.get("supports_reasoning") is True
+          and "high" in glm.get("reasoning_efforts", []), glm)
 
     # Key 模型限制
     wb_settings.set_filter_models_by_key(ACCOUNTS, True)
