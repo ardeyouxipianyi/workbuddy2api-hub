@@ -58,16 +58,23 @@ assert.ok(html.slice(headEnd).indexOf('const PANEL_STORE =') === -1,
 
 /* ---- 3. 首帧判定的行为：无令牌不隐藏 / 有令牌先隐藏 / 读存储抛错不算崩 -- */
 
-function runFirstPaint(tokenOrThrow) {
+function runFirstPaint(tokenOrThrow, store) {
   const added = [];
   const sessionStorage = {
     getItem: (key) => {
       if (tokenOrThrow === 'throw') throw new Error('storage disabled');
-      return tokenOrThrow && key === storeMatch[1] ? tokenOrThrow : null;
+      return store !== 'local' && tokenOrThrow && key === storeMatch[1] ? tokenOrThrow : null;
+    },
+  };
+  const localStorage = {
+    getItem: (key) => {
+      if (tokenOrThrow === 'throw' || store === 'local-blocked') throw new Error('storage disabled');
+      return store === 'local' && tokenOrThrow && key === storeMatch[1] ? tokenOrThrow : null;
     },
   };
   const sandbox = {
     sessionStorage,
+    localStorage,
     document: {documentElement: {classList: {add: (name) => added.push(name)}}},
   };
   vm.createContext(sandbox);
@@ -79,8 +86,13 @@ assert.deepStrictEqual(runFirstPaint(null), [],
   '没有面板令牌时不能隐藏闸门（无痕 / 首次访问必须直接看到登录框）');
 assert.deepStrictEqual(runFirstPaint('panel-token'), ['wb-panel-session'],
   '有面板令牌时先隐藏闸门，避免已登录用户反而闪一下登录框');
+assert.deepStrictEqual(runFirstPaint('local-token', 'local'), ['wb-panel-session'],
+  'localStorage 里的持久令牌也要在首帧隐藏闸门');
+assert.deepStrictEqual(runFirstPaint('session-token', 'local-blocked'), ['wb-panel-session'],
+  'localStorage 不可用时仍应识别 sessionStorage 中的令牌');
 assert.deepStrictEqual(runFirstPaint('throw'), [],
   '读 sessionStorage 抛错（隐私模式）时按「没有令牌」处理，不能把页面弄崩');
+assert.ok(!/<input id="panelRemember"[^>]*\bchecked\b/.test(html), '保持登录默认关闭');
 
 /* ---- 4. 页面行为：两个开关闸门的函数都要摘掉那个类 -------------------- */
 
@@ -93,6 +105,20 @@ const stalledFetch = (url) => (String(url).indexOf('/panel/status') !== -1
 const page = loadDashboard({fetch: stalledFetch});
 const root = page.document.documentElement;
 const gate = page.document.getElementById('panelGate');
+
+page.panelStoreToken('remember-token', true);
+assert.strictEqual(page.localStorage.getItem('wb-proxy-panel-token'), 'remember-token',
+  '保持登录时令牌写入 localStorage');
+assert.strictEqual(page.sessionStorage.getItem('wb-proxy-panel-token'), null,
+  '保持登录时不能同时留在 sessionStorage');
+page.panelStoreToken('session-token', false);
+assert.strictEqual(page.sessionStorage.getItem('wb-proxy-panel-token'), 'session-token',
+  '不保持登录时令牌只写 sessionStorage');
+assert.strictEqual(page.localStorage.getItem('wb-proxy-panel-token'), null,
+  '不保持登录时必须清掉持久令牌');
+page.panelClearToken();
+assert.strictEqual(page.localStorage.getItem('wb-proxy-panel-token'), null);
+assert.strictEqual(page.sessionStorage.getItem('wb-proxy-panel-token'), null);
 
 root.classList.add('wb-panel-session');
 page.panelNeedsLogin();
