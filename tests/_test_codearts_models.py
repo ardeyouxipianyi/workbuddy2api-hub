@@ -92,8 +92,7 @@ try:
     status, payload = get(HUB + "/v1/models?realm=codearts", "hub-key-1234")
     check("status 200", status == 200, (status, payload))
     ids = [m["id"] for m in payload["data"]]
-    check("ids", set(ids) == {"GLM-5.2", "GLM-4.7", "Qwen3-VL-235B",
-                              "deepseek-v4-pro-0813"}, ids)
+    check("ids", set(ids) == {"deepseek-v4-flash-0731", "deepseek-v4-pro-0813", "DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash-1017", "GLM-4.7", "GLM-5.2", "GLM-5.2-ArkTS-SPARK", "GLM-5.3", "GLM-5.3-Flash", "Kimi-K3", "Kimi-K3.1-Pro", "OpenPangu-2.0-Flash", "OpenPangu-2.0-Pro", "Qwen3-VL-235B"}, ids)
     check("owned_by", payload["data"][0]["owned_by"] == "codearts")
     check("provider", payload["data"][0]["provider"] == "codearts")
     check("catalog source", payload["catalog"]["source"] == "codearts")
@@ -114,6 +113,18 @@ try:
     glm = next(m for m in payload["data"] if m["id"] == "GLM-5.2")
     check("reasoning metadata", glm.get("supports_reasoning") is True
           and "high" in glm.get("reasoning_efforts", []), glm)
+    check("flat credit rate", glm.get("credits") == "0.7", glm)
+    peak_now = time.mktime(time.strptime("2026-11-03 10:00:00",
+                                         "%Y-%m-%d %H:%M:%S"))
+    off_now = time.mktime(time.strptime("2026-11-03 22:00:00",
+                                        "%Y-%m-%d %H:%M:%S"))
+    peak = C.codearts_credit_info("DeepSeek-V4.1-Flash", peak_now)
+    off = C.codearts_credit_info("DeepSeek-V4.1-Flash", off_now)
+    check("deepseek peak rate", peak[0] == "0.18" and peak[2] == "0.18"
+          and peak[3] == "0.09", peak)
+    check("deepseek offpeak rate", off[0] == "0.09" and off[2] == "0.18"
+          and off[3] == "0.09", off)
+    check("deepseek rate note", "peak" in peak[1] and "off-peak" in peak[1], peak)
 
     # Key 模型限制
     wb_settings.set_filter_models_by_key(ACCOUNTS, True)
@@ -125,7 +136,8 @@ try:
     status, payload = get(HUB + "/v1/models?realm=codearts", "hub-key-1234")
     check("filtered status", status == 200, (status, payload))
     check("filtered ids", [m["id"] for m in payload["data"]] ==
-          ["GLM-5.2", "GLM-4.7"], payload)
+          ["GLM-5.2", "GLM-4.7", "GLM-5.3-Flash", "GLM-5.3",
+           "GLM-5.2-ArkTS-SPARK"], payload)
     wb_settings.set_filter_models_by_key(ACCOUNTS, False)
 
     # 未启用 -> 503

@@ -210,9 +210,7 @@ try:
     print("== models ==")
     models = C.fetch_models(acct)
     ids = [m["id"] for m in models]
-    check("agent/builtin/benefit merged", set(ids) ==
-          {"GLM-5.2", "GLM-4.7", "Qwen3-VL-235B",
-           "deepseek-v4-pro-0813"}, ids)
+    check("agent/builtin/benefit merged", set(ids) == {"deepseek-v4-pro-0813", "DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash-1017", "GLM-4.7", "GLM-5.2", "GLM-5.2-ArkTS-SPARK", "GLM-5.3", "GLM-5.3-Flash", "Kimi-K3", "Kimi-K3.1-Pro", "OpenPangu-2.0-Flash", "OpenPangu-2.0-Pro", "Qwen3-VL-235B"}, ids)
     check("benefit marked", acct.is_benefit("deepseek-v4-pro-0813") is True)
     check("normal not benefit", acct.is_benefit("GLM-5.2") is False)
     entries = C.model_entries(C.load_config(ACCOUNTS))

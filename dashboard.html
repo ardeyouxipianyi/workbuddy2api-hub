@@ -8785,6 +8785,9 @@ function renderAvailableModels(){
         ? ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span>' : '';
       credBadge = '<span class="badge s">' + esc(raw) + night + '</span>';
     }
+    if(m.credits_note){
+      credBadge += ' <span class="badge" style="font-size:10px;color:var(--dim);background:var(--panel2);border-color:var(--line)">' + esc(m.credits_note) + '</span>';
+    }
     
     // #505: 只标「Pro Only」（与上游徽章同名），不标「可用」。没有 entitlement 就什么都不显示。
     // 标注由 /v1/models 给出：source=catalog 是上游目录 modelTiers 的声明（与

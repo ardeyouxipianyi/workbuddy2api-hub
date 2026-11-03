@@ -78,11 +78,57 @@ SEED_BENEFIT_MODELS = (
     "deepseek-v4-flash-0731", "deepseek-v4-pro-0813", "glm-5.3-flash",
 )
 SEED_KNOWN_MODELS = (
-    "GLM-5.2", "GLM-5.2-ArkTS-SPARK", "GLM-5.1", "GLM-4.7",
+    "GLM-5.2", "GLM-5.2-ArkTS-SPARK", "GLM-5.3",
+    "GLM-5.1", "GLM-4.7",
+    "Kimi-K3.1-Pro", "Kimi-K3",
+    "DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash-1017",
     "OpenPangu-2.0-Pro", "OpenPangu-2.0-Flash",
     "Qwen3-VL-235B", "Qwen3.5-397B-A17B-VL", "Qwen3.6-27B-VL",
 )
 SEED_MODELS = tuple(SEED_KNOWN_MODELS) + tuple(SEED_BENEFIT_MODELS)
+
+#: Models the Huawei Cloud console lists for the CodeArts chat backend. The
+#: account-level discovery can return only a subset; the model list still shows
+#: this official set so the panel can display the published rates.
+CODEARTS_OFFICIAL_MODELS = (
+    "Kimi-K3.1-Pro", "GLM-5.3-Flash", "Kimi-K3",
+    "DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash-1017",
+    "GLM-5.3", "GLM-5.2", "OpenPangu-2.0-Flash",
+    "GLM-5.2-ArkTS-SPARK", "OpenPangu-2.0-Pro",
+)
+
+#: Published CodeArts credit multiplier per model. The value has the same
+#: shape as the WorkBuddy `credits` field; it is metadata for the panel and
+#: does not change token accounting.
+CODEARTS_CREDITS = {
+    "kimi-k3.1-pro": "1.63",
+    "glm-5.3-flash": "0.08",
+    "kimi-k3": "2.38",
+    "glm-5.3": "0.79",
+    "glm-5.2": "0.7",
+    "openpangu-2.0-flash": "0.32",
+    "glm-5.2-arkts-spark": "0.7",
+    "openpangu-2.0-pro": "0.7",
+}
+
+#: Time-of-day rates: (peak, off-peak). Peak is 08:00-20:59 local time;
+#: off-peak is 21:00-07:59.
+CODEARTS_PEAK_CREDITS = {
+    "deepseek-v4.1-flash": ("0.18", "0.09"),
+    "deepseek-v4.1-flash-1017": ("0.18", "0.12"),
+}
+
+
+def codearts_credit_info(mid, now=None):
+    """Return (current_rate, note, peak_rate, offpeak_rate) for a model."""
+    key = str(mid or "").strip().lower()
+    peak = CODEARTS_PEAK_CREDITS.get(key)
+    if peak:
+        hour = time.localtime(now if now is not None else time.time()).tm_hour
+        rate = peak[0] if 8 <= hour <= 20 else peak[1]
+        return rate, "peak %sx / off-peak %sx" % peak, peak[0], peak[1]
+    rate = CODEARTS_CREDITS.get(key, "")
+    return rate, "", rate, rate
 
 #: 模型目录缓存 1 小时；失败时保留上一轮。
 CATALOG_TTL = 3600.0
@@ -1301,7 +1347,13 @@ def fetch_models(acct, timeout=20.0, auto_claim=True):
                 errors.append("%s: %s" % (name, exc))
             except Exception as exc:
                 errors.append("%s: %s" % (name, exc))
-    merged = _merge_models(sets)
+    official = [
+        {"id": mid, "name": mid,
+         "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS},
+         "supports_images": _known_vision(mid)}
+        for mid in CODEARTS_OFFICIAL_MODELS
+    ]
+    merged = _merge_models(sets + [("official", official)])
     if not merged:
         # 全失败：保留旧目录；没有旧目录就用种子。
         if acct.models:
@@ -1349,7 +1401,13 @@ def model_entries(config):
             pass
         if acct.models:
             sets.append(("account", acct.models))
-    merged = _merge_models(sets)
+    official = [
+        {"id": mid, "name": mid,
+         "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS},
+         "supports_images": _known_vision(mid)}
+        for mid in tuple(CODEARTS_OFFICIAL_MODELS) + tuple(SEED_BENEFIT_MODELS)
+    ]
+    merged = _merge_models(sets + [("official", official)])
     if not merged:
         merged = _merge_models([("seed", [
             {"id": mid, "name": mid,
@@ -1384,6 +1442,13 @@ def model_entries(config):
             entry["max_output"] = out_tokens
         if item.get("benefit"):
             entry["benefit"] = True
+        rate, rate_note, peak_rate, offpeak_rate = codearts_credit_info(item["id"])
+        if rate:
+            entry["credits"] = rate
+            entry["credits_peak"] = peak_rate
+            entry["credits_offpeak"] = offpeak_rate
+            if rate_note:
+                entry["credits_note"] = rate_note
         supports = item.get("supports_images")
         if not isinstance(supports, bool):
             supports = _known_vision(item["id"])
