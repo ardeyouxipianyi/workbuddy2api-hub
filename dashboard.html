@@ -2397,7 +2397,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     '每日积分限额': 'Daily credit limit',
     '临期积分优先': 'Expiring credits first',
     '读取签到记录失败:': 'Failed to read the activity log:',
-    '账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——分到的流量更多、越接近到期份额越大，但不会全压在一个账号上（到期日相同或相近的账号彼此等权）；这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。': 'When the soonest-expiring credit package of an account (one that still has credits and would really lapse) is within this many days, dispatch prefers the accounts with expiring credits - they get a larger share, and the closer to expiry the bigger - but never all of it in one account (accounts expiring on or around the same day carry equal weight); when none of them is usable (cooling down, over a daily limit), the other accounts serve as usual. 0 turns it off; the day counts come from the most recent credit refresh of each account.',
+    '账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——份额同时看两件事：离到期越近越大，包里剩的积分越多也越大（对数压缩，剩 30 分不会变成 30 倍）；但不会全压在一个账号上，到期日与剩余量都相同的账号彼此等权轮流。这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。': 'When the soonest-expiring credit package of an account (one that still has credits and would really lapse) is within this many days, dispatch prefers the accounts with expiring credits - their share grows both as expiry approaches and as the package holds more unspent credits (log-scaled, so 30 credits is not a 30x share) - but never all of it in one account: accounts with the same expiry and the same remainder rotate evenly. When none of them is usable (cooling down, over a daily limit), the other accounts serve as usual. 0 turns it off; the day counts come from the most recent credit refresh of each account.',
     '启用临期优先': 'Enable expiring-credits first',
     '已开启临期积分优先': 'Expiring-credits priority on',
     '已关闭临期积分优先': 'Expiring-credits priority off',
@@ -3374,7 +3374,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     "账号已成功启用": "帳號已成功啟用",
     "账号当日消耗的 token 达到该值后暂停接单，请求自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示不限（不限额）；与「保留积分」各自独立，任一命中都会暂停接单。": "帳號當日消耗的 token 達到該值後暫停接單，請求自動切到其他帳號；本地時間 0 點後自動恢復。填 0 表示不限（不限額）；與「保留積分」各自獨立，任一命中都會暫停接單。",
     "账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。": "帳號當日消費的積分達到該值後，只允許請求免費模型（目錄中標記為 x0.00 的模型），需要花費積分的模型自動切到其他帳號；本地時間 0 點後自動恢復。填 0 表示關閉（預設）。",
-    "账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——分到的流量更多、越接近到期份额越大，但不会全压在一个账号上（到期日相同或相近的账号彼此等权）；这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。": "帳號「最早到期的積分包」（還有剩餘、且到期會真正作廢的那些）距今不超過該天數時，分派優先使用臨期積分的帳號——分到的流量更多、越接近到期份額越大，但不會全壓在一個帳號上（到期日相同或相近的帳號彼此等權）；這些帳號暫時都不可用（冷卻、達日限額等）時，其他帳號照常頂上。填 0 表示關閉；天數取自各帳號最近一次重新整理的積分資料。",
+    "账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——份额同时看两件事：离到期越近越大，包里剩的积分越多也越大（对数压缩，剩 30 分不会变成 30 倍）；但不会全压在一个账号上，到期日与剩余量都相同的账号彼此等权轮流。这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。": "帳號「最早到期的積分包」（還有剩餘、且到期會真正作廢的那些）距今不超過該天數時，分派優先使用臨期積分的帳號——份額同時看兩件事：離到期越近越大，包裡剩的積分越多也越大（對數壓縮，剩 30 分不會變成 30 倍）；但不會全壓在一個帳號上，到期日與剩餘量都相同的帳號彼此等權輪流。這些帳號暫時都不可用（冷卻、達日限額等）時，其他帳號照常頂上。填 0 表示關閉；天數取自各帳號最近一次重新整理的積分資料。",
     "剩余用量优先调度": "剩餘用量優先排程",
     "出口级瞬时失败退避": "出口級瞬時失敗退避",
     "启用出口级退避": "啟用出口級退避",
@@ -5032,7 +5032,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
               <td class="limit-name">
                 <div style="font-weight:600;color:var(--fg)">临期积分优先 <em id="setExpiringWindowState"></em></div>
                 <div style="font-size:12px;color:var(--dim);margin-top:2px">
-                  账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——分到的流量更多、越接近到期份额越大，但不会全压在一个账号上（到期日相同或相近的账号彼此等权）；这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。
+                  账号「最早到期的积分包」（还有剩余、且到期会真正作废的那些）距今不超过该天数时，分派优先使用临期积分的账号——份额同时看两件事：离到期越近越大，包里剩的积分越多也越大（对数压缩，剩 30 分不会变成 30 倍）；但不会全压在一个账号上，到期日与剩余量都相同的账号彼此等权轮流。这些账号暂时都不可用（冷却、达日限额等）时，其他账号照常顶上。填 0 表示关闭；天数取自各账号最近一次刷新的积分数据。
                 </div>
                 <label class="switch" style="margin-top:8px">
                   <input id="setExpiringWindowToggle" type="checkbox" onchange="toggleExpiringWindow(this)">

@@ -100,6 +100,42 @@ _JSON = r'''
     "vendor": "e"
   },
   {
+    "id": "deepseek-v4.1-flash",
+    "name": "Deepseek-V4.1-Flash",
+    "descriptionEn": "DeepSeek flagship model, supporting 1M context window, native multimodal model",
+    "descriptionZh": "DeepSeek 旗舰模型，支持 1M 上下文窗口，原生多模态",
+    "credits": "x0.00",
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 128000,
+    "maxAllowedSize": 1000000,
+    "contextWindow": {
+      "defaultLength": 300000,
+      "supportedLengths": [
+        300000,
+        1000000
+      ]
+    },
+    "supportsImages": true,
+    "supportsToolCall": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+      "defaultEffort": "high",
+      "summary": "auto",
+      "supportedEfforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    "relatedModels": {
+      "lite": "deepseek-v4.1-flash",
+      "reasoning": "deepseek-v4.1-flash"
+    },
+    "temperature": 1,
+    "vendor": "f"
+  },
+  {
     "id": "deepseek-v4.1-flash-sg",
     "name": "Deepseek-V4.1-Flash",
     "descriptionEn": "DeepSeek flagship model, supporting 1M context window, native multimodal model",

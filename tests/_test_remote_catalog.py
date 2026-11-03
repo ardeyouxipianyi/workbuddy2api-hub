@@ -171,7 +171,7 @@ class RemoteCatalogTests(unittest.TestCase):
         # 顺序由 INTL_UI_ORDER 决定；模型名不在本次 live 目录里的（如
         # gpt-6.1-sol、kimi-k3.1-pro-highspeed）由内置快照补进来，所以也出现。
         self.assertEqual(ids, [
-            "deepseek-v4.1-flash-sg", "hy4-preview", "hy3", "gpt-6-astra",
+            "deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy4-preview", "hy3", "gpt-6-astra",
             "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol",
             "gpt-5.6-terra", "gpt-5.6-luna", "grok-4.7", "gemini-3.8-flash",
             "glm-5.3", "glm-5.3-flash", "kimi-k3.1-pro",

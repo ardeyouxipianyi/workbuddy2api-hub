@@ -600,5 +600,110 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(overlaps, [], "两个取数同时进行说明锁没生效")
 
 
+class ExpiryWeightTests(unittest.TestCase):
+    """权重必须同时反映「还剩几天」与「还剩多少积分」。
+
+    旧算法只用 `round(window - days) + 1`：一来把一整段天数压成同一个整数，
+    二来完全不看剩余量。实测生产池里 112 个账号有 110 个 days_left 都是
+    0.10，权重全部相同，临期优先退化成纯轮询；同样两天到期的账号，剩 1 积分
+    与剩 30 积分也拿一样的份额——而「把临期积分花掉」正是这个功能的全部目的。
+    """
+
+    def _pool(self, accounts, window=7):
+        directory = tempfile.mkdtemp(prefix="expiry-weight-")
+        pool = wb_accounts.AccountPool(directory, log=lambda _m: None)
+        pool.accounts = accounts
+        pool.apply_expiring_window({"global": window, "intl": window, "cn": window})
+        return pool
+
+    def test_soonest_expiring_remain_reads_the_lapsing_package(self):
+        account = make_account("r1", credits=credits(9, 2.5, 4))
+        self.assertEqual(account.soonest_expiring_remain(), 100)
+        # 最早的包里剩多少就读多少，不是全部包的合计。
+        blob = {
+            "remain": 130, "used": 0, "size": 130,
+            "packages": [
+                {"package_code": "p", "remain": 30, "days_left": 1.0,
+                 "no_expiry": False, "is_expired": False},
+                {"package_code": "p", "remain": 100, "days_left": 5.0,
+                 "no_expiry": False, "is_expired": False},
+            ],
+        }
+        self.assertEqual(make_account("r2", credits=blob).soonest_expiring_remain(), 30)
+
+    def test_soonest_expiring_remain_is_none_when_nothing_can_be_judged(self):
+        self.assertIsNone(make_account("r3").soonest_expiring_remain())
+        self.assertIsNone(make_account("r4", credits={}).soonest_expiring_remain())
+        self.assertIsNone(
+            make_account("r5", credits=credits(2, no_expiry=True)).soonest_expiring_remain())
+
+    def test_more_remaining_credits_earn_a_larger_share(self):
+        # 同一天到期、剩余量差 30 倍：剩余多的应分到明显更多流量，但不能
+        # 独占（对数压缩，不是 30 倍）。
+        big = make_account("big", credits=credits(2, remain=300))
+        small = make_account("small", credits=credits(2, remain=10))
+        pool = self._pool([big, small])
+        picks = [pool.pick(realm="cn").uid for _ in range(400)]
+        self.assertGreater(picks.count("big"), picks.count("small"))
+        self.assertGreater(picks.count("small"), 0, "剩余少的也要有份额，不能饿死")
+
+    def test_a_pool_that_all_lapses_together_is_not_a_flat_rotation(self):
+        """110 个账号 days_left 全相同（生产池实测形态）时仍要有区分度。
+
+        旧算法在这里给出的权重全相同，加权轮询退化成等权轮询；现在剩余量
+        参与权重，份额按剩余多少分开。
+        """
+        accounts = [
+            make_account("same-%02d" % i, credits=credits(0.1, remain=10 + i))
+            for i in range(10)
+        ]
+        pool = self._pool(accounts)
+        picks = [pool.pick(realm="cn").uid for _ in range(600)]
+        counts = Counter(picks)
+        self.assertEqual(len(counts), 10, "每个账号都该分到流量")
+        # 剩余最多的账号份额应大于剩余最少的。
+        self.assertGreater(counts["same-09"], counts["same-00"])
+
+    def test_weight_stays_bounded_so_nobody_takes_everything(self):
+        # 极端悬殊（剩 1 vs 剩 1000）也不能让一个账号吃掉全部流量。
+        rich = make_account("rich", credits=credits(0.5, remain=1000))
+        poor = make_account("poor", credits=credits(0.5, remain=1))
+        pool = self._pool([rich, poor])
+        picks = [pool.pick(realm="cn").uid for _ in range(300)]
+        self.assertGreater(picks.count("poor"), 0)
+        self.assertLess(picks.count("rich") / max(1, picks.count("poor")), 10.0)
+
+    def test_urgency_still_dominates_when_amounts_match(self):
+        # 剩余量相同时，越接近到期分到的越多——原有语义不能被新因子冲掉。
+        sooner = make_account("sooner-w", credits=credits(0.5, remain=100))
+        later = make_account("later-w", credits=credits(6.0, remain=100))
+        pool = self._pool([sooner, later])
+        picks = [pool.pick(realm="cn").uid for _ in range(300)]
+        self.assertGreater(picks.count("sooner-w"), picks.count("later-w") * 1.5)
+
+    def test_identical_packages_still_rotate_evenly(self):
+        """数据完全相同的账号必须均分——那说明不了谁更急，硬要区分就是编造。
+
+        生产池实测存在这种形态（109 个账号 days_left=0.10 且 remain=30），
+        此时权重全相同、平滑加权轮询退化成等权轮询，正是我们想要的：它们
+        之间本来就该轮流。
+        """
+        accounts = [
+            make_account("twin-%02d" % i, credits=credits(0.1, remain=30))
+            for i in range(6)
+        ]
+        pool = self._pool(accounts)
+        picks = Counter(pool.pick(realm="cn").uid for _ in range(600))
+        self.assertEqual(len(picks), 6, "每个账号都要分到流量")
+        shares = sorted(picks.values())
+        self.assertLessEqual(shares[-1] - shares[0], 60, "同数据账号之间份额应接近均分")
+
+    def test_unknown_credit_data_keeps_weight_one(self):
+        # 判不了就回 1，不猜。
+        unknown = make_account("unknown-w")
+        pool = self._pool([unknown], window=7)
+        self.assertEqual(pool._expiry_weight(unknown), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
