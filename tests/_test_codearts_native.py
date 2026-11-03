@@ -253,6 +253,51 @@ try:
           anthropic_parts == [{"type": "image_url", "image_url": {
               "url": "data:image/jpeg;base64,BBB"}}], anthropic_body)
 
+    print("== reasoning effort ==")
+    effort_body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "reasoning_effort": "high",
+        "messages": [{"role": "user", "content": "hi"}],
+    }, "sess-effort")
+    check("effort forwarded", effort_body.get("reasoning_effort") == "high",
+          effort_body)
+    thinking_body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "thinking": {"type": "enabled"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }, "sess-thinking")
+    check("thinking maps to high",
+          thinking_body.get("reasoning_effort") == "high", thinking_body)
+    try:
+        C.build_chat_body({
+            "model": "GLM-5.2", "reasoning_effort": "auto",
+            "messages": [{"role": "user", "content": "hi"}],
+        }, "sess-bad-effort")
+        check("invalid effort rejected", False)
+    except C.CodeArtsBadRequest:
+        check("invalid effort rejected", True)
+    always_body = C.build_chat_body({
+        "model": "glm-5.3-flash", "reasoning_effort": "none",
+        "messages": [{"role": "user", "content": "hi"}],
+    }, "sess-always")
+    check("always-thinking uses accepted level",
+          always_body.get("reasoning_effort") == "low", always_body)
+    sampling_body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop": ["END"], "seed": 7, "top_k": 5,
+        "frequency_penalty": 0.2, "presence_penalty": 0.1,
+        "response_format": {"type": "json_object"},
+    }, "sess-sampling")
+    check("sampling fields forwarded",
+          sampling_body.get("stop") == ["END"]
+          and sampling_body.get("seed") == 7
+          and sampling_body.get("top_k") == 5
+          and sampling_body.get("frequency_penalty") == 0.2
+          and sampling_body.get("presence_penalty") == 0.1
+          and sampling_body.get("response_format") == {"type": "json_object"},
+          sampling_body)
+
     import io
     stream = C.CodeArtsStream(io.BytesIO(b'data: {"text":"hello"}\n\ndata: [DONE]\n\n'),
                               "model", acct, acct.pool)
