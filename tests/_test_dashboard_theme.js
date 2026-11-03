@@ -23,6 +23,22 @@ const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard.html'), 'utf8');
 
+// 首帧布局默认控制台；显式经典偏好与新导航始终优先。
+const layoutSource = html.match(/<script>\s*(var defaultConsoleLayout[\s\S]*?)<\/script>/);
+assert.ok(layoutSource, '缺少首帧布局初始化');
+function firstLayout(saved, next, blocked) {
+  const attrs = {}, sheets = {'wb-alibaba-console': {}, 'wb-console-v2': {}};
+  const document = {documentElement: {setAttribute: (k,v) => { attrs[k] = v; }}, getElementById: id => sheets[id]};
+  const localStorage = {getItem: () => { if(blocked) throw Error('disabled'); return saved; }};
+  new Function('window', 'document', 'localStorage', layoutSource[1])({__NEXT_UI__: next}, document, localStorage);
+  return attrs['data-console-layout'] || '';
+}
+assert.equal(firstLayout(null, false, false), 'on', '首次访问默认控制台');
+assert.equal(firstLayout('0', false, false), '', '保留经典布局偏好');
+assert.equal(firstLayout('1', false, false), 'on', '保留控制台偏好');
+assert.equal(firstLayout(null, false, true), 'on', '存储不可读时仍使用默认布局');
+assert.equal(firstLayout('1', true, false), '', '新导航不叠加控制台布局');
+
 const START = "var THEME_KEY = 'wb-theme';";
 const END = '// 3. Tab 初始化';
 const start = html.indexOf(START);
@@ -69,10 +85,10 @@ function makeElement(id) {
 function makeHarness(seed) {
   const elements = new Map();
   for (const id of ['themeToggleIcon', 'themeToggleBtn', 'themeDropdown', 'themeDropdownWrap',
-                    'themeOptLight', 'themeOptDark', 'themeOptSystem', 'themeOptClaude', 'themeOptMaterial', 'themeOptMiuix']) {
+                    'themeOptLight', 'themeOptDark', 'themeOptSystem', 'themeOptClaude', 'themeOptAlibaba', 'themeOptMaterial', 'themeOptMiuix']) {
     elements.set(id, makeElement(id));
   }
-  const styleOpts = ['claude','material','miuix'].map(x => {
+  const styleOpts = ['claude','alibaba','material','miuix'].map(x => {
     const e = elements.get('themeOpt' + (x==='miuix'?'Miuix':x[0].toUpperCase()+x.slice(1)));
     e.getAttribute = k => k === 'data-theme-style-option' ? x : undefined;
     return e;
@@ -91,7 +107,7 @@ function makeHarness(seed) {
   const doc = {
     documentElement,
     getElementById: (id) => elements.get(id) || null,
-    querySelectorAll: (sel) => sel === '[data-theme-style-option]' ? ['claude','material','miuix'].map(x => { const e=elements.get('themeOpt'+x[0].toUpperCase()+x.slice(1)); e.getAttribute = k => k === 'data-theme-style-option' ? x : undefined; return e; }) : [],
+    querySelectorAll: (sel) => sel === '[data-theme-style-option]' ? ['claude','alibaba','material','miuix'].map(x => { const e=elements.get('themeOpt'+x[0].toUpperCase()+x.slice(1)); e.getAttribute = k => k === 'data-theme-style-option' ? x : undefined; return e; }) : [],
     addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
   };
   const storage = {
@@ -198,7 +214,7 @@ assert.strictEqual(inside.el('themeDropdown').classList.contains('open'), true,
 
 
 // 风格维度：五套预设均应可选择、持久化，且不影响旧的明暗偏好。
-for (const style of ['claude','material','miuix']) {
+for (const style of ['claude','alibaba','material','miuix']) {
   const t = makeHarness({stored:'light'});
   t.win.selectStyle(style, evt());
   assert.strictEqual(t.documentElement.getAttribute('data-theme-style'), style, style + ' 应写入 data-theme-style');
@@ -208,7 +224,9 @@ for (const style of ['claude','material','miuix']) {
   assert.strictEqual(t.documentElement.getAttribute('data-theme-style'), style, style + ' 不应被明暗切换覆盖');
 }
 const styleDefault = makeHarness({stored:'light'});
-assert.strictEqual(styleDefault.documentElement.getAttribute('data-theme-style'), 'claude', '缺少 style 偏好时默认 Claude');
+assert.strictEqual(styleDefault.documentElement.getAttribute('data-theme-style'), 'alibaba', '缺少 style 偏好时默认 Alibaba');
+const styleExisting = makeHarness({stored:'light', styleStored:'claude'});
+assert.strictEqual(styleExisting.documentElement.getAttribute('data-theme-style'), 'claude', '已有主题偏好应得到保留');
 
 console.log('dashboard theme assertions passed '
   + `(${mustBeGlobal.length} exported handlers, ${handlers.size} inline handlers swept)`);

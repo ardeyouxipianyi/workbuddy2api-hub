@@ -301,6 +301,8 @@ function check(label, ok, detail){
     REQUESTS.some(u => u.indexOf('/activity/history') === 0), JSON.stringify(REQUESTS));
 
   // 2j. 开关：区块在两页之间搬家，页签名与「账号」页签的显隐跟着走。
+  // 此段验证用户显式选择经典布局时的文案；默认控制台另行验证。
+  document.documentElement.removeAttribute('data-console-layout');
   // 假 DOM 不把 HTML 解析成树（getElementById 是惰性建元素），所以这里按**运行时**
   // 的真实结构自己搭最小场景——initPageNav() 会把页面内容整体包进 .page-nav-body，
   // 两个锚点因此都不是页面 div 的直接子节点。踩过的坑：直接对页面 div 调
@@ -362,6 +364,12 @@ function check(label, ok, detail){
   check('拆开后网关页签改回「网关」', el('navGatewayLabel').textContent === '网关',
     el('navGatewayLabel').textContent);
   check('拆开后开关读回来是开', api.accountsSeparateTab() === true);
+
+  document.documentElement.setAttribute('data-console-layout', 'on');
+  api.applyAccountsTabLayout(false);
+  check('控制台布局保持运行概览文案', el('navGatewayLabel').textContent === '运行概览');
+  check('控制台布局仍将账号区合并到网关页', moved.every(s => kids(gatewayBody).includes(s)));
+
 
   // 2k. 一键切换所有出站身份：按钮显示当前身分，点一下切到下一个并提交全量
   window.ACCOUNTS = [{uid: 'u1', product: 'workbuddy'}, {uid: 'u2', product: 'workbuddy'}];

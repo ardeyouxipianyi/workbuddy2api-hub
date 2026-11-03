@@ -1739,11 +1739,13 @@ html:not([data-console-layout="on"]) #btnNavLogs {order:8}
 html[data-console-layout="on"] #classicTitle {display:none}
 </style>
 <script>
-try { if(!window.__NEXT_UI__ && localStorage.getItem('wb-console-layout') === '1') {
+var defaultConsoleLayout = true;
+try { defaultConsoleLayout = localStorage.getItem('wb-console-layout') !== '0'; } catch(e){}
+if(!window.__NEXT_UI__ && defaultConsoleLayout) {
   document.documentElement.setAttribute('data-console-layout','on');
   document.getElementById('wb-alibaba-console').media = 'all';
   document.getElementById('wb-console-v2').media = 'all';
-} } catch(e){}
+}
 </script>
 <script>
 /* Runs before <body> is parsed, so the page the user last had is the
@@ -1769,7 +1771,7 @@ try { if(!window.__NEXT_UI__ && localStorage.getItem('wb-console-layout') === '1
       v['--radius-control'] = Math.max(6, Math.round(r*0.6)) + 'px';
     });
   });
-  function getStyle(){ try { var s=localStorage.getItem(THEME_STYLE_KEY); return THEME_STYLES[s] ? s : 'claude'; } catch(e){ return 'claude'; } }
+  function getStyle(){ try { var s=localStorage.getItem(THEME_STYLE_KEY); return THEME_STYLES[s] ? s : 'alibaba'; } catch(e){ return 'alibaba'; } }
   function setStyleAttr(s){ document.documentElement.setAttribute('data-theme-style',s); }
   var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   function getPref(){
@@ -1796,7 +1798,7 @@ try { if(!window.__NEXT_UI__ && localStorage.getItem('wb-console-layout') === '1
   var svgMonitor = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
 
   function applyStyle(style){
-    if(!THEME_STYLES[style]) style = 'claude';
+    if(!THEME_STYLES[style]) style = 'alibaba';
     var vars = THEME_STYLES[style][resolvedTheme === 'dark' ? 'dark' : 'light'];
     setStyleAttr(style);
     // 新面板有自己的 token；旧主题预设只保留亮/暗切换，不再往根节点写
@@ -1834,7 +1836,7 @@ try { if(!window.__NEXT_UI__ && localStorage.getItem('wb-console-layout') === '1
   }
 
   window.applyStyle = function(style){
-    style = THEME_STYLES[style] ? style : 'claude';
+    style = THEME_STYLES[style] ? style : 'alibaba';
     try { localStorage.setItem(THEME_STYLE_KEY, style); } catch(e){}
     setStyleAttr(style);
     if(window.__NEXT_UI__){ updateStyleUI(style); return style; }
@@ -14081,7 +14083,7 @@ async function saveAccountsSeparateTab(btn){
 }
 // ==== 账号页签模式结束 ====
 
-// Layout and color theme are independent; keep the original navigation by default.
+// Layout and color theme are independent; use the console layout by default.
 function toggleNextLayout(){
   const url = new URL(window.location.href);
   if(window.__NEXT_UI__) url.searchParams.delete('ui');
