@@ -22977,6 +22977,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, result)
             if path == "/codearts/models/refresh":
                 return self._json(200, wb_codearts.refresh_models(cfg))
+            if path == "/codearts/credits/refresh":
+                return self._json(200, wb_codearts.refresh_credits(cfg))
             if path == "/codearts/accounts/checkin":
                 # uid 可空：空 = 全员签到。
                 result = wb_codearts.checkin(cfg, uid)
@@ -22987,6 +22989,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/codearts/accounts/proxy":
                 result = wb_codearts.set_proxy_slot(
                     cfg, uid, payload.get("slot_id"))
+            elif path == "/codearts/accounts/note":
+                result = wb_codearts.set_note(cfg, uid, payload.get("note"))
+            elif path == "/codearts/accounts/tasks":
+                result = wb_codearts.set_tasks_enabled(
+                    cfg, uid, payload.get("enabled", True))
+            elif path == "/codearts/accounts/test":
+                result = wb_codearts.test_account(cfg, uid)
             elif path == "/codearts/accounts/enable":
                 result = wb_codearts.enable(cfg, uid)
             elif path == "/codearts/accounts/disable":

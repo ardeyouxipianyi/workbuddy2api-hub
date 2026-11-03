@@ -4384,6 +4384,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     <div class="toolbar">
       <button onclick="openCodeartsOauthModal()">+ 添加账号 (OAuth)</button>
       <button class="sec" onclick="codeartsCheckinAll(this)">全员签到</button>
+      <button class="sec" onclick="refreshCodeartsCredits(this)">刷新积分</button>
       <button class="sec" onclick="codeartsKeepalive(this)">保活</button>
       <button class="sec" onclick="loadCodeartsOverview(true)">刷新</button>
     </div>
@@ -6890,6 +6891,9 @@ function renderCodeartsAccounts(r){
     const uid = escapeHtml(a.uid || "");
     const uidSafe = esc(String(a.uid || "").replace(/[^\w.@-]/g, ""));
     const name = escapeHtml(a.nickname || a.user_name || a.uid || "");
+    const note = a.note
+      ? '<div style="font-size:11px;color:var(--dim)">' + escapeHtml(a.note) + '</div>'
+      : '';
     let status = '<span class="badge ok mini">正常</span>';
     if(a.disabled) status = '<span class="badge bad mini">已停用</span>';
     else if(a.cooling) status = '<span class="badge warn mini">冷却中</span>';
@@ -6909,10 +6913,14 @@ function renderCodeartsAccounts(r){
     }else{
       actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'disable\',\'' + uidSafe + '\')">停用</button>');
     }
+    actions.push('<button class="sec mini" onclick="codeartsRelogin(\'' + uidSafe + '\')">重新登录</button>');
     actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'clear-cooldown\',\'' + uidSafe + '\')">清冷却</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'test\',\'' + uidSafe + '\')">测试</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'tasks\',\'' + uidSafe + '\',' + (!a.tasks_enabled) + ')">' + (a.tasks_enabled ? '停任务' : '开任务') + '</button>');
+    actions.push('<button class="sec mini" onclick="codeartsEditNote(\'' + uidSafe + '\')">备注</button>');
     actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'checkin\',\'' + uidSafe + '\')">签到</button>');
     actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'delete\',\'' + uidSafe + '\')">删除</button>');
-    html += '<tr><td><b>' + name + '</b><div class="mono" style="color:var(--dim);font-size:11px">' + uid + '</div></td>'
+    html += '<tr><td><b>' + name + '</b>' + note + '<div class="mono" style="color:var(--dim);font-size:11px">' + uid + '</div></td>'
       + '<td>' + status + (a.reason ? '<div style="font-size:11px;color:var(--dim)">' + escapeHtml(a.reason) + '</div>' : '') + '</td>'
       + '<td class="mono" style="font-size:11px">' + token + '</td>'
       + '<td>' + codeartsSlotSelectHtml(a) + '</td>'
@@ -6924,16 +6932,51 @@ function renderCodeartsAccounts(r){
   box.innerHTML = html;
 }
 
-async function codeartsAccountAction(action, uid){
+async function codeartsAccountAction(action, uid, extra){
   if(action === "delete"){
     if(!confirm("删除 CodeArts 账号 " + uid + "？\n\n会删除凭据并移出账号池，不可恢复。")) return;
   }
+  const payload = {uid: uid};
+  if(action === "tasks") payload.enabled = !!extra;
+  if(action === "note") payload.note = String(extra == null ? "" : extra);
   try{
-    const r = await postJSON("/codearts/accounts/" + action, {uid: uid});
+    const r = await postJSON("/codearts/accounts/" + action, payload);
+    if(action === "test" && r && r.ok === false){
+      toast("测试失败: " + (r.message || "未知错误"), "bad");
+      return;
+    }
     toast((r && r.message) || "操作成功", "ok");
     await loadCodeartsOverview(true);
   }catch(e){
     toast("操作失败: " + e.message, "bad");
+  }
+}
+
+function codeartsRelogin(uid){
+  openCodeartsOauthModal();
+  setTimeout(function(){
+    setCodeartsOauthStatus("请用账号 " + uid + " 完成授权；同 UID 会更新现有账号。", null);
+  }, 50);
+}
+
+function codeartsEditNote(uid){
+  const acct = ((window.CODEARTS_OVERVIEW || {}).accounts || [])
+    .find(a => a.uid === uid) || {};
+  const note = prompt("备注", acct.note || "");
+  if(note === null) return;
+  codeartsAccountAction("note", uid, note);
+}
+
+async function refreshCodeartsCredits(btn){
+  if(btn) btn.disabled = true;
+  try{
+    const r = await postJSON("/codearts/credits/refresh", {});
+    toast((r && r.message) || "已刷新积分", "ok");
+    await loadCodeartsOverview(true);
+  }catch(e){
+    toast("刷新积分失败: " + e.message, "bad");
+  }finally{
+    if(btn) btn.disabled = false;
   }
 }
 
