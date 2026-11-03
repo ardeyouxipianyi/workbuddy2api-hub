@@ -259,6 +259,38 @@ try:
     check("tool choice required", tool_body["tool_choice"] == "required",
           tool_body)
 
+    print("== malformed tools ==")
+    dirty_body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [
+            {"type": "function", "function": {"name": "ok", "parameters": {}}},
+            {"type": "function"},
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "no_params"}},
+            {"type": "function", "function": {"name": "ok"}},
+            {"name": "flat", "description": "d"},
+        ],
+    }, "sess-dirty-tools")
+    names = [t["function"]["name"] for t in dirty_body.get("tools") or []]
+    check("unusable tools dropped", names == ["ok", "no_params", "flat"], names)
+    check("missing parameters defaulted",
+          dirty_body["tools"][1]["function"]["parameters"]
+          == {"type": "object", "properties": {}}, dirty_body)
+    check("flat tool wrapped",
+          dirty_body["tools"][2]["type"] == "function"
+          and dirty_body["tools"][2]["function"]["parameters"]
+          == {"type": "object", "properties": {}}, dirty_body)
+    empty_tools_body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function"}, {"type": "web_search"}],
+        "tool_choice": "auto",
+    }, "sess-empty-tools")
+    check("all-unusable tools removed",
+          "tools" not in empty_tools_body and "tool_choice" not in empty_tools_body,
+          empty_tools_body)
+
     print("== concurrency retry ==")
     state.chat_error = (400, {"error_msg": "并发会话数已达上限(3个)，请关闭部分会话后重试。"})
     state.chat_error_remaining = 1

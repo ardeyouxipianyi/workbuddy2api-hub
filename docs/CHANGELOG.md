@@ -1,3 +1,10 @@
+## Unreleased
+
+CodeArts 出口工具定义归一化（#750）：
+
+- **修复 `Tool function cannot empty`**：CodeArts 出口自行构造 chat body，绕过了通用链路的 `normalize_tools()`，客户端发来的空 `function`（如 `{"type": "function"}`、`{"type": "web_search"}`、扁平 `{"name": ...}`）被原样转发后整条请求被上游拒绝。现在出口在构造请求体时复用同一套归一化：扁平声明包装成 function schema、缺失的 `parameters` 补 `{"type": "object", "properties": {}}`、仍不可用的条目与重名条目丢弃；全部不可用时连同 `tool_choice` 一起移除。
+- 新增 `tests/_test_codearts_native.py` 覆盖空 function、裸服务端工具、缺失 parameters、扁平声明与重名条目。
+
 ## v1.10.7
 
 国内版 deepseek-v4.1-flash 计费与出站路由修复（#748）、CodeArts 每日签到按活动类型识别与可选自动签到（#747）：

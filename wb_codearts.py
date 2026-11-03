@@ -1309,7 +1309,8 @@ def build_chat_body(payload, session_key=None):
     if not isinstance(payload, dict):
         raise CodeArtsBadRequest("request body must be a JSON object")
     from wb_proxy import (cleanup_orphan_tool_calls, merge_adjacent_tool_calls,
-                          normalize_roles, repack_tool_result_blocks)
+                          normalize_roles, normalize_tools,
+                          repack_tool_result_blocks)
     # 只发 Go 版 chatBodyV2 会发的字段；客户端多出来的采样/格式字段一律丢掉，
     # 避免华为网关对未知字段返回 400。
     allowed = {
@@ -1333,6 +1334,14 @@ def build_chat_body(payload, session_key=None):
     if not messages:
         raise CodeArtsBadRequest("messages is empty")
     body["messages"] = messages
+    # CodeArts builds its own chat body and therefore bypasses the generic
+    # normalize_tools() pass. A client tool entry without a usable
+    # ``function`` object (``{"type": "function"}``, a bare server tool such
+    # as ``{"type": "web_search"}``, or a flat ``{"name": ...}`` declaration)
+    # is forwarded as-is and the upstream rejects the whole request with
+    # "Tool function cannot empty". Repair the common shapes and drop the
+    # entries that still cannot satisfy the function schema.
+    normalize_tools(body)
     # 指定函数名时 CodeArts 只认字符串 required：把工具清单收窄到该函数，
     # 再把 tool_choice 改成 required（与 Go 版 nativeTools 一致）。
     tools = body.get("tools")
