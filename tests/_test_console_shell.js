@@ -78,7 +78,7 @@ check(/openModelCatalog\(\)\{[\s\S]{0,200}applyConsoleView\('models'\)/.test(scr
   '模型管理要切到自己的视图');
 check(/openRecentRequests\(\)\{[\s\S]{0,200}applyConsoleView\('requests'\)/.test(script),
   '请求记录要切到自己的视图');
-check(/if\(tab === 'gateway'\) applyConsoleView\('overview'\)/.test(script),
+check(/if\(!window\.__NEXT_UI__ && tab === 'gateway'\) applyConsoleView\('overview'\)/.test(script),
   '从左侧菜单回到网关页时应回到概览视图');
 check(/\.console-view-hidden\{display:none!important\}/.test(html),
   '缺少视图收起的样式');
@@ -89,8 +89,8 @@ const mainTabs = html.match(/const MAIN_TABS = \[([^\]]*)\];/);
 const names = s => s.split(',').map(x => x.trim().replace(/['"]/g, '')).filter(Boolean);
 check(headTabs && mainTabs && JSON.stringify(names(headTabs[1])) === JSON.stringify(names(mainTabs[1])),
   'head 的 TABS 与主脚本的 MAIN_TABS 必须一致');
-check(names(mainTabs[1]).length === 8 && names(mainTabs[1]).includes('media') && !names(mainTabs[1]).includes('models'),
-  '主页面清单包含媒体页且不含内容入口');
+check(names(mainTabs[1]).length === 9 && names(mainTabs[1]).includes('overview') && names(mainTabs[1]).includes('media') && !names(mainTabs[1]).includes('models'),
+  '主页面清单包含新导航总览和媒体页且不含内容入口');
 
 // 侧栏折叠与手机抽屉的入口都在。
 check(/function toggleConsoleCollapse\(\)/.test(script), '缺少侧栏折叠');
