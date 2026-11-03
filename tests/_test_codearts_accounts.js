@@ -82,6 +82,21 @@ assert.ok(box.innerHTML.includes('codeartsSetProxy'), '应显示出口选择器'
 assert.ok(box.innerHTML.includes('slot-1'), '出口选择器应包含已绑定槽位');
 assert.ok(box.innerHTML.includes('美国 住宅'), '出口选择器应显示槽位名称');
 
+// UID 来自服务端/上游，不能直接拼进 inline onclick 的 JS 字符串。HTML 转义
+// 不处理单引号，所以这里必须用只允许安全字符的 id 形态。
+api.renderCodeartsAccounts({
+  stats: {total: 1, healthy: 1},
+  accounts: [{uid: "x' onmouseover='alert(1)", nickname: 'evil',
+              disabled: false, cooling: false, proxy_slot: '',
+              token_remaining: '1h0m0s', expires_at: '',
+              active_concurrent: 0, max_concurrent: 5, checkin: null}],
+});
+const evilHtml = box.innerHTML;
+assert.ok(!/onclick="[^"]*x' onmouseover/.test(evilHtml),
+  'UID 中的单引号不能进入 inline onclick 的 JS 字符串');
+assert.ok(evilHtml.includes("codeartsAccountAction('delete','xonmouseoveralert1')"),
+  'UID 应按安全字符集收敛后再拼进处理器');
+
 (async () => {
   await api.codeartsAccountAction('delete', 'u1');
   const hit = POSTS.find(p => p.url.indexOf('/codearts/accounts/delete') >= 0);

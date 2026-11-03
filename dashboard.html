@@ -6888,6 +6888,7 @@ function renderCodeartsAccounts(r){
     + '</tr></thead><tbody>';
   accounts.forEach(function(a){
     const uid = escapeHtml(a.uid || "");
+    const uidSafe = esc(String(a.uid || "").replace(/[^\w.@-]/g, ""));
     const name = escapeHtml(a.nickname || a.user_name || a.uid || "");
     let status = '<span class="badge ok mini">正常</span>';
     if(a.disabled) status = '<span class="badge bad mini">已停用</span>';
@@ -6904,13 +6905,13 @@ function renderCodeartsAccounts(r){
     else if(a.checkin && a.checkin.message) checkin = escapeHtml(a.checkin.message);
     const actions = [];
     if(a.disabled){
-      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'enable\',\'' + uid + '\')">启用</button>');
+      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'enable\',\'' + uidSafe + '\')">启用</button>');
     }else{
-      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'disable\',\'' + uid + '\')">停用</button>');
+      actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'disable\',\'' + uidSafe + '\')">停用</button>');
     }
-    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'clear-cooldown\',\'' + uid + '\')">清冷却</button>');
-    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'checkin\',\'' + uid + '\')">签到</button>');
-    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'delete\',\'' + uid + '\')">删除</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'clear-cooldown\',\'' + uidSafe + '\')">清冷却</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'checkin\',\'' + uidSafe + '\')">签到</button>');
+    actions.push('<button class="sec mini" onclick="codeartsAccountAction(\'delete\',\'' + uidSafe + '\')">删除</button>');
     html += '<tr><td><b>' + name + '</b><div class="mono" style="color:var(--dim);font-size:11px">' + uid + '</div></td>'
       + '<td>' + status + (a.reason ? '<div style="font-size:11px;color:var(--dim)">' + escapeHtml(a.reason) + '</div>' : '') + '</td>'
       + '<td class="mono" style="font-size:11px">' + token + '</td>'
