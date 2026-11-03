@@ -7488,7 +7488,7 @@ function renderAvailableModels(){
     let credBadge = '-';
     let credText = (m.credits == null ? '' : String(m.credits)).trim();
     const forceSg = window.CURRENT_SETTINGS && window.CURRENT_SETTINGS.deepseek_flash_force_sg === true;
-    if(m.id === 'deepseek-v4.1-flash' && forceSg){
+    if(m.id === 'deepseek-v4.1-flash' && forceSg && window.VIEW_REALM === 'intl'){
       credText = 'x0.11';
     }
     const c = credText.toLowerCase().replace('x', '');
@@ -7501,7 +7501,7 @@ function renderAvailableModels(){
         ? ' <span style="font-size:10px;color:var(--accent)">(夜间0.5x)</span>' : '';
       credBadge = '<span class="badge s">' + esc(raw) + night + '</span>';
     }
-    if(m.id === 'deepseek-v4.1-flash'){
+    if(m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl'){
       credBadge += forceSg
         ? ' <span class="badge warn" style="font-size:11px;background:var(--warn-soft);color:var(--warn);border-color:rgba(183,121,31,.35)" title="网关设置已强制出站为 deepseek-v4.1-flash-sg">出站: 强制 -sg</span>'
         : ' <span class="badge ok" style="font-size:11px" title="当前走原生 deepseek-v4.1-flash 免积分通道">出站: 原生免费</span>';
@@ -7630,7 +7630,7 @@ function renderAvailableModels(){
     //    isModelPicked() 一律返回 true——默认全部勾选，首屏不必等 GET 回来。
     const picked = isModelPicked(m.id);
     let idPill = '';
-    if(m.id === 'deepseek-v4.1-flash'){
+    if(m.id === 'deepseek-v4.1-flash' && window.VIEW_REALM === 'intl'){
       idPill = '<div style="margin-top:4px;display:inline-flex;align-items:center;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:1px 3px">'
         + '<button type="button" class="sec mini" style="padding:1px 7px;font-size:10px;line-height:16px;border-radius:9px;border:none;cursor:pointer;' + (!forceSg ? 'background:var(--accent2);color:#fff;font-weight:600' : 'background:transparent;color:var(--dim)') + '" onclick="setDeepseekFlashTarget(false)" title="网关后台出站使用 deepseek-v4.1-flash（免积分通道）">原生免费</button>'
         + '<button type="button" class="sec mini" style="padding:1px 7px;font-size:10px;line-height:16px;border-radius:9px;border:none;cursor:pointer;' + (forceSg ? 'background:var(--warn);color:#fff;font-weight:600' : 'background:transparent;color:var(--dim)') + '" onclick="setDeepseekFlashTarget(true)" title="网关后台出站强制重写为 deepseek-v4.1-flash-sg（新加坡付费节点）">强制 -sg</button>'

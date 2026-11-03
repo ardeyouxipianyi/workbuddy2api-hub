@@ -999,8 +999,14 @@ BACKGROUND_MODEL_NAMES = tuple(
 )
 
 
-def _apply_deepseek_flash_target(payload):
-    """Rewrite client deepseek-v4.1-flash to -sg when deepseek_flash_force_sg is on."""
+def _apply_deepseek_flash_target(payload, realm=None):
+    """Rewrite client deepseek-v4.1-flash to -sg when deepseek_flash_force_sg is on.
+
+    International only: the domestic catalog has no -sg variant, and its
+    deepseek-v4.1-flash is a metered model on its own exit.
+    """
+    if (realm or CURRENT_REALM) != "intl":
+        return
     if not isinstance(payload, dict):
         return
     name = payload.get("model")
@@ -11888,14 +11894,18 @@ def fetch_models(realm=None):
             _catalog_meta[r] = {"source": source, "fetched_at": time.time(),
                                 "file_mtime": file_mtime}
         return entries
-def model_entry(mid, meta):
+def model_entry(mid, meta, realm=None):
     """Build a rich /v1/models entry from the desktop app catalog metadata.
     The OpenAI spec only names id/object/created/owned_by, so capability data is
     convention-driven. Several shapes are emitted at once so that different
     clients (OpenRouter-style, LobeChat-style, plain-flag readers) all find
     what they look for.
+
+    `realm` decides whether the international free-channel rules apply; the
+    same model id is metered in the domestic catalog.
     """
     meta = meta or {}
+    realm = realm or CURRENT_REALM
     item = {
         "id": mid,
         "object": "model",
@@ -11989,7 +11999,10 @@ def model_entry(mid, meta):
     if meta.get("onlyReasoning") is not None:
         item["always_reasoning"] = bool(meta.get("onlyReasoning"))
     # ---- misc ----
-    if mid == "deepseek-v4.1-flash":
+    # deepseek-v4.1-flash is the international free channel (credit 0). The
+    # same id in the domestic catalog is a 0.11x metered model, so the free /
+    # forced -sg rules must stay international-only.
+    if mid == "deepseek-v4.1-flash" and realm == "intl":
         force_sg = False
         try:
             force_sg = wb_settings.deepseek_flash_force_sg(ACCOUNTS_DIR)
@@ -20330,7 +20343,7 @@ class Handler(BaseHTTPRequestHandler):
             wb_modelsdev.refresh_async(ACCOUNTS_DIR, log=log)
         except Exception:
             pass
-        data = [model_entry(mid, meta) for mid, meta in entries]
+        data = [model_entry(mid, meta, req_realm) for mid, meta in entries]
         pinned = pinned_account()
         if pinned is not None:
             # 定址路由宣告的是「这个账号实际能接的模型」：该账号禁用的模型
@@ -24678,7 +24691,7 @@ class Handler(BaseHTTPRequestHandler):
         _apply_background_model_alias(payload)
         if is_media_route:
             return self._handle_media_post(path, payload)
-        _apply_deepseek_flash_target(payload)
+        _apply_deepseek_flash_target(payload, self._request_realm() or CURRENT_REALM)
         # Check per-key concurrency limit (#359)
         key_ok, cur_key_conc, max_key_conc = _acquire_key_slot(self.key_entry)
         if not key_ok:
