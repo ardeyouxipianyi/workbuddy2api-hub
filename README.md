@@ -46,6 +46,8 @@ This project is for protocol research and personal use only. Prefer the official
 
 ## 💖 赞助商
 
+> 想出现在这里？联系 [ardeyouxipianyi@gmail.com](mailto:ardeyouxipianyi@gmail.com)
+
 <table>
 <tr>
 <td width="180" align="center" valign="middle">
