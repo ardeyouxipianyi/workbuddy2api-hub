@@ -523,6 +523,23 @@ class CodeArtsAccount(object):
         now = now or time.time()
         return (not self.disabled) and now >= self.cool_until
 
+    def checked_in_today(self, now=None):
+        """Whether this account already completed a successful check-in today.
+
+        A failed attempt (``ok`` false) does not count, so a later slot can
+        retry after an earlier failure. The timestamp is local time, matching
+        the scheduler's clock.
+        """
+        entry = self.checkin if isinstance(self.checkin, dict) else {}
+        if not entry.get("ok"):
+            return False
+        text = str(entry.get("checked_at") or "")
+        if len(text) < 10:
+            return False
+        today = time.strftime("%Y-%m-%d",
+                              time.localtime(now if now is not None else time.time()))
+        return text[:10] == today
+
     def has_model(self, model):
         mid = str(model or "").lower()
         if not mid:
@@ -817,7 +834,7 @@ _POOLS = {}
 _POOLS_LOCK = threading.Lock()
 
 
-def pool_for(accounts_dir):
+def pool_for(accounts_dir, trigger_auto=True):
     """按 accounts_dir 取单例池；配置变化时刷新池配置。"""
     key = os.path.abspath(str(accounts_dir or "."))
     cfg = load_config(accounts_dir)
@@ -831,7 +848,8 @@ def pool_for(accounts_dir):
             for acct in pool.accounts:
                 acct.max_concurrent = cfg.get("max_concurrent", 1)
     # 锁外触发：自动签到只做判断/记账，真正的领积分在后台线程里跑。
-    _maybe_auto_checkin(pool)
+    if trigger_auto:
+        _maybe_auto_checkin(pool)
     return pool
 
 
@@ -2565,7 +2583,7 @@ def set_note(config, uid, note):
 
 
 def set_tasks_enabled(config, uid, enabled):
-    pool = pool_for(config["accounts_dir"])
+    pool = pool_for(config["accounts_dir"], trigger_auto=False)
     if not pool.set_tasks_enabled(uid, enabled):
         raise CodeArtsNotFound("account not found")
     invalidate_overview()
@@ -2857,6 +2875,8 @@ def _checked_in_today(acct, today):
 def _auto_checkin_worker(accounts):
     """后台线程：逐个领签到积分；任何失败都咽掉，绝不影响正在跑的会话。"""
     for acct in accounts:
+        if acct.disabled or not getattr(acct, "tasks_enabled", True):
+            continue
         try:
             _ensure_token(acct)
             checkin_account(acct)
@@ -2880,7 +2900,7 @@ def _maybe_auto_checkin(pool):
         with _AUTO_CHECKIN_LOCK:
             state = dict(_AUTO_CHECKIN_STATE.get(key) or {})
             for acct in list(pool.accounts):
-                if acct.disabled or not acct.uid:
+                if acct.disabled or not acct.uid or not getattr(acct, "tasks_enabled", True):
                     continue
                 if _checked_in_today(acct, today):
                     continue

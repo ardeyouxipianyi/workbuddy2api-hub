@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -89,6 +90,27 @@ try:
     check("disabled", acct.disabled is True and pool.stats()["disabled"] == 1)
     pool.enable("u1")
     check("enabled again", acct.disabled is False)
+    print("== task opt-out ==")
+    with mock.patch.object(C, '_maybe_auto_checkin') as auto:
+        C.set_tasks_enabled(C.load_config(ACCOUNTS), 'u1', False)
+        check("disabling tasks does not trigger auto checkin", not auto.called)
+    pool.config['credits_auto_claim'] = True
+    with mock.patch.object(C.threading, 'Thread') as worker:
+        C._maybe_auto_checkin(pool)
+        check("task opt-out blocks lazy auto checkin", not worker.called)
+    with mock.patch.object(C, '_ensure_token') as ensure:
+        C._auto_checkin_worker([acct])
+        check("task opt-out blocks already queued worker", not ensure.called)
+    import wb_scheduler
+    scheduler = wb_scheduler.Scheduler(type('P', (), {'dir': ACCOUNTS})())
+    with mock.patch.object(C, 'load_config', return_value={'enabled': True, 'credits_auto_claim': True}), \
+         mock.patch.object(C, 'pool_for', return_value=pool) as lookup, \
+         mock.patch.object(C, 'checkin') as claim:
+        check("task opt-out blocks scheduler pending", not scheduler._codearts_checkin_pending(True))
+        check("task opt-out blocks scheduler claim", scheduler._run_codearts_checkin(True) == 0 and not claim.called)
+        check("scheduler lookup suppresses lazy trigger", all(c.kwargs.get('trigger_auto') is False for c in lookup.call_args_list))
+    C.set_tasks_enabled(C.load_config(ACCOUNTS), 'u1', True)
+    pool.config['credits_auto_claim'] = False
     pool.note_error(acct, "boom")
     pool.note_error(acct, "boom")
     pool.note_error(acct, "boom")
@@ -424,6 +446,14 @@ try:
     reloaded = C.CodeArtsPool(ACCOUNTS, C.load_config(ACCOUNTS))
     check("checkin persisted", reloaded.get("u1").checkin == acct.checkin,
           reloaded.get("u1").checkin)
+    saved_checkin = acct.checkin
+    check("checked_in_today true", acct.checked_in_today() is True)
+    acct.checkin = {"ok": True, "checked_at": "2000-01-01T00:00:00"}
+    check("checked_in_today old false", acct.checked_in_today() is False)
+    acct.checkin = {"ok": False,
+                    "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    check("checked_in_today failed false", acct.checked_in_today() is False)
+    acct.checkin = saved_checkin
 
     print("== oauth ==")
     started = C.oauth_start(C.load_config(ACCOUNTS), port=8788)

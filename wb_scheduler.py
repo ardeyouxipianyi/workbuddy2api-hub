@@ -112,6 +112,9 @@ class Scheduler:
         # 被放弃的工作线程（卡在网络上、到点不再等它）。它们通常几十秒内自己结束，
         # 但「上游一直滴数据」这种病态情况会拖很久——留个上限，别让线程无限堆。
         self._daily_chat_abandoned = []
+        # CodeArts 独立 30 分钟保活巡检：WorkBuddy 的 keepalive_hours 是每天
+        # 22:00 一次，对华为 token 来说太稀；这里只刷新快过期的账号。
+        self._last_codearts_keepalive = 0.0
         # 启动后第一次巡检要补跑当天还没活跃的国际版账号：进程在时段内停过
         # （或调度线程被卡住）时，旧实现只能等下一个时段，最多再等 12 小时。
         self._catchup_pending = True
@@ -182,6 +185,13 @@ class Scheduler:
         while not self._stop_event.is_set():
             self._reload_schedule()
             self._calc_next_fire()
+            if (self.enabled
+                    and time.time() - self._last_codearts_keepalive >= 1800):
+                self._last_codearts_keepalive = time.time()
+                try:
+                    self._run_codearts_keepalive(True)
+                except Exception as exc:
+                    self.log(f"CodeArts 定时保活异常: {exc}")
             # 每 30 秒检查一次当前整点
             now = time.localtime()
             cur_hour = now.tm_hour
@@ -387,9 +397,6 @@ class Scheduler:
                    daily_chat_only=False):
         self.last_run_time = time.strftime("%Y-%m-%d %H:%M:%S")
         self.log(f"开始执行任务 ({trigger_reason})...")
-        if not self.pool or not self.pool.accounts:
-            self.log("暂无可用的活跃账号，跳过本次巡检")
-            return
 
         refreshed_count = 0
         checkin_count = 0
@@ -406,13 +413,22 @@ class Scheduler:
                          and (force or cycle_hour in self.keepalive_hours))
         run_cat = (not daily_chat_only
                    and (force or cycle_hour in self.cat_hours))
+        if not self.pool:
+            self.log("账号池不可用，跳过本次巡检")
+            return
+        accounts = list(self.pool.accounts)
+        if not accounts and not (
+                self._codearts_checkin_pending(run_checkin)
+                or self._codearts_keepalive_pending(run_keepalive)):
+            self.log("暂无可用的活跃账号，跳过本次巡检")
+            return
         # 时段永远存在（面板留空时是「今天随机抽的两个」），所以国际版活跃只按
         # 时段触发；启动后的第一次巡检额外补跑一次当天还没活跃的账号。
         catchup = self._consume_startup_catchup()
         run_daily_chat = (force or daily_chat_only or catchup
                           or (not self.daily_chat_times and run_checkin))
 
-        for idx, acc in enumerate(list(self.pool.accounts)):
+        for idx, acc in enumerate(accounts):
             if idx > 0:
                 # 账号间随机错峰防并发风控（2~5秒浮动延时，issue #394）
                 time.sleep(random.uniform(2.0, 5.0))
@@ -524,7 +540,121 @@ class Scheduler:
         if daily_chat_targets:
             daily_chat_count = self._run_daily_chat_batch(daily_chat_targets)
 
-        self.log(f"巡检完成：Token保活 {refreshed_count} 个，国内签到 {checkin_count} 个，活跃上报 {report_count} 个，猫猫日常 {travel_count} 个，国际活跃 {daily_chat_count} 个")
+        codearts_checkin_count = self._run_codearts_checkin(run_checkin)
+        codearts_keepalive_count = self._run_codearts_keepalive(run_keepalive)
+        self.log(f"巡检完成：Token保活 {refreshed_count} 个，国内签到 {checkin_count} 个，CodeArts 签到 {codearts_checkin_count} 个，CodeArts 保活 {codearts_keepalive_count} 个，活跃上报 {report_count} 个，猫猫日常 {travel_count} 个，国际活跃 {daily_chat_count} 个")
+
+    def _codearts_keepalive_pending(self, run_keepalive):
+        """Whether any enabled CodeArts account needs a token refresh now."""
+        if not run_keepalive:
+            return False
+        directory = getattr(self.pool, "dir", "") or ""
+        if not directory:
+            return False
+        try:
+            import wb_codearts
+            cfg = wb_codearts.load_config(directory)
+            if not cfg.get("enabled"):
+                return False
+            pool = wb_codearts.pool_for(directory, trigger_auto=False)
+        except Exception:
+            return False
+        return any((not acct.disabled)
+                   and (acct.expiring_soon() or acct.expired())
+                   for acct in pool.accounts)
+
+    def _run_codearts_keepalive(self, run_keepalive):
+        """Refresh CodeArts tokens on the same sweep as WorkBuddy."""
+        if not run_keepalive:
+            return 0
+        directory = getattr(self.pool, "dir", "") or ""
+        if not directory:
+            return 0
+        try:
+            import wb_codearts
+            cfg = wb_codearts.load_config(directory)
+            if not cfg.get("enabled"):
+                return 0
+            res = wb_codearts.keepalive(cfg)
+        except Exception as exc:
+            self.log(f"CodeArts 自动保活失败: {exc}")
+            return 0
+        refreshed = int(res.get("refreshed") or 0)
+        if refreshed:
+            self.log(f"✓ CodeArts 自动保活续期 {refreshed} 个账号")
+        return refreshed
+
+    def _codearts_checkin_pending(self, run_checkin):
+        """Whether this cycle should even enter the CodeArts check-in path."""
+        if not run_checkin:
+            return False
+        directory = getattr(self.pool, "dir", "") or ""
+        if not directory:
+            return False
+        try:
+            import wb_codearts
+            cfg = wb_codearts.load_config(directory)
+            if not cfg.get("enabled") or not cfg.get("credits_auto_claim", False):
+                return False
+            pool = wb_codearts.pool_for(directory, trigger_auto=False)
+        except Exception:
+            return False
+        return any(not acct.disabled and getattr(acct, "tasks_enabled", True)
+                   for acct in pool.accounts)
+
+    def _run_codearts_checkin(self, run_checkin):
+        """Daily CodeArts check-in for enabled accounts.
+
+        Follows the same check-in hours as the WorkBuddy China realm. A
+        successful check-in is recorded in the account's state, so the second
+        slot and a manual force-run skip it; a failed attempt stays retryable.
+        Cooling accounts are skipped because a chat cooldown usually means the
+        upstream is unhappy with this account.
+        """
+        if not run_checkin:
+            return 0
+        directory = getattr(self.pool, "dir", "") or ""
+        if not directory:
+            return 0
+        try:
+            import wb_codearts
+            cfg = wb_codearts.load_config(directory)
+        except Exception as exc:
+            self.log(f"CodeArts 自动签到读取配置失败: {exc}")
+            return 0
+        if not cfg.get("enabled") or not cfg.get("credits_auto_claim", False):
+            return 0
+        try:
+            pool = wb_codearts.pool_for(directory, trigger_auto=False)
+        except Exception as exc:
+            self.log(f"CodeArts 自动签到读取账号失败: {exc}")
+            return 0
+
+        checked = 0
+        now = time.time()
+        for acct in list(pool.accounts):
+            uid8 = (acct.uid or "?")[:8]
+            if acct.disabled or not getattr(acct, "tasks_enabled", True):
+                continue
+            if acct.cool_until > now:
+                self.log(f"跳过 CodeArts 账号 [{uid8}]：冷却中")
+                continue
+            if acct.checked_in_today(now):
+                continue
+            try:
+                res = wb_codearts.checkin(cfg, acct.uid)
+            except Exception as exc:
+                self.log(f"! CodeArts 账号 [{uid8}] 自动签到失败: {exc}")
+                continue
+            if res.get("ok"):
+                checked += 1
+                self.log(f"✓ CodeArts 账号 [{uid8}] 自动签到成功: "
+                         f"{res.get('message') or ''}")
+            else:
+                self.log(f"! CodeArts 账号 [{uid8}] 自动签到未成功: "
+                         f"{res.get('message') or ''}")
+            time.sleep(1.0)
+        return checked
 
     def _daily_chat_concurrency(self):
         directory = getattr(self.pool, "dir", "") or ""
