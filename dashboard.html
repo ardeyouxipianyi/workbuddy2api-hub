@@ -15,9 +15,10 @@
 /* 面板会话令牌的存储键。全页只在这里定义一次：首帧判定要用它，所以必须先于
    任何页面内容；后面的脚本直接复用这个绑定，不要再写一遍字面量。 */
 const PANEL_STORE = 'wb-proxy-panel-token';
+const PANEL_REMEMBER_KEY = 'wb-proxy-panel-remember';
 (function(){
   try{
-    if(sessionStorage.getItem(PANEL_STORE)){
+    if(localStorage.getItem(PANEL_STORE) || sessionStorage.getItem(PANEL_STORE)){
       document.documentElement.classList.add('wb-panel-session');
     }
   }catch(e){}
@@ -4170,6 +4171,11 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
            onkeydown="if(event.key==='Enter') submitPanelLogin()"
            style="width:100%;background:var(--panel2);border:1px solid var(--line);
                   border-radius:8px;padding:9px 12px;color:var(--fg);font:inherit">
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);margin:10px 0 0">
+      <input id="panelRemember" type="checkbox" checked style="width:15px;height:15px"
+             onchange="panelRememberChanged(this)">
+      保持登录
+    </label>
     <div id="panelLoginMsg" style="font-size:12px;color:var(--bad);min-height:17px;margin:8px 0 12px;word-break:break-word;line-height:1.4"></div>
     <button onclick="submitPanelLogin()" style="width:100%;padding:9px 12px;font-size:13px">进入面板</button>
     <div id="panelDefaultHint" style="display:none;font-size:11px;color:var(--warn);margin-top:12px">
@@ -8658,7 +8664,9 @@ const KEY_STORE = 'wb-proxy-api-key';
 // PANEL_STORE 在 <head> 里定义（首帧判定要用它），这里不再重复声明。
 let API_KEY = '';
 let PANEL_TOKEN = '';
-try { PANEL_TOKEN = sessionStorage.getItem(PANEL_STORE) || ''; } catch(e) { PANEL_TOKEN = ''; }
+let PANEL_REMEMBER = true;
+try { PANEL_TOKEN = localStorage.getItem(PANEL_STORE) || sessionStorage.getItem(PANEL_STORE) || ''; } catch(e) { PANEL_TOKEN = ''; }
+try { PANEL_REMEMBER = localStorage.getItem(PANEL_REMEMBER_KEY) !== '0'; } catch(e) { PANEL_REMEMBER = true; }
 let PANEL_STATUS = {};
 (function initKey(){
   try {
@@ -11527,6 +11535,37 @@ function isAuthError(err){
   return !!err && String(err.message) === 'unauthorized';
 }
 
+function panelStoreToken(token, remember){
+  PANEL_TOKEN = token || '';
+  PANEL_REMEMBER = !!remember;
+  try {
+    if(PANEL_REMEMBER){
+      localStorage.setItem(PANEL_STORE, PANEL_TOKEN);
+      sessionStorage.removeItem(PANEL_STORE);
+    } else {
+      sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN);
+      localStorage.removeItem(PANEL_STORE);
+    }
+    localStorage.setItem(PANEL_REMEMBER_KEY, PANEL_REMEMBER ? '1' : '0');
+  } catch(e){}
+}
+
+function panelClearToken(){
+  PANEL_TOKEN = '';
+  try { localStorage.removeItem(PANEL_STORE); } catch(e){}
+  try { sessionStorage.removeItem(PANEL_STORE); } catch(e){}
+}
+
+function panelSyncRemember(){
+  const el = document.getElementById('panelRemember');
+  if(el) el.checked = PANEL_REMEMBER;
+}
+
+function panelRememberChanged(el){
+  PANEL_REMEMBER = !!(el && el.checked);
+  try { localStorage.setItem(PANEL_REMEMBER_KEY, PANEL_REMEMBER ? '1' : '0'); } catch(e){}
+}
+
 function panelNeedsLogin(){
   // 闸门的可见性有两处来源：markup 上的 display:flex，和 <head> 首帧判定加的
   // html.wb-panel-session（!important）。必须先摘掉那个类，否则闸门永远出不来
@@ -11534,6 +11573,7 @@ function panelNeedsLogin(){
   document.documentElement.classList.remove('wb-panel-session');
   const gate = document.getElementById('panelGate');
   if(gate) gate.style.display = 'flex';
+  panelSyncRemember();
   const input = document.getElementById('panelPwdInput');
   if(input){ input.focus(); }
 }
@@ -11552,8 +11592,7 @@ function panelSessionLost(){
   // 打一次 /accounts/login/poll，每次 401 又回到这里开闸门，这个标签页就会永远
   // 每 2.5 秒刷一次 401（实测 9 秒内又发 3 次，永不停止）。
   if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
-  PANEL_TOKEN = '';
-  try { sessionStorage.removeItem(PANEL_STORE); } catch(e) {}
+  panelClearToken();
   const msg = document.getElementById('panelLoginMsg');
   if(msg) msg.textContent = '会话已失效，请重新输入密码';
   panelNeedsLogin();
@@ -11593,8 +11632,9 @@ async function submitPanelLogin(){
       panelNeedsLogin();
       return;
     }
-    PANEL_TOKEN = data.token || '';
-    try { sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN); } catch(e) {}
+    const rememberEl = document.getElementById('panelRemember');
+    const remember = rememberEl ? !!rememberEl.checked : PANEL_REMEMBER;
+    panelStoreToken(data.token || '', remember);
     if(input) input.value = '';
     panelHideGate();
     toast('已进入面板', 'ok');
@@ -11614,8 +11654,7 @@ async function panelLogout(){
   PANEL_READY = false;
   PANEL_TIMERS.forEach(t => clearInterval(t));
   PANEL_TIMERS = [];
-  PANEL_TOKEN = '';
-  try { sessionStorage.removeItem(PANEL_STORE); } catch(e) {}
+  panelClearToken();
   location.reload();
 }
 
@@ -13049,8 +13088,7 @@ async function savePanelPassword(btn){
   try {
     const data = await postJSON('/panel/password', {current: cur, new: nw});
     if(data.token){
-      PANEL_TOKEN = data.token;
-      try { sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN); } catch(e) {}
+      panelStoreToken(data.token, PANEL_REMEMBER);
     }
     document.getElementById('setPwdCurrent').value = '';
     document.getElementById('setPwdNew').value = '';
