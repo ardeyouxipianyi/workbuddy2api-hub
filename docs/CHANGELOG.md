@@ -1,3 +1,21 @@
+## v1.10.7
+
+国内版 deepseek-v4.1-flash 计费与出站路由修复（#748）、CodeArts 每日签到按活动类型识别与可选自动签到（#747）：
+
+- **国内版 deepseek-v4.1-flash 不再误标免费与误走 -sg（PR #748，感谢 @zqisme）**：
+  - `model_entry()` 的免费（`x0.00`）与强制 `-sg` 改写口径只在 `realm == "intl"`（国际版）下生效；国内版目录严格保持目录声明的 `0.11x` 实测计费标准，不再被误标为「限时免费 0.00x」造成假免费误导。
+  - `_apply_deepseek_flash_target()` 出站改写限制仅在国际版生效，避免开启强制 `-sg` 时国内版出站被改写成国内目录并不存在的 `-sg` 导致 400 报错。
+  - 面板「网关模型清单」中的「出站: 原生免费 / 强制 -sg」徽章与切换胶囊按浏览区域隔离，仅在 `window.VIEW_REALM === 'intl'` 时显示，国内版视图保持真实费率展示。
+  - 新增 `tests/_test_deepseek_flash_realm.py` 覆盖。
+- **CodeArts 每日签到按活动类型识别与可选自动签到（PR #747，感谢 @zqisme）**：
+  - **按活动类型识别（修复假成功）**：上游 CodeArts 每日签到（每日赢 100 积分）是 `type=USER_LOGIN` / `extra.triggerEvent=user.login` 活动，换季后其 `campaignId` 会变化（历史为 1/4，现为 34）。`checkin_account()` 不再硬编码 `(1, 4)` 白名单过滤，支持按类型动态识别，彻底修复此前换季导致签到跳过、返回「新用户注册送 4000 积分: 已领取」但当天 100 积分实际未领取的假成功。
+  - **可选惰性每日自动签到**：在 `pool_for()` 中惰性检查未签到账号并由后台 daemon 线程自动领奖；每账号每天上限 3 次、间隔 ≥1 小时，进程内与手动点击互斥防竞态。设置项 `codearts.credits_auto_claim` **默认 `false`**（按需开启），开启后不再需要每日手动点面板。
+  - 新增 `tests/_test_codearts_checkin_campaign.py` 覆盖。
+
+验证：
+- 本地完整测试矩阵：259 个套件全部通过（196 Python + 63 JS，`259 passed, 0 failed, 0 skipped`）。
+- 发布工程套件 `_test_release_engineering.py` 与发布资产套件 `_test_release_assets.py` 全部通过。
+
 ## v1.10.6
 
 生图与异步生视频媒体能力集成（#728）、并发日志原子追加加固、设置页二级分类胶囊导航：
