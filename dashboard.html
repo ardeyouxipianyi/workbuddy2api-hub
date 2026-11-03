@@ -5607,6 +5607,11 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
           <input id="setCodeartsEnabled" type="checkbox" style="width:16px;height:16px">
           启用 CodeArts 出口
         </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;min-height:40px"
+               title="跟随国内版签到时段；只对已启用账号执行">
+          <input id="setCodeartsAutoCheckin" type="checkbox" style="width:16px;height:16px">
+          每天自动签到
+        </label>
         <div>
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">单账号并发</div>
           <input id="setCodeartsMaxConcurrent" type="number" min="1" max="20" value="1"
@@ -7653,6 +7658,8 @@ function renderCodeartsSettings(cfg){
   if(!cfg) return;
   const enabled = document.getElementById("setCodeartsEnabled");
   if(enabled) enabled.checked = cfg.enabled === true;
+  const auto = document.getElementById("setCodeartsAutoCheckin");
+  if(auto) auto.checked = cfg.credits_auto_claim === true;
   const conc = document.getElementById("setCodeartsMaxConcurrent");
   if(conc) conc.value = cfg.max_concurrent || 1;
   const timeout = document.getElementById("setCodeartsTimeout");
@@ -7677,6 +7684,7 @@ async function saveCodeartsSettings(btn){
   const val = id => { const el = document.getElementById(id); return el ? el.value : ""; };
   const payload = {
     enabled: !!(document.getElementById("setCodeartsEnabled") || {}).checked,
+    credits_auto_claim: !!(document.getElementById("setCodeartsAutoCheckin") || {}).checked,
     max_concurrent: parseInt(val("setCodeartsMaxConcurrent"), 10) || 1,
     timeout_seconds: parseFloat(val("setCodeartsTimeout")) || 30,
     stream_timeout_seconds: parseFloat(val("setCodeartsStreamTimeout")) || 600,
