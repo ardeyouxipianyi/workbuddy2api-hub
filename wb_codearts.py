@@ -63,6 +63,13 @@ EP_CREDIT_CLAIM = "/v1/ops/claim"
 EP_CREDIT_CONFIRM = "/v1/ops/confirm"
 EP_PACKAGE_INFO = "/v1/statistics/plugin"
 
+#: 积分活动里「签到」的判据。控制台上的「每日签到赢100积分」是一条
+#: `USER_LOGIN` / `triggerEvent=user.login` 的 MANUAL_CLAIM 活动，
+#: 但 campaignId 每换季都会变（2026-10 是 34），所以按类型挑，不按 id 硬编码。
+#: 1 / 4 是历史 id（4 是「新用户注册送 4000 积分」），留着兼容老账号。
+CHECKIN_CAMPAIGN_IDS = (1, 4)
+CHECKIN_CAMPAIGN_TYPES = ("USER_LOGIN",)
+
 HEADER_MAAS_TYPE = "maas_type"
 MAAS_BENEFIT = "benefit"
 
@@ -99,7 +106,7 @@ DEFAULTS = {
     "models_ttl_seconds": 300.0,
     "max_concurrent": 1,
     "benefit_auto_claim": True,
-    "credits_auto_claim": True,
+    "credits_auto_claim": False,
 }
 
 _LOCK = threading.RLock()
@@ -178,7 +185,7 @@ def load_config(accounts_dir):
         "max_concurrent": _positive_int(
             raw.get("max_concurrent"), DEFAULTS["max_concurrent"], 1, 20),
         "benefit_auto_claim": raw.get("benefit_auto_claim", True) is not False,
-        "credits_auto_claim": raw.get("credits_auto_claim", True) is not False,
+        "credits_auto_claim": raw.get("credits_auto_claim", False) is True,
         "accounts_dir": accounts_dir,
     }
 
@@ -204,7 +211,7 @@ def save_config(accounts_dir, patch):
     merged["max_concurrent"] = _positive_int(
         merged.get("max_concurrent"), DEFAULTS["max_concurrent"], 1, 20)
     merged["benefit_auto_claim"] = merged.get("benefit_auto_claim", True) is not False
-    merged["credits_auto_claim"] = merged.get("credits_auto_claim", True) is not False
+    merged["credits_auto_claim"] = merged.get("credits_auto_claim", False) is True
     data = wb_settings.load(accounts_dir)
     data["codearts"] = {k: merged[k] for k in DEFAULTS}
     wb_settings.save(accounts_dir, data)
@@ -747,7 +754,9 @@ def pool_for(accounts_dir):
             pool.config = cfg
             for acct in pool.accounts:
                 acct.max_concurrent = cfg.get("max_concurrent", 1)
-        return pool
+    # 锁外触发：自动签到只做判断/记账，真正的领积分在后台线程里跑。
+    _maybe_auto_checkin(pool)
+    return pool
 
 
 def invalidate_pool(accounts_dir=None):
@@ -2350,7 +2359,48 @@ def _credit_request(acct, method, path, payload=None, timeout=30.0):
                        agent_type="PromptCenter")
 
 
+def _is_checkin_campaign(item):
+    """这条积分活动是不是「签到类」，值得领取。
+
+    以前按 campaignId 白名单 `(1, 4)` 过滤，每日签到换成 id=34 以后整条被
+    跳过——面板点「签到」只会回「新用户注册送 4000 积分: 已领取」，看似成功
+    其实一分没进。改成按活动类型/触发事件判断，换季也不怕。
+    """
+    if item.get("campaignId") in CHECKIN_CAMPAIGN_IDS:
+        return True
+    if str(item.get("type") or "").upper() in CHECKIN_CAMPAIGN_TYPES:
+        return True
+    return str((item.get("extra") or {}).get("triggerEvent")
+               or "").lower() == "user.login"
+
+
+_CHECKIN_LOCKS = {}
+_CHECKIN_LOCKS_LOCK = threading.Lock()
+
+
+def _checkin_lock(uid):
+    """每个账号一把签到锁（进程内），面板点击与自动签到撞车时只放一个过去。"""
+    with _CHECKIN_LOCKS_LOCK:
+        lock = _CHECKIN_LOCKS.get(uid)
+        if lock is None:
+            lock = threading.Lock()
+            _CHECKIN_LOCKS[uid] = lock
+        return lock
+
+
 def checkin_account(acct, timeout=30.0):
+    """签到入口：同账号串行，避免两条路径同时 claim 同一条活动。"""
+    lock = _checkin_lock(acct.uid)
+    if not lock.acquire(False):
+        return {"ok": False, "credits": 0.0, "campaigns": [],
+                "message": "该账号签到正在进行中，稍后刷新即可"}
+    try:
+        return _checkin_account(acct, timeout=timeout)
+    finally:
+        lock.release()
+
+
+def _checkin_account(acct, timeout=30.0):
     data = _credit_request(acct, "GET",
                            EP_CREDIT_DELIVERY + "?channel=IDE",
                            timeout=timeout)
@@ -2359,7 +2409,7 @@ def checkin_account(acct, timeout=30.0):
     total_credits = 0.0
     for item in items:
         campaign_id = item.get("campaignId")
-        if campaign_id not in (1, 4):
+        if not _is_checkin_campaign(item):
             continue
         status = str(item.get("status") or "").strip()
         title = str(item.get("title") or ("积分活动 %s" % campaign_id))
@@ -2409,7 +2459,23 @@ def checkin_account(acct, timeout=30.0):
     return result
 
 
+#: 手动签到路径（面板按钮 / API）里的抑制标记：那条路径自己就要签，不该再让
+#: 后台线程去抢同一把锁（否则按钮的回复会变成「该账号签到正在进行中」）。
+#: 用 thread-local，只影响当前请求线程，别的请求照常触发自动签到。
+_AUTO_CHECKIN_SUPPRESS = threading.local()
+
+
 def checkin(config, uid=""):
+    """手动签到入口（面板按钮 / `/codearts/accounts/checkin`）。"""
+    depth = getattr(_AUTO_CHECKIN_SUPPRESS, "depth", 0)
+    _AUTO_CHECKIN_SUPPRESS.depth = depth + 1
+    try:
+        return _checkin(config, uid)
+    finally:
+        _AUTO_CHECKIN_SUPPRESS.depth = depth
+
+
+def _checkin(config, uid=""):
     pool = pool_for(config["accounts_dir"])
     if uid:
         acct = pool.get(uid)
@@ -2431,3 +2497,83 @@ def checkin(config, uid=""):
             "credits": total,
             "message": "已处理 %d 个账号，共领取 %g 积分" % (len(results), total),
             "results": results}
+
+
+# ---------------------------------------------------------------------------
+# 每日自动签到（惰性触发）
+#
+# 签到的积分是 MANUAL_CLAIM 活动，没有任何定时器会来领：`wb_scheduler` 只排
+# 国内版账号（`acc.realm == "cn"`），面板按钮又只能人工点。于是每天那 100
+# 积分经常整天没人领，而它**次日就过期**（`expireAt` 只到第二天），等于白丢。
+#
+# 这里不新开定时线程池，只在池被用到时（每个 CodeArts 请求、/health、面板
+# 刷新都会经过 pool_for）检查一次「今天还有谁没签」，有就起一个 daemon 线程
+# 去领。节流记在进程内：每个账号每天最多 `AUTO_CHECKIN_MAX_ATTEMPTS` 次、
+# 两次间隔 ≥ `AUTO_CHECKIN_RETRY_GAP`，所以上游抖动也不会被连打。
+# 代价是网关整天没人请求时不会签——那种日子本来也没有消耗积分的请求。
+# ---------------------------------------------------------------------------
+
+#: 每个账号每天最多尝试几次（失败重试用）。
+AUTO_CHECKIN_MAX_ATTEMPTS = 3
+#: 同一账号两次尝试之间的最短间隔（秒）。
+AUTO_CHECKIN_RETRY_GAP = 3600.0
+
+_AUTO_CHECKIN_LOCK = threading.Lock()
+#: {accounts_dir: {uid: [日期, 已尝试次数, 上次尝试时刻]}}
+_AUTO_CHECKIN_STATE = {}
+
+
+def _checked_in_today(acct, today):
+    """这个账号今天已经签到成功了吗（看落盘的 checkin 记录）。"""
+    info = acct.checkin if isinstance(acct.checkin, dict) else {}
+    if not info.get("ok"):
+        return False
+    return str(info.get("checked_at") or "").startswith(today)
+
+
+def _auto_checkin_worker(accounts):
+    """后台线程：逐个领签到积分；任何失败都咽掉，绝不影响正在跑的会话。"""
+    for acct in accounts:
+        try:
+            _ensure_token(acct)
+            checkin_account(acct)
+        except CodeArtsError:
+            pass
+        except Exception:  # noqa: BLE001 - 后台任务，不能把异常抛给调用方
+            pass
+
+
+def _maybe_auto_checkin(pool):
+    """惰性触发每日签到；同步部分只做判断与记账，真正的请求在后台线程。"""
+    try:
+        if getattr(_AUTO_CHECKIN_SUPPRESS, "depth", 0):
+            return                      # 本线程正在手动签到，别抢
+        if not pool.config.get("credits_auto_claim", False):
+            return
+        today = time.strftime("%Y-%m-%d")
+        now = time.time()
+        key = os.path.abspath(str(pool.accounts_dir or "."))
+        pending = []
+        with _AUTO_CHECKIN_LOCK:
+            state = dict(_AUTO_CHECKIN_STATE.get(key) or {})
+            for acct in list(pool.accounts):
+                if acct.disabled or not acct.uid:
+                    continue
+                if _checked_in_today(acct, today):
+                    continue
+                entry = state.get(acct.uid) or [today, 0, 0.0]
+                if entry[0] != today:
+                    entry = [today, 0, 0.0]      # 跨天重置
+                if entry[1] >= AUTO_CHECKIN_MAX_ATTEMPTS:
+                    continue
+                if entry[2] and now - entry[2] < AUTO_CHECKIN_RETRY_GAP:
+                    continue
+                state[acct.uid] = [today, entry[1] + 1, now]
+                pending.append(acct)
+            _AUTO_CHECKIN_STATE[key] = state
+        if not pending:
+            return
+        threading.Thread(target=_auto_checkin_worker, args=(pending,),
+                         name="codearts-auto-checkin", daemon=True).start()
+    except Exception:  # noqa: BLE001 - 自动签到坏了也不能让业务请求失败
+        return
