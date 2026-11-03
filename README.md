@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.4-2496ED?style=flat-square" alt="Version 1.10.4"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.5-2496ED?style=flat-square" alt="Version 1.10.5"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -202,7 +202,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 247 个套件：184 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 248 个套件：185 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -509,10 +509,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 <!-- 发版时：把下面的 Unreleased 段落整理成新版本号（## vX.Y.Z），整体移入 docs/CHANGELOG.md 顶部 -->
 
-- **国际版模型目录补回 deepseek-v4.1-flash**：实测上游并未下线不带 -sg 的基础模型，请求完全正常且返回 credit: 0（免费通道）；带 -sg 版本扣除 0.01~0.02 积分。网关现将 deepseek-v4.1-flash 补回国际版静态目录并置于首选推荐位，同时保留 -sg 付费通道作为高可用备选。 / Restore deepseek-v4.1-flash in international catalog: verified that upstream routes the plain model normally with credit: 0 (free channel), whereas -sg charges 0.01~0.02 credits. The gateway now puts deepseek-v4.1-flash back in the international catalog in the primary position while keeping -sg as an active fallback.
-- **修复 glm-5.1 全部 400 / 11150**（#742）：上游现在要求 glm-5.1 的请求显式带推理档位——不带 reasoning_effort、带 none、或 thinking.type=disabled 一律回 400 / code 11150，网关在缺档位 / 关思考时自动补齐目录档位（medium），客户端自己选的档位照常透传。 / Fix glm-5.1 400 / 11150 (#742): upstream now enforces an explicit reasoning level for glm-5.1; the gateway now fills in catalog effort when missing or disabled.
-- **临期积分优先：权重同时看「剩几天」和「还剩多少积分」**（#741）：权重从原本单纯按天数粗暴取整升级为紧迫度乘剩余量（对数压缩），解决生产号池权重全相同退化为纯轮询的问题；设置页文案三语同步。 / Expiring-credits priority now weighs both remaining days and unspent credits (#741).
-- **修复 Codex 新会话稳定 400 并补账号/出口归因**（#743）：旧脱敏规则把中性句改写成 `You are a coding agent running in the Codex CLI tool, ...`，而 `SANITIZE_FEATURES` 恰好匹配这段前缀，导致出站 body 清洗后仍保留 11-128 指纹；现在整句换回中性句。400 与其它 `HTTPError` 直接透传时也带回 `account_uid` / `proxy_slot` / `proxy_exit`，`usage.jsonl` 与 `request error` 日志可定位实际账号和代理端口；成功行同步写入 `proxy_slot` / `proxy_exit`。新增 42 项脱敏断言与 3 项归因断言。 / Fix Codex new sessions failing with 400 and add account/egress attribution (#743): the old sanitizer rewrote the neutral opener into `You are a coding agent running in the Codex CLI tool, ...`, which `SANITIZE_FEATURES` still matched, so the outbound body kept the 11-128 fingerprint after sanitizing; the opener is now restored to the neutral sentence. Pass-through 400s (and other `HTTPError`s) now carry `account_uid` / `proxy_slot` / `proxy_exit`, so `usage.jsonl` and the `request error` log identify the actual account and proxy port; success rows write `proxy_slot` / `proxy_exit` too. Adds 42 sanitizer assertions and 3 attribution assertions.
+- **v1.10.5 发布**：国际版 DeepSeek 免费通道恢复与出站节点切换、Codex 首段脱敏去指纹修复与出口归因（#743/#744）、glm-5.1 推理档位自动补齐防 11150（#742）、临期积分优先权重按剩余积分对数优化（#741）。完整变更与验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1105)**；下一版的改动继续写在本段。
 - **v1.10.4 发布**：成长中心全能引擎与 Buddy 盲盒自动化扩展。补齐工作台搭建师、电商运营等 6 项官方新任务，支持动态专家深链解析；解除资料库与桌面对话跳过限制；支持成长能量自动开启 Buddy 盲盒（/buddy/open）；支持微信小程序链式任务（Sequential_Tasks_1~6 / 校园日）自动化。本功能参考并致谢开源项目 [L0NE-6/WorkBuddy-Daily](https://github.com/L0NE-6/WorkBuddy-Daily) 与 [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（MIT License）。完整变更、验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1104)**；下一版的改动继续写在本段。
 - **v1.10.1 发布**：429 响应带上绝对恢复时刻（#720）、工具名称校验丢弃非法条目防 11133（#726）、CodeArts 发送会话头修掉并发上限与排队（#723）、代理槽账号密码认证与格式规整（#648）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1101)**；下一版的改动继续写在本段。
 - **v1.10.0 发布**：集成 CodeArts 原生第三出口（#712/#715）、请求体上限面板动态调节（#709/#714）、Key 账号选择器搜索备注（#708/#717）、今日活动无记录状态优化（#706/#716）、最近请求跨天日期显示（#700/#713）与设置卡片重复修复（#710）。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1100)**；下一版的改动继续写在本段。
