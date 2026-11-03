@@ -18992,6 +18992,12 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     var need = Math.min(320, window.innerHeight * 0.52);
     var up = below < need && r.top > below;
     wrap.classList.toggle('cs-drop-up', up);
+    var panel = wrap.querySelector('.cs-panel');
+    if (panel){
+      var avail = up ? (r.top - 12) : (below - 12);
+      var maxH = Math.max(100, Math.floor(Math.min(320, avail)));
+      panel.style.maxHeight = maxH + 'px';
+    }
   }
 
   function openWrap_(wrap){

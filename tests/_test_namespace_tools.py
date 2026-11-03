@@ -86,6 +86,27 @@ check("top level order is preserved",
       names)
 
 print()
+print("[1b] nested namespace container keeps the full hierarchy")
+DEEP = {"type": "namespace", "name": "codex_apps",
+        "tools": [{"type": "namespace", "name": "github",
+                   "tools": [dict(CUSTOM_TOOL), {"type": "function", "name": "read",
+                                                "parameters": {"type": "object"}}]}]}
+flat_deep, deep_map = P.expand_namespace_tools([DEEP])
+check("nested namespace map combines parent and child segments",
+      deep_map.get("read") == "codex_apps__github" and deep_map.get("apply_patch") == "codex_apps__github",
+      deep_map)
+check("resolve multi-level :: namespace syntax",
+      P.resolve_namespaced_name("codex_apps::github::read", deep_map) == ("read", "codex_apps__github"))
+
+print("[3b] outbound: tool_choice pointing to namespaced tool is rewritten to bare name")
+chat_tc = P.responses_to_chat({
+    "model": "m", "input": "hi", "tools": [DEEP],
+    "tool_choice": {"type": "function", "function": {"name": "codex_apps__github__read"}}
+})
+check("tool_choice function name is resolved to bare name",
+      chat_tc.get("tool_choice", {}).get("function", {}).get("name") == "read",
+      chat_tc.get("tool_choice"))
+
 print("[2] outbound: duplicate tool names collapse to one entry")
 flat_dup, _ = P.expand_namespace_tools([JS_TOOL] + NAMESPACES)
 check("the top level definition wins",
