@@ -12921,11 +12921,26 @@ function syncConsoleContext(tab){
   if(label) label.textContent = CONSOLE_PAGE_LABELS[tab] || '控制台';
   document.querySelectorAll('.console-nav-link').forEach(function(item){ item.classList.remove('active'); });
 }
+// 内容入口（模型管理 / 请求记录）落在「运行概览」页内，但它们是独立的菜单项：
+// 点击后只让该入口保持选中，父级不再同时高亮，否则左侧会出现两个选中态。
+function selectConsoleEntry(linkId, label){
+  document.querySelectorAll('.console-sidebar .main-nav-btn.active').forEach(function(btn){
+    btn.classList.remove('active');
+    btn.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('.console-nav-link').forEach(function(item){
+    const on = item.id === linkId;
+    item.classList.toggle('active', on);
+    if(on) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+  const ctx = document.getElementById('consoleCurrentPage');
+  if(ctx && label) ctx.textContent = label;
+}
 function openModelCatalog(){
   switchMainTab('gateway');
+  selectConsoleEntry('btnNavModels', '模型管理');
   const target = document.getElementById('gatewayModelsSection');
-  const link = document.getElementById('btnNavModels');
-  if(link) link.classList.add('active');
   if(target){
     const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
     window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
@@ -12933,9 +12948,8 @@ function openModelCatalog(){
 }
 function openRecentRequests(){
   switchMainTab('gateway');
+  selectConsoleEntry('btnNavRequests', '请求记录');
   const target = document.getElementById('recentRequestsSection');
-  const link = document.getElementById('btnNavRequests');
-  if(link) link.classList.add('active');
   if(target){
     const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
     window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
