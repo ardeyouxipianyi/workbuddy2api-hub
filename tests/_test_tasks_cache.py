@@ -60,6 +60,11 @@ class FakePool(object):
         return [a.public() for a in self.accounts
                 if realm is None or a.realm == realm]
 
+    def remove(self, uid):
+        before = len(self.accounts)
+        self.accounts = [a for a in self.accounts if a.uid != uid]
+        return len(self.accounts) < before
+
 
 class FakeUpstream(object):
     """Growth tasks, summary, task run and travel - with no network at all.
@@ -288,6 +293,13 @@ class ActionInvalidationTests(unittest.TestCase):
                          "签到动作没有真的跑起来: %r" % response)
         self.assertEqual(self.account.checkins, 1, "签到没有被调用")
         self.assert_refetched(warm, "/accounts/checkin")
+
+
+    def test_account_delete_invalidates_the_snapshot(self):
+        warm = self.warm()
+        self.upstream.bump()
+        response = self.drive("/accounts/delete", {"uid": "uid-a"})
+        self.assertTrue(response.get("deleted"))
 
 
 if __name__ == "__main__":

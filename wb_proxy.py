@@ -23830,6 +23830,7 @@ class Handler(BaseHTTPRequestHandler):
         if not uid:
             return self._error(400, "uid required")
         removed = POOL.remove(uid)
+        invalidate_tasks_cache()
         log("account %s deleted" % uid[:8])
         return self._json_panel(200, {"deleted": removed, "accounts": account_views()})
 

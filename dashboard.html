@@ -7710,11 +7710,27 @@ async function loadGrowthTasks(){
     const tr = sum.travel || {};
 
     const sel = document.getElementById("growthAcctSelect");
-    if(sel && accts.length){
-      const opts = ['<option value="all"' + (CURRENT_GROWTH_UID === 'all' ? ' selected' : '') + '>全部国内账号 (批量)</option>']
-        .concat(accts.map(a => '<option value="' + esc(a.uid) + '"' + (CURRENT_GROWTH_UID === a.uid ? ' selected' : '') + '>' + esc(a.nickname) + ' (' + esc(a.uid.slice(0,6)) + ')</option>'))
-        .join('');
-      sel.innerHTML = opts;
+    if(sel){
+      if(accts.length){
+        const opts = ['<option value="all"' + (CURRENT_GROWTH_UID === 'all' ? ' selected' : '') + '>全部国内账号 (批量)</option>']
+          .concat(accts.map(a => '<option value="' + esc(a.uid) + '"' + (CURRENT_GROWTH_UID === a.uid ? ' selected' : '') + '>' + esc(a.nickname) + ' (' + esc(a.uid.slice(0,6)) + ')</option>'))
+          .join('');
+        sel.innerHTML = opts;
+      } else {
+        sel.innerHTML = '<option value="">无国内版账号</option>';
+      }
+    }
+    if(!accts.length){
+      if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
+      const elStk = document.getElementById("stkDays"); if(elStk) elStk.textContent = '-';
+      const elNrg = document.getElementById("nrgBalance"); if(elNrg) elNrg.textContent = '-';
+      const elCards = document.getElementById("makeupCards"); if(elCards) elCards.textContent = '-';
+      const elLottery = document.getElementById("lotteryChances"); if(elLottery) elLottery.textContent = '-';
+      const elCat = document.getElementById("catState"); if(elCat) elCat.textContent = '-';
+      const elCatDesc = document.getElementById("catDesc"); if(elCatDesc) elCatDesc.textContent = '-';
+      const tb = document.querySelector("#growthTable tbody");
+      if(tb) tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">暂无任务或未登录国内版账号</td></tr>';
+      return;
     }
 
     if(typeof updateTaskPageCheckinCards === 'function') updateTaskPageCheckinCards();
@@ -10276,7 +10292,13 @@ async function deleteAccount(uid, name, btn){
   if(btn) btn.disabled = true;
   try{
     await postJSON('/accounts/delete', {uid: uid});
+    if(typeof CURRENT_GROWTH_UID !== 'undefined' && CURRENT_GROWTH_UID === uid){
+      CURRENT_GROWTH_UID = 'all';
+    }
     await loadAccounts();
+    if(typeof loadGrowthTasks === 'function'){
+      await loadGrowthTasks();
+    }
     toast('已成功删除账号 ' + name, 'ok');
   }catch(e){
     toast('删除失败: ' + e.message, 'bad');
