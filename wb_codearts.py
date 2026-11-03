@@ -191,31 +191,46 @@ def load_config(accounts_dir):
 
 
 def save_config(accounts_dir, patch):
-    """保存配置；返回完整配置。非法值抛 ValueError。"""
+    """保存配置；返回完整配置。非法值抛 ValueError。
+
+    整段读-改-写必须在 `_LOCK` 内完成。只靠 `wb_settings.save()` 内部那把锁
+    是不够的——它只保护「写」这一步，`load_config()` 读到的旧值到
+    `wb_settings.save()` 落盘之间有一个窗口。面板连续点两次保存、或者两个
+    浏览器同时保存时，后一次会用「读到旧值 + 自己那一项」覆盖掉前一次刚写
+    进去的另一项，且双方都拿到 200，没有任何报错。
+
+    锁序：这里持有 `_LOCK` 时会调用 `wb_settings.load/save`，它们各自持
+    `wb_settings._lock`。反向（`wb_settings` 持锁时调 `wb_codearts`）不存在，
+    见 `wb_settings.set_codearts_config()` —— 它只做转发，不持锁。所以
+    `_LOCK -> wb_settings._lock` 是唯一的获取顺序，不会死锁。
+    """
     if not isinstance(patch, dict):
         raise ValueError("codearts settings must be an object")
-    current = load_config(accounts_dir)
-    merged = dict(current)
-    for key in DEFAULTS:
-        if key in patch:
-            merged[key] = patch[key]
-    merged["enabled"] = merged.get("enabled") is True
-    merged["timeout_seconds"] = _positive_float(
-        merged.get("timeout_seconds"), DEFAULTS["timeout_seconds"], 1.0, 600.0)
-    merged["stream_timeout_seconds"] = _positive_float(
-        merged.get("stream_timeout_seconds"),
-        DEFAULTS["stream_timeout_seconds"], 1.0, 3600.0)
-    merged["models_ttl_seconds"] = _positive_float(
-        merged.get("models_ttl_seconds"), DEFAULTS["models_ttl_seconds"],
-        60.0, 86400.0)
-    merged["max_concurrent"] = _positive_int(
-        merged.get("max_concurrent"), DEFAULTS["max_concurrent"], 1, 20)
-    merged["benefit_auto_claim"] = merged.get("benefit_auto_claim", True) is not False
-    merged["credits_auto_claim"] = merged.get("credits_auto_claim", False) is True
-    data = wb_settings.load(accounts_dir)
-    data["codearts"] = {k: merged[k] for k in DEFAULTS}
-    wb_settings.save(accounts_dir, data)
-    return load_config(accounts_dir)
+    with _LOCK:
+        current = load_config(accounts_dir)
+        merged = dict(current)
+        for key in DEFAULTS:
+            if key in patch:
+                merged[key] = patch[key]
+        merged["enabled"] = merged.get("enabled") is True
+        merged["timeout_seconds"] = _positive_float(
+            merged.get("timeout_seconds"), DEFAULTS["timeout_seconds"], 1.0, 600.0)
+        merged["stream_timeout_seconds"] = _positive_float(
+            merged.get("stream_timeout_seconds"),
+            DEFAULTS["stream_timeout_seconds"], 1.0, 3600.0)
+        merged["models_ttl_seconds"] = _positive_float(
+            merged.get("models_ttl_seconds"), DEFAULTS["models_ttl_seconds"],
+            60.0, 86400.0)
+        merged["max_concurrent"] = _positive_int(
+            merged.get("max_concurrent"), DEFAULTS["max_concurrent"], 1, 20)
+        merged["benefit_auto_claim"] = merged.get("benefit_auto_claim", True) is not False
+        merged["credits_auto_claim"] = merged.get("credits_auto_claim", False) is True
+        # 重新读 settings：`load_config` 只返回收敛后的 codearts 段，写回去要
+        # 保留其它段（api_keys / realm / 媒体配置…），所以必须拿整份再合并。
+        data = wb_settings.load(accounts_dir)
+        data["codearts"] = {k: merged[k] for k in DEFAULTS}
+        wb_settings.save(accounts_dir, data)
+        return load_config(accounts_dir)
 
 
 def configured(accounts_dir):
