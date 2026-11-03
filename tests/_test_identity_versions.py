@@ -4,6 +4,8 @@ The version numbers are part of the wire fingerprint. The defaults are the
 values verified against captures and unpacked official packages; a panel-set
 override changes only the string, not the header family or request body.
 """
+import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -16,6 +18,17 @@ import wb_identity
 import wb_accounts
 import wb_proxy
 import wb_settings
+
+
+_DIAGNOSE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                              "scripts", "diagnose_identity.py")
+
+
+def load_diagnose_module():
+    spec = importlib.util.spec_from_file_location("diagnose_identity", _DIAGNOSE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class DefaultVersionTests(unittest.TestCase):
@@ -227,6 +240,60 @@ class DesktopChatProfileTests(unittest.TestCase):
         with mock.patch.object(wb_accounts.Account, "_device_token", return_value="real-fixture"):
             self.assertEqual(self.account().headers()["X-Device-Token"], "real-fixture")
             self.assertNotIn("X-Device-Token", self.account(realm="intl").headers())
+
+
+class DiagnoseIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="diagnose-identity-")
+        self.module = load_diagnose_module()
+        self.account_path = os.path.join(self.dir, "account.json")
+        with open(self.account_path, "w", encoding="utf-8") as fh:
+            json.dump({"uid": "uid-abcdef123456", "accessToken": "sk-secret",
+                       "realm": "cn", "product": "workbuddy"}, fh)
+
+    def tearDown(self):
+        for name in os.listdir(self.dir):
+            os.unlink(os.path.join(self.dir, name))
+        os.rmdir(self.dir)
+
+    def test_redaction_keeps_the_header_shape(self):
+        out = self.module.redact_headers({
+            "Authorization": "Bearer secret-token",
+            "X-API-Key": "ck_secret",
+            "X-User-Id": "uid-secret",
+            "x-stainless-os": "Linux",
+        })
+        self.assertEqual(out["Authorization"], "Bearer [REDACTED]")
+        self.assertEqual(out["X-API-Key"], "[REDACTED]")
+        self.assertEqual(out["X-User-Id"], "[REDACTED]")
+        self.assertEqual(out["x-stainless-os"], "Linux")
+
+    def test_cli_preview_includes_stainless_and_hides_the_token(self):
+        data = self.module.collect(self.dir, product="cli")
+        row = data["accounts"][0]
+        self.assertEqual(row["product"], "cli")
+        self.assertIn("x-stainless-os", row["stainless_headers"])
+        self.assertEqual(row["headers"]["Authorization"], "Bearer [REDACTED]")
+        self.assertNotIn("sk-secret", json.dumps(data, ensure_ascii=False))
+        self.assertIn("x-stainless-* is sent by the CLI identity only.",
+                      data["notes"])
+
+    def test_desktop_preview_has_no_stainless_and_says_the_override_is_irrelevant(self):
+        data = self.module.collect(self.dir, product="workbuddy")
+        row = data["accounts"][0]
+        self.assertEqual(row["product"], "workbuddy")
+        self.assertEqual(row["stainless_headers"], [])
+        self.assertTrue(any("do not send x-stainless-*" in note
+                            for note in data["notes"]))
+
+    def test_no_accounts_still_returns_environment(self):
+        empty = tempfile.mkdtemp(prefix="diagnose-empty-")
+        try:
+            data = self.module.collect(empty)
+        finally:
+            os.rmdir(empty)
+        self.assertEqual(data["accounts"], [])
+        self.assertIn("effective", data["environment"])
 
 
 if __name__ == "__main__":
