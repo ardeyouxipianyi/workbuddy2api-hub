@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WorkBuddy 用量看板</title>
+<title>WorkBuddy 控制台</title>
 <!-- 首帧判定：必须留在 <head>、在任何页面内容之前同步执行。
      没有面板会话令牌（无痕 / 首次访问 / 已登出）→ 不动 markup 上的 display:flex，
      登录闸门随首帧一起出现，看板骨架不会被先画出来再盖住。
@@ -21,6 +21,13 @@ const PANEL_REMEMBER_KEY = 'wb-proxy-panel-remember';
   try { panelToken = sessionStorage.getItem(PANEL_STORE) || ''; } catch(e){}
   try { panelToken = panelToken || localStorage.getItem(PANEL_STORE) || ''; } catch(e){}
   if(panelToken) document.documentElement.classList.add('wb-panel-session');
+})();
+/* 新导航使用显式 URL 参数启用，默认保留用户现有布局。 */
+(function(){
+  var next = false;
+  try { next = new URLSearchParams(location.search).get('ui') === 'next'; } catch(e){}
+  if(typeof window !== 'undefined') window.__NEXT_UI__ = next;
+  if(next && typeof document !== 'undefined' && document.documentElement) document.documentElement.setAttribute('data-ui', 'next');
 })();
 </script>
 <style>
@@ -1732,7 +1739,7 @@ html:not([data-console-layout="on"]) #btnNavLogs {order:8}
 html[data-console-layout="on"] #classicTitle {display:none}
 </style>
 <script>
-try { if(localStorage.getItem('wb-console-layout') === '1') {
+try { if(!window.__NEXT_UI__ && localStorage.getItem('wb-console-layout') === '1') {
   document.documentElement.setAttribute('data-console-layout','on');
   document.getElementById('wb-alibaba-console').media = 'all';
   document.getElementById('wb-console-v2').media = 'all';
@@ -1792,7 +1799,11 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     if(!THEME_STYLES[style]) style = 'claude';
     var vars = THEME_STYLES[style][resolvedTheme === 'dark' ? 'dark' : 'light'];
     setStyleAttr(style);
-    Object.keys(vars).forEach(function(k){ document.documentElement.style.setProperty(k, vars[k]); });
+    // 新面板有自己的 token；旧主题预设只保留亮/暗切换，不再往根节点写
+    // 内联变量，否则内联样式会压过 #nextStyles。
+    if(!window.__NEXT_UI__){
+      Object.keys(vars).forEach(function(k){ document.documentElement.style.setProperty(k, vars[k]); });
+    }
     try { localStorage.setItem(THEME_STYLE_KEY, style); } catch(e){}
     return style;
   }
@@ -1826,6 +1837,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     style = THEME_STYLES[style] ? style : 'claude';
     try { localStorage.setItem(THEME_STYLE_KEY, style); } catch(e){}
     setStyleAttr(style);
+    if(window.__NEXT_UI__){ updateStyleUI(style); return style; }
     var mode = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
     var vars = THEME_STYLES[style][mode];
     Object.keys(vars).forEach(function(k){ document.documentElement.style.setProperty(k, vars[k]); });
@@ -1916,13 +1928,14 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
   };
 
   // 3. Tab 初始化（与下方主脚本的 MAIN_TABS 保持一致）
-  var TABS = ['gateway','accounts','tasks','media','analytics','agents','settings','logs'];
+  var TABS = ['overview','gateway','accounts','tasks','media','analytics','agents','settings','logs'];
+  var fallback = window.__NEXT_UI__ ? 'overview' : 'gateway';
   var pick = null;
   try {
     var q = new URLSearchParams(location.search).get('tab');
     var s = localStorage.getItem('wb-proxy-main-tab');
-    pick = [q, s].find(function(t){ return TABS.indexOf(t) !== -1; }) || 'gateway';
-  } catch(e) { pick = 'gateway'; }
+    pick = [q, s].find(function(t){ return TABS.indexOf(t) !== -1; }) || fallback;
+  } catch(e) { pick = fallback; }
   window.__MAIN_TAB__ = pick;
 
   document.addEventListener('DOMContentLoaded', function(){
@@ -2064,6 +2077,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     'WorkBuddy 独立桌面客户端 (WB)': 'WorkBuddy standalone desktop client (WB)',
     'WorkBuddy 用量看板': 'WorkBuddy Usage Dashboard',
     'WorkBuddy 网关': 'WorkBuddy Gateway',
+    'WorkBuddy 控制台': 'WorkBuddy Console',
+    'WorkBuddy 仓库': 'WorkBuddy repo',
     '[task_runner] 正在启动全自动任务接取、事件上报与奖励领取流水...': '[task_runner] Starting the fully automatic task claiming, event reporting and reward claiming pipeline...',
     '] 吗？密钥会被抹掉且无法恢复；看板里它已经产生的历史用量仍会保留这个名字。': ']? The secret will be erased and cannot be recovered; the usage it already produced in the dashboard keeps this name.',
     '] 已保存': '] saved',
@@ -2204,6 +2219,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     '分钟取一次价': 'minutes per price fetch',
     '切换失败:': 'Switch failed:',
     '控制台布局': 'Console layout',
+    '新导航布局': 'New navigation layout',
+    '返回原布局': 'Return to previous layout',
     '切换颜色主题': 'Switch color theme',
     '切换默认出口为【国内版】': 'Switch the default exit to China',
     '切换默认出口为【国际版】': 'Switch the default exit to Global',
@@ -2353,6 +2370,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     'CodeArts 接入': 'CodeArts',
     'CodeArts 出口': 'CodeArts exit',
     '启用 CodeArts 出口': 'Enable the CodeArts exit',
+    '每天自动签到': 'Daily auto check-in',
     '添加 CodeArts 账号': 'Add a CodeArts account',
     '+ 添加账号 (OAuth)': '+ Add account (OAuth)',
     '全员签到': 'Check in all',
@@ -2567,6 +2585,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     '当前是默认密码 admin，建议到「设置」里修改': 'The password is still the default admin; change it in Settings',
     '当前浅色': 'currently light',
     '当前深色': 'currently dark',
+    '项目': 'Project',
+    '更新源': 'Update source',
     '当前版本': 'Current version',
     '当前版本暂无模型请求或性能数据': 'No model requests or performance data for the current version yet',
     '当前禁用': 'Currently disabled',
@@ -2735,6 +2755,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
 '已启用：会话键包含首条回复': 'On: the key includes the first reply',
 '已关闭：会话键只用前两条消息': 'Off: the key uses the first two messages',
     '上游响应头超时': 'Upstream response-header timeout',
+    '单请求体上限': 'Single request body limit',
     '单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。': 'How long one attempt may wait for the upstream to send response headers (seconds). Nothing is sent to the client before those headers arrive, so this is exactly how long the client can end up waiting: set it above the client\'s first-byte budget and the client disconnects first (seen as a 499, or a first byte that never comes) while the gateway keeps retrying on the next account under the same limit. Default 120.',
     '调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。': 'The cost of lowering it: a normal request the upstream genuinely takes a long time to compute is failed early and retried on another account, spending one more unit of quota. Prefer a value no higher than the client\'s first-byte budget.',
     '请输入不小于 1 的整数秒': 'Enter a whole number of seconds, at least 1',
@@ -2743,7 +2764,6 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     '权重': 'Weight',
     '权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。': 'Accounts with weight >1 are dispatched first; several weighted accounts split traffic by weight, and when none of them can take requests the others serve as usual. 1 = no override, automatic rules such as expiring-credits-first apply as before.',
     '备注': 'Note',
-    '搜索昵称、备注或 UID': 'Search nickname, note or UID',
     '+ 备注': '+ note',
     '点击编辑备注': 'Click to edit the note',
     '点击添加备注，比如「批量」/「自用」': 'Click to add a note, e.g. "batch" / "personal"',
@@ -3470,6 +3490,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     "「设置」是页面显示开关自己的入口，收起来就放不回去了，固定保留。": "「設定」是頁面顯示開關自己的入口，收起來就放不回去了，固定保留。",
     "取消勾选就把该页签从顶部收起来，勾回来即恢复；清单按顶部现有的页签现场生成，上游增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。": "取消勾選就把該頁籤從頂部收起來，勾回來即恢復；清單按頂部現有的頁籤現場生成，上游增刪頁面這裡自動跟上；偏好存在本閘道，換瀏覽器、重啟服務都記得。「設定」是這一頁自己的入口，固定保留。",
     "控制台布局": "控制台版面",
+    "新导航布局": "新導覽版面",
+    "返回原布局": "返回原版面",
     "取消勾选可隐藏对应功能入口，勾选后恢复；偏好保存在本网关。「设置」入口固定保留。": "取消勾選可隱藏對應功能入口，勾選後恢復；偏好儲存在本閘道。「設定」入口固定保留。",
     "添加": "新增",
     "API Key 不能为空": "API Key 不能為空",
@@ -3479,6 +3501,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     "OpenRouter 价估算：按 OpenRouter 公布的模型价折算，覆盖该账号在所选区间内的请求；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示": "OpenRouter 價估算：按 OpenRouter 公佈的模型價折算，覆蓋該帳號在所選區間內的請求；按條件定價的模型（輸入長度閾值或時段）按每條請求取檔；單條請求實際用的策略、三檔單價與匹配來源見「最近請求」裡那條的懸停提示",
     "OpenRouter 价估算：按该行（模型·区域·账号）的 token 消耗折算；按条件定价的模型（输入长度阈值或时段）按每条请求取档；单条请求实际用的策略、三档单价与匹配来源见「最近请求」里那条的悬停提示": "OpenRouter 價估算：按該行（模型·區域·帳號）的 token 消耗折算；按條件定價的模型（輸入長度閾值或時段）按每條請求取檔；單條請求實際用的策略、三檔單價與匹配來源見「最近請求」裡那條的懸停提示",
     "WorkBuddy 网关看板": "WorkBuddy 閘道看板",
+    "WorkBuddy 控制台": "WorkBuddy 控制台",
+    "WorkBuddy 仓库": "WorkBuddy 倉庫",
     "[task_runner] 正在启动全自动任务接取、事件上报与奖励领取流水...": "[task_runner] 正在啟動全自動任務接取、事件上報與獎勵領取流水...",
     "] 吗？密钥会被抹掉且无法恢复；看板里它已经产生的历史用量仍会保留这个名字。": "] 嗎？金鑰會被抹掉且無法恢復；看板裡它已經產生的歷史用量仍會保留這個名字。",
     "] 已保存": "] 已儲存",
@@ -3701,6 +3725,8 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     "当前没有禁用的账号或模型。": "目前沒有禁用的帳號或模型。",
     "当前浅色": "目前淺色",
     "当前深色": "目前深色",
+    "项目": "專案",
+    "更新源": "更新來源",
     "当前版本": "目前版本",
     "当前版本暂无模型请求或性能数据": "目前版本暫無模型請求或效能資料",
     "当前版本模型库与能力清单": "目前版本模型庫與能力清單",
@@ -3921,6 +3947,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     "已启用：出口级瞬时失败退避": "已啟用：出口級瞬時失敗退避",
     "已关闭出口级瞬时失败退避": "已關閉出口級瞬時失敗退避",
     "上游响应头超时": "上游回應標頭逾時",
+    "单请求体上限": "單請求體上限",
     "单次尝试等上游返回响应头的上限（秒）。拿到响应头之前网关不会向客户端发出任何字节，所以这个值就是客户端要空等的时长：设得比客户端的首字节预算还大时，客户端会先断开（表现为 499 / 首字节迟迟不返回），而网关仍会按这个上限继续换账号重试。默认 120。": "單次嘗試等上游回傳回應標頭的上限（秒）。拿到回應標頭之前閘道不會向客戶端發出任何位元組，所以這個值就是客戶端要空等的時長：設得比客戶端首位元組預算還大時，客戶端會先斷開（表現為 499 / 首位元組遲遲不返回），而閘道仍會按這個上限繼續換帳號重試。預設 120。",
     "调小的代价：上游偶尔确实算得慢的正常请求会被提前判失败、换账号重试，多消耗一次额度。建议不高于客户端的首字节预算。": "調小的代價：上游偶爾確實算得慢的正常請求會被提前判失敗、換帳號重試，多消耗一次額度。建議不高於客戶端的首位元組預算。",
     "请输入不小于 1 的整数秒": "請輸入不小於 1 的整數秒",
@@ -3928,7 +3955,6 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     "总计（全部历史）": "總計（全部歷史）",
     "权重 >1 的账号优先接单，多个高权重账号按权重比分流量；它们都接不了单时其他账号照常顶上。1 = 不干预，临期积分优先等自动规则照旧。": "權重 >1 的帳號優先接單，多個高權重帳號按權重比分流量；它們都接不了單時其他帳號照常頂上。1 = 不干預，臨期積分優先等自動規則照舊。",
     "点击编辑备注": "點擊編輯備註",
-    "搜索昵称、备注或 UID": "搜尋暱稱、備註或 UID",
     "点击添加备注，比如「批量」/「自用」": "點擊新增備註，例如「批量」/「自用」",
     "按「剩余用量估算」优先调度：某 (账号 × 模型) 的估计剩余越接近耗尽，分到的请求越多——先把快用完的额度用掉，等它到点重置。剩余不到 30% 开始加权、5% 以内权重最高；没有预算样本、或剩余为 0 / 冷却中的组合不参与。默认关闭。": "按「剩餘用量估算」優先排程：某 (帳號 × 模型) 的估計剩餘越接近耗盡，分到的請求越多——先把快用完的額度用掉，等它到點重置。剩餘不到 30% 開始加權、5% 以內權重最高；沒有預算樣本、或剩餘為 0 / 冷卻中的組合不參與。預設關閉。",
     "撞线样本": "撞線樣本",
@@ -4517,6 +4543,506 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
   else boot();
 })();
 </script>
+<style id="nextStyles">
+/* ============================================================
+   新面板 /next：清透中性
+   所有规则限定在 html[data-ui="next"] 下，旧 / 不受影响。
+   新壳节点在旧 / 下必须先藏起来，否则会以无样式块出现在页面顶部。
+   ============================================================ */
+/* 旧 / 下壳只是 <main> 的透明包装：侧栏、顶栏、底栏全部藏起来，内容照旧。 */
+#nextSidebar, #nextTopbar, #nextBottomNav, #nextMoreSheet, #nextSidebarBackdrop{display:none}
+#nextShell, #nextMain, #nextContent{display:block}
+html[data-ui="next"]{
+  --bg:#f4f6f9; --panel:#ffffff; --panel2:#f7f9fc; --panel3:#eef2f7;
+  --line:#e3e7ee; --line-hover:#cfd6e2;
+  --fg:#101828; --dim:#667085; --dim-light:#98a2b3;
+  --accent:#4f46e5; --accent-hover:#4338ca; --accent-soft:rgba(79,70,229,.08);
+  --accent-selected-bg:rgba(79,70,229,.12); --bad-selected-bg:rgba(240,68,56,.10);
+  --accent2:#12b76a; --accent2-soft:rgba(18,183,106,.10);
+  --warn:#f79009; --warn-soft:rgba(247,144,9,.12);
+  --think:#7c3aed; --think-soft:rgba(124,58,237,.10);
+  --bad:#f04438; --bad-soft:rgba(240,68,56,.10);
+  --shadow-sm:0 1px 2px rgba(16,24,40,.04);
+  --shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.04);
+  --shadow-md:0 4px 12px rgba(16,24,40,.08),0 20px 40px rgba(16,24,40,.08);
+  --header-bg:rgba(255,255,255,.92);
+  --overlay-mask:rgba(16,24,40,.45);
+  --hm0:#eef2ff; --hm1:#e0e7ff; --hm2:#c7d2fe; --hm3:#a5b4fc; --hm4:#4f46e5;
+  --chart-bar:#4f46e5; --chart-bar-soft:rgba(79,70,229,.14);
+  --chart-line:#818cf8; --chart-axis:#98a2b3; --chart-text:#667085;
+  --green:#12b76a; --gold:#f79009; --red:#f04438; --blue:#4f46e5;
+  --radius-card:14px; --radius-control:9px; --radius-pill:999px;
+  --page-pad:24px; --serif:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color-scheme:light;
+}
+html[data-ui="next"][data-theme="dark"]{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --panel3:#242a35;
+  --line:#2a303b; --line-hover:#3a4250;
+  --fg:#f2f4f7; --dim:#98a2b3; --dim-light:#667085;
+  --accent:#818cf8; --accent-hover:#a5b4fc; --accent-soft:rgba(129,140,248,.12);
+  --accent-selected-bg:rgba(129,140,248,.18); --bad-selected-bg:rgba(248,113,113,.14);
+  --accent2:#34d399; --accent2-soft:rgba(52,211,153,.12);
+  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.12);
+  --think:#c4b5fd; --think-soft:rgba(196,181,253,.12);
+  --bad:#f87171; --bad-soft:rgba(248,113,113,.12);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.25);
+  --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 24px rgba(0,0,0,.22);
+  --shadow-md:0 4px 12px rgba(0,0,0,.3),0 20px 40px rgba(0,0,0,.35);
+  --header-bg:rgba(15,17,21,.92);
+  --overlay-mask:rgba(0,0,0,.65);
+  --hm0:#1d212a; --hm1:#2a3150; --hm2:#3730a3; --hm3:#4f46e5; --hm4:#a5b4fc;
+  --chart-bar:#818cf8; --chart-bar-soft:rgba(129,140,248,.18);
+  --chart-line:#c4b5fd; --chart-axis:#667085; --chart-text:#98a2b3;
+  --green:#34d399; --gold:#fbbf24; --red:#f87171; --blue:#818cf8;
+  color-scheme:dark;
+}
+html[data-ui="next"] body{
+  background:var(--bg); color:var(--fg);
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:13px; line-height:1.5;
+}
+html[data-ui="next"] body > header{display:none!important}
+html[data-ui="next"] #panelGate{background:var(--bg)!important}
+html[data-ui="next"] #panelGate > div{
+  border-radius:16px!important; border-color:var(--line)!important;
+  box-shadow:var(--shadow-md)!important;
+}
+html[data-ui="next"] #nextShell{display:flex;min-height:100vh;align-items:stretch}
+html[data-ui="next"] #nextSidebar{
+  width:236px;flex:0 0 236px;position:sticky;top:0;height:100vh;z-index:40;
+  display:flex;flex-direction:column;padding:18px 12px 12px;
+  background:var(--panel);border-right:1px solid var(--line);
+}
+html[data-ui="next"] .next-brand{display:flex;align-items:center;gap:10px;padding:2px 8px 18px}
+html[data-ui="next"] .next-brand-mark{
+  width:31px;height:31px;border-radius:9px;background:var(--accent);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;
+  letter-spacing:-.04em;box-shadow:0 5px 12px rgba(79,70,229,.24);flex:0 0 31px;
+}
+html[data-ui="next"] .next-brand-text{display:flex;flex-direction:column;min-width:0}
+html[data-ui="next"] .next-brand-text b{font-size:14px;letter-spacing:-.02em;font-weight:750}
+html[data-ui="next"] .next-brand-text span{font-size:9.5px;color:var(--dim-light);letter-spacing:.02em;margin-top:1px}
+html[data-ui="next"] .next-nav-label{
+  font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--dim-light);padding:0 10px 8px;
+}
+html[data-ui="next"] .next-nav{display:flex;flex-direction:column;gap:2px}
+html[data-ui="next"] .next-nav-item{
+  appearance:none;border:0;background:transparent;color:var(--dim);
+  display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;
+  border-radius:9px;font:inherit;font-size:12.5px;font-weight:550;cursor:pointer;
+  text-align:left;transition:background .15s ease,color .15s ease;
+}
+html[data-ui="next"] .next-nav-item svg{width:17px;height:17px;flex:0 0 17px;opacity:.78}
+html[data-ui="next"] .next-nav-item:hover{background:var(--panel2);color:var(--fg)}
+html[data-ui="next"] .next-nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:650}
+html[data-ui="next"] .next-nav-item.active svg{opacity:1}
+html[data-ui="next"] .next-nav-item.next-disabled,
+html[data-ui="next"] .next-more-item.next-disabled,
+html[data-ui="next"] .next-bottom-item.next-disabled{opacity:.45;cursor:not-allowed}
+html[data-ui="next"] .next-nav-item.next-disabled:hover{background:transparent;color:var(--dim)}
+html[data-ui="next"] .next-sidebar-foot{
+  margin-top:auto;padding:10px 4px 2px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:1px;
+}
+html[data-ui="next"] .next-side-link{
+  appearance:none;border:0;background:transparent;color:var(--dim);
+  display:flex;align-items:center;gap:8px;padding:6px 7px;border-radius:7px;
+  font:inherit;font-size:10.5px;text-decoration:none;cursor:pointer;text-align:left;
+}
+html[data-ui="next"] .next-side-link svg{width:13px;height:13px;flex:0 0 13px;opacity:.7}
+html[data-ui="next"] .next-side-link:hover{background:var(--panel2);color:var(--fg)}
+html[data-ui="next"] .next-side-danger:hover{background:var(--bad-soft);color:var(--bad)}
+html[data-ui="next"] .next-side-status{
+  display:flex;align-items:center;gap:6px;padding:8px 7px 0;font-size:9.5px;color:var(--dim-light);
+}
+html[data-ui="next"] .next-status-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--accent2);display:inline-block;flex:0 0 6px;
+  box-shadow:0 0 0 2px var(--accent2-soft);
+}
+html[data-ui="next"] #nextMain{flex:1;min-width:0;display:flex;flex-direction:column}
+html[data-ui="next"] #nextTopbar{
+  height:68px;flex:0 0 68px;position:sticky;top:0;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:0 24px;background:var(--header-bg);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line);
+}
+html[data-ui="next"] .next-topbar-left{display:flex;align-items:center;gap:10px;min-width:0}
+html[data-ui="next"] .next-page-heading{min-width:0}
+html[data-ui="next"] #nextPageTitle{font-size:18px;font-weight:750;letter-spacing:-.03em;line-height:1.2}
+html[data-ui="next"] #nextPageDesc{font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+html[data-ui="next"] .next-topbar-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+html[data-ui="next"] .next-topbar-actions .header-right{display:flex;align-items:center;gap:7px;flex-wrap:nowrap}
+html[data-ui="next"] .next-topbar-actions .meta{
+  font-size:10.5px;color:var(--dim);text-align:right;line-height:1.35;max-width:260px;
+}
+html[data-ui="next"] .next-topbar-actions .meta b{color:var(--fg);font-weight:650}
+html[data-ui="next"] .next-pill{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  background:var(--panel2);border-radius:999px;padding:5px 9px;font-size:10.5px;
+  color:var(--dim);white-space:nowrap;
+}
+html[data-ui="next"] .next-icon-btn{
+  appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--dim);
+  width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;flex:0 0 34px;
+}
+html[data-ui="next"] .next-icon-btn svg{width:16px;height:16px}
+html[data-ui="next"] .next-menu-btn{display:none}
+html[data-ui="next"] .theme-style-group,
+html[data-ui="next"] .theme-style-group + .theme-sep{display:none!important}
+html[data-ui="next"] #settingsCatBar{display:none!important}
+html[data-ui="next"] #nextContent{flex:1;min-width:0;min-height:0}
+html[data-ui="next"] #nextContent > main{
+  padding:24px;max-width:1600px;margin:0 auto;width:100%;
+}
+html[data-ui="next"] .next-page-intro{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  margin-bottom:18px;
+}
+html[data-ui="next"] .next-page-intro h2{margin:0 0 5px;font-size:22px;letter-spacing:-.03em;font-weight:750}
+html[data-ui="next"] .next-page-intro p{margin:0;font-size:12px;color:var(--dim)}
+/* 顶栏已经有页面标题，旧页面的重复标题块不再占位。 */
+html[data-ui="next"] #pageOverview > div:first-child,
+html[data-ui="next"] #pageTasks > div:first-child,
+html[data-ui="next"] #pageAgents > div:first-child,
+html[data-ui="next"] #pageSettings > div:first-child,
+html[data-ui="next"] #accountsHeader > div:first-child{display:none!important}
+/* initPageNav() 会把页面内容包进 .page-nav-body，页头不再是页面 div 的直接子节点。 */
+html[data-ui="next"] #pageTasks .page-nav-body > div[style*="margin-bottom:16px"]:first-of-type,
+html[data-ui="next"] #pageAgents .page-nav-body > div[style*="margin-bottom:16px"]:first-of-type,
+html[data-ui="next"] #pageSettings .page-nav-body > div[style*="margin-bottom:16px"]:first-of-type{display:none!important}
+html[data-ui="next"] #pageLogs > div:first-child > div:first-child{display:none!important}
+html[data-ui="next"] #pageAnalytics .pagehead .pagetitle,
+html[data-ui="next"] #pageAnalytics .pagehead .pagesub{display:none!important}
+html[data-ui="next"] .next-page-intro-actions{display:flex;align-items:center;gap:8px}
+html[data-ui="next"] .next-realm-switch{
+  display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--line);
+  border-radius:10px;background:var(--panel2);
+}
+html[data-ui="next"] .next-realm-switch button{
+  appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;font-size:11px;
+  font-weight:600;padding:5px 9px;border-radius:7px;cursor:pointer;white-space:nowrap;
+}
+html[data-ui="next"] .next-realm-switch button:hover{color:var(--fg)}
+html[data-ui="next"] .next-realm-switch button.active{background:var(--panel);color:var(--fg);box-shadow:var(--shadow-sm)}
+html[data-ui="next"] .next-table-scroll{overflow-x:auto;border-radius:12px;border:1px solid var(--line)}
+html[data-ui="next"] .next-scheduler-section{
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:0;margin-bottom:18px;overflow:hidden;box-shadow:var(--shadow-sm);
+}
+html[data-ui="next"] .next-section-head{padding:14px 18px 10px;border-bottom:1px solid var(--line)}
+html[data-ui="next"] .next-section-head h2{margin:0;font-size:14px;font-weight:700;letter-spacing:-.01em}
+html[data-ui="next"] .next-section-head p{margin:3px 0 0;font-size:10.5px;color:var(--dim)}
+html[data-ui="next"] .next-scheduler-section #schedulerBar{border-top:0;padding:12px 18px}
+html[data-ui="next"] .next-sched-toggle{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);white-space:nowrap}
+html[data-ui="next"] .next-switch{
+  appearance:none;border:0;background:var(--line-hover);width:38px;height:22px;border-radius:999px;
+  padding:2px;cursor:pointer;position:relative;transition:background .18s ease;flex:0 0 38px;
+}
+html[data-ui="next"] .next-switch[aria-checked="true"]{background:var(--accent)}
+html[data-ui="next"] .next-switch:disabled{opacity:.5;cursor:wait}
+html[data-ui="next"] .next-switch-knob{
+  display:block;width:18px;height:18px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(16,24,40,.25);transition:transform .18s ease;
+}
+html[data-ui="next"] .next-switch[aria-checked="true"] .next-switch-knob{transform:translateX(16px)}
+html[data-ui="next"] .next-scheduler-section #btnToggleSched{display:none!important}
+html[data-ui="next"] .next-settings-groups{
+  display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 0 16px;
+  padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;
+  width:fit-content;max-width:100%;
+}
+html[data-ui="next"] .next-settings-group{
+  appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;
+  font-size:11.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;white-space:nowrap;
+}
+html[data-ui="next"] .next-settings-group:hover{color:var(--fg)}
+html[data-ui="next"] .next-settings-group.active{background:var(--panel);color:var(--fg);box-shadow:var(--shadow-sm)}
+html[data-ui="next"] .next-settings-head{margin:0 0 14px}
+html[data-ui="next"] .next-settings-head h2{margin:0 0 4px;font-size:18px;font-weight:750;letter-spacing:-.025em}
+html[data-ui="next"] .next-settings-head p{margin:0;font-size:12px;color:var(--dim)}
+html[data-ui="next"] #pageSettings section[hidden]{display:none!important}
+html[data-ui="next"] #pageSettings .page-sidebar{display:none!important}
+html[data-ui="next"] #pageSettings .page-nav-body{display:block!important}
+
+/* ---- 页面组件 ---- */
+html[data-ui="next"] main section,
+html[data-ui="next"] main .card,
+html[data-ui="next"] main .panel,
+html[data-ui="next"] main .kpi,
+html[data-ui="next"] #pageAnalytics .panel{
+  border-radius:14px;border-color:var(--line);box-shadow:var(--shadow-sm);
+}
+html[data-ui="next"] main section{padding:18px 20px;margin-bottom:18px}
+html[data-ui="next"] main section > h2,
+html[data-ui="next"] main section h2{
+  font-size:15px;font-weight:700;letter-spacing:-.01em;
+}
+html[data-ui="next"] main h1,
+html[data-ui="next"] main h2,
+html[data-ui="next"] main h3{color:var(--fg)}
+html[data-ui="next"] main p,
+html[data-ui="next"] main .hint,
+html[data-ui="next"] main .meta{color:var(--dim)}
+html[data-ui="next"] .cards{gap:12px;margin-bottom:16px}
+html[data-ui="next"] .card{padding:14px 16px;background:var(--panel)}
+html[data-ui="next"] .card .k{font-size:10.5px;color:var(--dim);font-weight:600;letter-spacing:.02em;text-transform:none}
+html[data-ui="next"] .card .v{font-size:23px;font-weight:750;letter-spacing:-.04em}
+html[data-ui="next"] .card .s{font-size:10px;color:var(--dim-light)}
+html[data-ui="next"] .gw-summary{border-radius:16px;box-shadow:var(--shadow-sm);margin-bottom:18px}
+html[data-ui="next"] #cards .card .k{font-size:10.5px}
+html[data-ui="next"] #cards .card .v{font-size:21px}
+html[data-ui="next"] .realm-cards-grid{gap:12px!important;margin-bottom:18px!important}
+html[data-ui="next"] .realm-card{
+  background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:14px!important;
+  padding:15px 16px!important;box-shadow:var(--shadow-sm)!important;
+  transition:border-color .15s ease,box-shadow .15s ease,transform .15s ease;
+}
+html[data-ui="next"] .realm-card:hover{border-color:var(--line-hover)!important;transform:translateY(-1px)}
+html[data-ui="next"] .realm-card.active{
+  border-color:var(--accent)!important;box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-sm)!important;
+}
+html[data-ui="next"] .realm-card .credit-summary span[style*="font-size:22px"]{font-size:21px!important}
+html[data-ui="next"] .realm-badge-intl,
+html[data-ui="next"] .realm-badge-cn,
+html[data-ui="next"] .realm-badge-codearts{
+  border-radius:999px!important;padding:3px 8px!important;font-size:9.5px!important;font-weight:700!important;
+}
+html[data-ui="next"] .realm-badge-intl{background:var(--accent-soft)!important;color:var(--accent)!important;border:1px solid rgba(79,70,229,.18)!important}
+html[data-ui="next"] .realm-badge-cn{background:var(--warn-soft)!important;color:var(--warn)!important;border:1px solid rgba(247,144,9,.2)!important}
+html[data-ui="next"] .realm-badge-codearts{background:var(--accent2-soft)!important;color:#047857!important;border:1px solid rgba(18,183,106,.2)!important}
+html[data-ui="next"] .badge{
+  border-radius:999px!important;font-size:9.5px!important;padding:3px 7px!important;font-weight:650!important;
+}
+html[data-ui="next"] .badge.ok{background:var(--accent2-soft)!important;color:#047857!important;border-color:rgba(18,183,106,.2)!important}
+html[data-ui="next"] .badge.warn{background:var(--warn-soft)!important;color:#b54708!important;border-color:rgba(247,144,9,.2)!important}
+html[data-ui="next"] .badge.bad{background:var(--bad-soft)!important;color:#b42318!important;border-color:rgba(240,68,56,.2)!important}
+html[data-ui="next"] .pill,
+html[data-ui="next"] .chip,
+html[data-ui="next"] .range-btn,
+html[data-ui="next"] .realm-pill{border-radius:999px!important}
+html[data-ui="next"] .range-btn{font-size:10.5px!important;padding:4px 9px!important}
+html[data-ui="next"] .range-btn.on{background:var(--panel)!important;color:var(--fg)!important;box-shadow:var(--shadow-sm)!important}
+html[data-ui="next"] .seg{border-radius:10px!important;padding:3px!important;background:var(--panel2)!important;border-color:var(--line)!important}
+html[data-ui="next"] .seg button{border-radius:7px!important;font-size:11px!important}
+html[data-ui="next"] .seg button.on{background:var(--panel)!important;color:var(--fg)!important;box-shadow:var(--shadow-sm)!important}
+
+/* 表格 */
+html[data-ui="next"] main table{font-size:11.5px;border-collapse:collapse}
+html[data-ui="next"] main table th{
+  background:var(--panel2)!important;color:var(--dim)!important;font-size:9.5px!important;
+  font-weight:700!important;letter-spacing:.04em;text-transform:uppercase;
+  padding:9px 12px!important;border-bottom:1px solid var(--line)!important;white-space:nowrap;
+}
+html[data-ui="next"] main table td{
+  padding:10px 12px!important;border-bottom:1px solid var(--line)!important;color:var(--fg);
+  vertical-align:middle;
+}
+html[data-ui="next"] main table tr:last-child td{border-bottom:0!important}
+html[data-ui="next"] main table tbody tr:hover td{background:var(--panel2)}
+html[data-ui="next"] .table-wrap{border:1px solid var(--line);border-radius:12px;overflow:auto;background:var(--panel)}
+html[data-ui="next"] .table-wrap table{border:0}
+html[data-ui="next"] .mono{font-variant-numeric:tabular-nums}
+
+/* 按钮与表单 */
+html[data-ui="next"] main button.sec,
+html[data-ui="next"] main .btn,
+html[data-ui="next"] .modal button.sec{
+  appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--fg);
+  border-radius:9px;padding:7px 11px;font:inherit;font-size:11.5px;font-weight:600;
+  cursor:pointer;box-shadow:var(--shadow-sm);transition:background .15s ease,border-color .15s ease;
+}
+html[data-ui="next"] main button.sec:hover,
+html[data-ui="next"] main .btn:hover,
+html[data-ui="next"] .modal button.sec:hover{background:var(--panel2);border-color:var(--line-hover)}
+html[data-ui="next"] main button.sec.mini{padding:4px 8px;font-size:10px;box-shadow:none}
+html[data-ui="next"] main button.primary,
+html[data-ui="next"] main .btn.primary{
+  background:var(--accent)!important;border-color:var(--accent)!important;color:#fff!important;
+  box-shadow:0 4px 10px rgba(79,70,229,.18)!important;
+}
+html[data-ui="next"] main input:not([type="checkbox"]):not([type="radio"]),
+html[data-ui="next"] main select,
+html[data-ui="next"] main textarea,
+html[data-ui="next"] .modal input:not([type="checkbox"]):not([type="radio"]),
+html[data-ui="next"] .modal select,
+html[data-ui="next"] .modal textarea{
+  background:var(--panel)!important;border:1px solid var(--line)!important;color:var(--fg)!important;
+  border-radius:9px!important;padding:7px 10px!important;font:inherit!important;font-size:12px!important;
+  outline:none!important;box-shadow:none!important;
+}
+html[data-ui="next"] main input:focus,
+html[data-ui="next"] main select:focus,
+html[data-ui="next"] main textarea:focus,
+html[data-ui="next"] .modal input:focus,
+html[data-ui="next"] .modal select:focus,
+html[data-ui="next"] .modal textarea:focus{
+  border-color:var(--accent)!important;box-shadow:0 0 0 3px var(--accent-soft)!important;
+}
+html[data-ui="next"] main input[type="checkbox"],
+html[data-ui="next"] main input[type="radio"]{accent-color:var(--accent)}
+html[data-ui="next"] main label{color:var(--dim)}
+html[data-ui="next"] main code,
+html[data-ui="next"] main pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px}
+
+/* 页面内二级导航：新壳改成顶部的横向胶囊条，不再占一列 */
+html[data-ui="next"] .main-page.page-nav-on.active{display:block!important}
+html[data-ui="next"] .main-page.page-nav-on > *{grid-column:auto!important}
+html[data-ui="next"] .main-page.page-nav-on > .page-sidebar{
+  position:static!important;display:flex!important;align-items:center!important;gap:6px!important;
+  flex-wrap:nowrap!important;overflow-x:auto!important;max-height:none!important;
+  padding:0 0 10px!important;margin:0 0 14px!important;
+  background:transparent!important;border:0!important;border-bottom:1px solid var(--line)!important;
+  box-shadow:none!important;top:auto!important;
+}
+html[data-ui="next"] .page-sidebar-head,
+html[data-ui="next"] .page-sidebar-title{display:none!important}
+html[data-ui="next"] .page-nav{display:flex!important;flex-direction:row!important;gap:4px!important;overflow-x:auto!important;padding:0!important;order:1;flex:1;min-width:0}
+html[data-ui="next"] .page-nav-top{
+  display:inline-flex!important;align-items:center!important;order:2;flex:0 0 auto;
+  width:auto!important;max-width:max-content!important;min-width:0!important;
+  border:1px solid var(--line)!important;background:var(--panel)!important;color:var(--dim)!important;
+  border-radius:999px!important;padding:5px 9px!important;font-size:10px!important;cursor:pointer!important;
+  white-space:nowrap!important;margin-left:auto!important;
+}
+html[data-ui="next"] .page-nav-top:hover{color:var(--fg)!important;border-color:var(--line-hover)!important}
+html[data-ui="next"] .page-nav-item{
+  border:1px solid transparent!important;background:transparent!important;color:var(--dim)!important;
+  border-radius:999px!important;padding:5px 10px!important;font-size:11px!important;text-align:left!important;
+  white-space:nowrap!important;
+}
+html[data-ui="next"] .page-nav-item:hover{background:var(--panel2)!important;color:var(--fg)!important}
+html[data-ui="next"] .page-nav-item.active{background:var(--accent-soft)!important;color:var(--accent)!important;font-weight:650!important;border-color:rgba(79,70,229,.14)!important}
+html[data-ui="next"] .page-sidebar-toggle{border-radius:6px!important;border-color:var(--line)!important;background:var(--panel)!important}
+
+/* 弹窗 */
+html[data-ui="next"] .modal{border-radius:16px!important;border-color:var(--line)!important;box-shadow:var(--shadow-md)!important;background:var(--panel)!important}
+html[data-ui="next"] .modal-hd{border-bottom:1px solid var(--line)!important;padding:14px 18px!important}
+html[data-ui="next"] .modal-bd{padding:16px 18px!important}
+html[data-ui="next"] .modal-ft{border-top:1px solid var(--line)!important;padding:12px 18px!important;background:var(--panel2)!important}
+html[data-ui="next"] .modal-mask{background:var(--overlay-mask)!important}
+html[data-ui="next"] .modal-x{border-radius:7px!important}
+
+/* 用量页：保留图表结构，只统一表面 */
+html[data-ui="next"] #pageAnalytics .wrap{padding:0!important;max-width:none!important}
+html[data-ui="next"] #pageAnalytics .pagehead{margin-bottom:18px!important}
+html[data-ui="next"] #pageAnalytics .pagetitle{font-size:22px!important;letter-spacing:-.03em!important;font-weight:750!important}
+html[data-ui="next"] #pageAnalytics .pagesub{font-size:11px!important;color:var(--dim)!important}
+html[data-ui="next"] #pageAnalytics .kpis{gap:12px!important}
+html[data-ui="next"] #pageAnalytics .kpi{background:var(--panel)!important;border:1px solid var(--line)!important;box-shadow:var(--shadow-sm)!important;padding:14px 16px!important}
+html[data-ui="next"] #pageAnalytics .kpi .k{font-size:10.5px!important;color:var(--dim)!important}
+html[data-ui="next"] #pageAnalytics .kpi .v{font-size:24px!important;font-weight:750!important;letter-spacing:-.04em!important}
+html[data-ui="next"] #pageAnalytics .panel{background:var(--panel)!important;border:1px solid var(--line)!important;box-shadow:var(--shadow-sm)!important}
+html[data-ui="next"] #pageAnalytics .phead{padding:14px 16px!important;border-bottom:1px solid var(--line)!important}
+html[data-ui="next"] #pageAnalytics .phead h2{font-size:14px!important;font-weight:700!important}
+html[data-ui="next"] #pageAnalytics .pbody{padding:14px 16px!important}
+html[data-ui="next"] #pageAnalytics .fold{border-color:var(--line)!important;border-radius:12px!important;background:var(--panel)!important}
+html[data-ui="next"] #pageAnalytics .fold summary h2{font-size:14px!important}
+html[data-ui="next"] #pageAnalytics .hm-cell{border-radius:3px!important}
+
+/* 手机壳 */
+html[data-ui="next"] #nextBottomNav{display:none}
+html[data-ui="next"] #nextMoreSheet{display:none}
+html[data-ui="next"] .next-sidebar-backdrop{display:none}
+html[data-ui="next"] .next-more-handle{width:34px;height:4px;border-radius:999px;background:var(--line-hover);margin:8px auto 12px}
+html[data-ui="next"] .next-more-title{font-size:15px;font-weight:750;letter-spacing:-.02em;padding:0 18px 12px}
+html[data-ui="next"] .next-more-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 16px}
+html[data-ui="next"] .next-more-item{
+  appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--fg);
+  border-radius:12px;padding:13px 12px;display:flex;align-items:center;gap:9px;
+  font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+}
+html[data-ui="next"] .next-more-item svg{width:17px;height:17px;color:var(--dim)}
+html[data-ui="next"] .next-more-item.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+html[data-ui="next"] .next-more-item.active svg{color:var(--accent)}
+html[data-ui="next"] .next-more-sep{height:1px;background:var(--line);margin:14px 16px}
+html[data-ui="next"] .next-more-system{
+  appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;font-size:11.5px;
+  display:block;width:calc(100% - 32px);text-align:left;padding:10px 4px;margin:0 16px;border-radius:8px;cursor:pointer;
+}
+html[data-ui="next"] .next-more-system:hover{background:var(--panel2);color:var(--fg)}
+html[data-ui="next"] .next-more-danger{color:var(--bad)}
+html[data-ui="next"] .next-more-danger:hover{background:var(--bad-soft);color:var(--bad)}
+
+@media (max-width: 1100px){
+  html[data-ui="next"] #nextSidebar{width:210px;flex-basis:210px}
+  html[data-ui="next"] #nextContent > main{padding:20px}
+  html[data-ui="next"] .next-topbar-actions .meta{display:none}
+}
+@media (max-width: 860px){
+  html[data-ui="next"] #nextSidebar{
+    position:fixed;left:0;top:0;bottom:0;width:260px;flex-basis:260px;
+    transform:translateX(-104%);transition:transform .22s ease;box-shadow:var(--shadow-md);
+  }
+  html[data-ui="next"] body.next-sidebar-open #nextSidebar{transform:translateX(0)}
+  html[data-ui="next"] .next-sidebar-backdrop{
+    display:block;position:fixed;inset:0;z-index:35;background:var(--overlay-mask);
+    opacity:0;pointer-events:none;transition:opacity .2s ease;
+  }
+  html[data-ui="next"] body.next-sidebar-open .next-sidebar-backdrop{opacity:1;pointer-events:auto}
+  html[data-ui="next"] .next-menu-btn{display:inline-flex}
+  html[data-ui="next"] #nextTopbar{height:60px;flex-basis:60px;padding:0 14px;gap:10px}
+  html[data-ui="next"] #nextPageTitle{font-size:16px}
+  html[data-ui="next"] #nextPageDesc{display:none}
+  html[data-ui="next"] .next-topbar-actions .header-right .meta,
+  html[data-ui="next"] .next-topbar-actions .header-right .lang-btn{display:none}
+  html[data-ui="next"] .next-topbar-actions .next-pill{display:inline-flex;font-size:9.5px;padding:4px 7px}
+  html[data-ui="next"] .next-topbar-actions{gap:5px}
+  html[data-ui="next"] #nextContent > main{padding:16px 14px 88px}
+  html[data-ui="next"] #nextBottomNav{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:45;
+    height:calc(62px + env(safe-area-inset-bottom,0px));
+    padding:4px 6px env(safe-area-inset-bottom,0px);
+    background:var(--header-bg);backdrop-filter:blur(14px);
+    border-top:1px solid var(--line);align-items:center;justify-content:space-around;
+  }
+  html[data-ui="next"] .next-bottom-item{
+    appearance:none;border:0;background:transparent;color:var(--dim-light);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    font:inherit;font-size:8.5px;font-weight:600;min-width:54px;height:52px;border-radius:10px;cursor:pointer;
+  }
+  html[data-ui="next"] .next-bottom-item svg{width:19px;height:19px}
+  html[data-ui="next"] .next-bottom-item.active{color:var(--accent);background:var(--accent-soft)}
+  html[data-ui="next"] #nextMoreSheet{
+    display:block;position:fixed;inset:0;z-index:70;pointer-events:none;
+  }
+  html[data-ui="next"] #nextMoreSheet .next-more-backdrop{
+    position:absolute;inset:0;background:var(--overlay-mask);opacity:0;transition:opacity .2s ease;
+  }
+  html[data-ui="next"] #nextMoreSheet .next-more-panel{
+    position:absolute;left:0;right:0;bottom:0;background:var(--panel);
+    border-radius:18px 18px 0 0;padding:0 0 calc(14px + env(safe-area-inset-bottom,0px));
+    box-shadow:var(--shadow-md);transform:translateY(104%);transition:transform .22s ease;
+  }
+  html[data-ui="next"] #nextMoreSheet.open{pointer-events:auto}
+  html[data-ui="next"] #nextMoreSheet.open .next-more-backdrop{opacity:1}
+  html[data-ui="next"] #nextMoreSheet.open .next-more-panel{transform:translateY(0)}
+  html[data-ui="next"] body.next-more-open{overflow:hidden}
+  html[data-ui="next"] .page-sidebar{top:70px!important}
+  html[data-ui="next"] .next-topbar-actions .theme-dropdown{right:-4px!important}
+  html[data-ui="next"] .realm-cards-grid{grid-template-columns:1fr 1fr!important}
+  html[data-ui="next"] #cards{grid-template-columns:1fr 1fr!important}
+  html[data-ui="next"] #cards .card:nth-child(3){border-left:0!important;border-top:1px solid var(--line)}
+  html[data-ui="next"] #cards .card:nth-child(4){border-top:1px solid var(--line)}
+  html[data-ui="next"] #pageAnalytics .kpis{grid-template-columns:1fr 1fr!important}
+  html[data-ui="next"] #pageAnalytics .kpi.big{grid-column:auto!important}
+}
+@media (max-width: 520px){
+  html[data-ui="next"] .realm-cards-grid{grid-template-columns:1fr!important}
+  html[data-ui="next"] #nextTopbar .next-topbar-actions .header-right{gap:4px}
+  html[data-ui="next"] #nextContent > main{padding:14px 11px 88px}
+  html[data-ui="next"] main section{padding:14px 13px}
+  html[data-ui="next"] .next-page-intro h2{font-size:20px}
+  html[data-ui="next"] #pageAnalytics .kpis{grid-template-columns:1fr!important}
+}
+
+html:not([data-ui="next"]) #nextSidebar, html:not([data-ui="next"]) #nextTopbar, html:not([data-ui="next"]) #nextBottomNav, html:not([data-ui="next"]) #nextMoreSheet, html:not([data-ui="next"]) #nextSidebarBackdrop, html:not([data-ui="next"]) .next-page-intro {display:none!important}
+html[data-ui="next"] .console-shell {display:contents!important}
+html[data-ui="next"] .console-sidebar, html[data-ui="next"] .console-scrim, html[data-ui="next"] .console-contextbar, html[data-ui="next"] #consoleLayoutOption {display:none!important}
+html[data-ui="next"] [data-next-tab][hidden] {display:none!important}
+html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:1600px;margin:0 auto;width:100%}
+</style>
 </head>
 <body>
 <header>
@@ -4529,7 +5055,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     </div>
     <div class="console-service"><span id="consoleStatusSlot"></span><span>本地网关</span><span class="console-port" id="consolePort">8788</span></div>
     <a class="gh-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer"
-       title="查看 GitHub 项目仓库" aria-label="GitHub 项目仓库">
+       title="查看 WorkBuddy 项目仓库" aria-label="WorkBuddy 项目仓库">
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
       </svg>
@@ -4564,6 +5090,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
           <button type="button" class="theme-option" data-theme-style-option="miuix" onclick="selectStyle('miuix', event)" role="menuitem">MiuiX</button>
         </div>
         <div class="theme-sep" role="separator"></div>
+        <button type="button" class="theme-option" id="nextLayoutOption" onclick="toggleNextLayout()" role="menuitem">新导航布局</button>
         <button type="button" class="theme-option" id="consoleLayoutOption" onclick="toggleConsoleLayout(event)" role="menuitemcheckbox" aria-checked="false">控制台布局</button>
         <div class="theme-sep" role="separator"></div>
         <button type="button" class="theme-option" id="themeOptLight" onclick="selectTheme('light', event)" role="menuitem">
@@ -4616,7 +5143,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
      align-items:center;justify-content:center;padding:20px;background:var(--bg)">
   <div style="width:min(380px,100%);background:var(--panel);border:1px solid var(--line);
               border-radius:14px;padding:26px 24px;box-shadow:0 10px 30px rgba(15,23,42,.12)">
-    <div style="font-size:16px;font-weight:700;margin-bottom:6px">WorkBuddy 网关</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:6px">WorkBuddy</div>
     <div style="font-size:12px;color:var(--dim);margin-bottom:18px">请输入面板访问密码</div>
     <input id="panelPwdInput" type="password" placeholder="面板密码" autocomplete="current-password"
            onkeydown="if(event.key==='Enter') submitPanelLogin()"
@@ -4637,6 +5164,84 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     </div>
   </div>
 </div>
+<div id="nextShell">
+  <aside id="nextSidebar" aria-label="主导航">
+    <div class="next-brand">
+      <div class="next-brand-mark">W</div>
+      <div class="next-brand-text"><b>WorkBuddy</b><span>gateway console</span></div>
+    </div>
+    <div class="next-nav-label">工作台</div>
+    <nav class="next-nav" id="nextNav">
+      <button type="button" class="next-nav-item" data-next-tab="overview" onclick="nextGo('overview')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>总览</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="gateway" onclick="nextGo('gateway')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>
+        <span>网关</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="accounts" onclick="nextGo('accounts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg>
+        <span>账号</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="analytics" onclick="nextGo('analytics')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg>
+        <span>用量</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="tasks" onclick="nextGo('tasks')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>
+        <span>自动化</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="agents" onclick="nextGo('agents')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M9 7V5.5A2.5 2.5 0 0 1 11.5 3h1A2.5 2.5 0 0 1 15 5.5V7M9 12h.01M15 12h.01M9.5 15.5h5"/></svg>
+        <span>智能体</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="media" onclick="nextGo('media')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5l2 5h4l2-5M10 14l2 2 2-2"/></svg>
+        <span>媒体</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="settings" onclick="nextGo('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>
+        <span>设置</span>
+      </button>
+      <button type="button" class="next-nav-item" data-next-tab="logs" onclick="nextGo('logs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg>
+        <span>日志</span>
+      </button>
+    </nav>
+    <div class="next-sidebar-foot">
+      <a class="next-side-link" href="https://github.com/ardeyouxipianyi/workbuddy2api-hub" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        WorkBuddy 仓库
+      </a>
+      <button type="button" class="next-side-link" onclick="toggleConsoleWindow()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg>
+        运行日志窗口
+      </button>
+      <button type="button" class="next-side-link next-side-danger" onclick="shutdownGateway()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></svg>
+        关闭网关
+      </button>
+      <div class="next-side-status"><span class="next-status-dot"></span> 网关运行中</div>
+    </div>
+  </aside>
+  <div id="nextSidebarBackdrop" class="next-sidebar-backdrop" onclick="nextOpenSidebar(false)"></div>
+  <div id="nextMain">
+    <div id="nextTopbar">
+      <div class="next-topbar-left">
+        <button type="button" id="nextMenuBtn" class="next-icon-btn next-menu-btn" onclick="nextOpenSidebar()" aria-label="打开导航">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="next-page-heading">
+          <div id="nextPageTitle">总览</div>
+          <div id="nextPageDesc">出口、账号和最近请求一屏看完</div>
+        </div>
+      </div>
+      <div class="next-topbar-actions" id="nextTopbarActions">
+        <span id="nextRealmPill" class="next-pill"><span class="next-status-dot"></span><span id="nextRealmName">CodeArts</span></span>
+      </div>
+    </div>
+    <div id="nextContent">
 <div class="console-scrim" id="consoleScrim" onclick="setConsoleNavOpen(false)" aria-hidden="true"></div>
 <div class="console-shell">
 <aside class="console-sidebar" id="consoleSidebar" aria-label="功能导航">
@@ -4687,7 +5292,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     <div><span class="console-context-root">WorkBuddy API Hub</span><span class="console-context-sep">/</span><span id="consoleCurrentPage">运行概览</span></div>
     <div class="console-context-actions"><span id="consoleRefreshState">自动刷新</span><button type="button" class="sec mini" onclick="refresh()" title="立即刷新当前数据">刷新数据</button></div>
   </div>
-  <div id="pageGateway" class="main-page">
+  <div id="pageOverview" class="main-page">
   <!-- 页面头部：标题 + 一行说明，与其它页面的头部结构保持一致 -->
   <div id="gatewayPageHead" style="margin-bottom:16px">
     <h2 id="gatewayPageTitle" style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">网关与账号</h2>
@@ -4839,6 +5444,23 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
     </div>
   </section>
 
+  </div><!-- /pageOverview -->
+
+  <div id="pageGateway" class="main-page">
+    <div class="next-page-intro">
+      <div>
+        <h2>网关模型</h2>
+        <p>当前出口的模型目录、能力、思考档位与在售倍率。</p>
+      </div>
+      <div class="next-page-intro-actions">
+        <div class="next-realm-switch" id="nextGatewayRealmSwitch">
+          <button type="button" data-realm="intl" onclick="switchViewRealm('intl')">国际版</button>
+          <button type="button" data-realm="cn" onclick="switchViewRealm('cn')">国内版</button>
+          <button type="button" data-realm="codearts" id="nextGatewayRealmCodearts" onclick="switchViewRealm('codearts')">CodeArts</button>
+        </div>
+      </div>
+    </div>
+
   <!-- 版本模型库与能力清单 -->
   <section id="gatewayModelsSection">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
@@ -4865,7 +5487,7 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
          信息/缓存文件）→ 黄色警示「模型、倍率数据可能不一致」。内容由
          /v1/models 的 catalog 字段驱动，见 renderModelsSourceLine。 -->
     <div id="modelsSourceLine" style="font-size:12px;color:var(--dim);margin:0 0 12px;min-height:16px"></div>
-    <div style="overflow-x:auto">
+    <div class="next-table-scroll">
       <table id="modelsTable" class="data-cards">
         <thead>
           <tr>
@@ -5492,6 +6114,18 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
 
 
   <div id="pageSettings" class="main-page">
+    <div class="next-settings-groups" id="nextSettingsGroups">
+      <button type="button" class="next-settings-group active" data-settings-group="basic" onclick="nextSettingsGroup('basic', this)">基础</button>
+      <button type="button" class="next-settings-group" data-settings-group="api" onclick="nextSettingsGroup('api', this)">API 与出口</button>
+      <button type="button" class="next-settings-group" data-settings-group="model" onclick="nextSettingsGroup('model', this)">模型与定价</button>
+      <button type="button" class="next-settings-group" data-settings-group="automation" onclick="nextSettingsGroup('automation', this)">自动化</button>
+      <button type="button" class="next-settings-group" data-settings-group="stability" onclick="nextSettingsGroup('stability', this)">稳定性</button>
+      <button type="button" class="next-settings-group" data-settings-group="system" onclick="nextSettingsGroup('system', this)">日志与系统</button>
+    </div>
+    <div class="next-settings-head">
+      <h2 id="nextSettingsTitle">基础</h2>
+      <p id="nextSettingsDesc">面板密码、语言、窗口和隐私声明。</p>
+    </div>
     <div style="margin-bottom:16px">
       <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">网关设置</h2>
       <div style="font-size:12px;color:var(--dim);margin-top:4px">面板密码与界面语言、API Key 与出口绑定、代理槽与限额、价格估算、出站身份与本地网络工具。</div>
@@ -6523,7 +7157,9 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
         <h2>运行信息</h2>
       <table>
         <tbody>
+          <tr><td>项目</td><td class="mono" id="setProject">WorkBuddy</td></tr>
           <tr><td>当前版本</td><td class="mono" id="setVersion">-</td></tr>
+          <tr><td>更新源</td><td class="mono" id="setUpdateRepo">-</td></tr>
           <tr><td>账号存储目录</td><td class="mono" id="setAccountsDir">-</td></tr>
           <tr><td>用量日志目录</td><td class="mono" id="setUsageDir">-</td></tr>
           <tr><td>设置文件</td><td class="mono" id="setFile">-</td></tr>
@@ -6664,6 +7300,63 @@ try { if(localStorage.getItem('wb-console-layout') === '1') {
 
   <footer>每 5 秒自动刷新 · 数据来自本机反代 <span class="mono" id="logfile"></span></footer>
 </main>
+</div><!-- /console-shell -->
+    </div><!-- /nextContent -->
+  </div><!-- /nextMain -->
+</div><!-- /nextShell -->
+<nav id="nextBottomNav" aria-label="手机导航">
+  <button type="button" class="next-bottom-item" data-next-tab="overview" onclick="nextGo('overview')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    <span>总览</span>
+  </button>
+  <button type="button" class="next-bottom-item" data-next-tab="gateway" onclick="nextGo('gateway')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>
+    <span>网关</span>
+  </button>
+  <button type="button" class="next-bottom-item" data-next-tab="accounts" onclick="nextGo('accounts')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg>
+    <span>账号</span>
+  </button>
+  <button type="button" class="next-bottom-item" data-next-tab="analytics" onclick="nextGo('analytics')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg>
+    <span>用量</span>
+  </button>
+  <button type="button" class="next-bottom-item" id="nextMoreBtn" onclick="nextOpenMore(true)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+    <span>更多</span>
+  </button>
+</nav>
+<div id="nextMoreSheet" class="next-more-sheet" aria-hidden="true">
+  <div class="next-more-backdrop" onclick="nextOpenMore(false)"></div>
+  <div class="next-more-panel" role="dialog" aria-label="更多导航">
+    <div class="next-more-handle"></div>
+    <div class="next-more-title">更多</div>
+    <div class="next-more-grid">
+      <button type="button" class="next-more-item" data-next-tab="tasks" onclick="nextGo('tasks')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>
+        <span>自动化</span>
+      </button>
+      <button type="button" class="next-more-item" data-next-tab="agents" onclick="nextGo('agents')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M9 7V5.5A2.5 2.5 0 0 1 11.5 3h1A2.5 2.5 0 0 1 15 5.5V7M9 12h.01M15 12h.01M9.5 15.5h5"/></svg>
+        <span>智能体</span>
+      </button>
+      <button type="button" class="next-more-item" data-next-tab="media" onclick="nextGo('media')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5l2 5h4l2-5M10 14l2 2 2-2"/></svg>
+        <span>媒体</span>
+      </button>
+      <button type="button" class="next-more-item" data-next-tab="settings" onclick="nextGo('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>
+        <span>设置</span>
+      </button>
+      <button type="button" class="next-more-item" data-next-tab="logs" onclick="nextGo('logs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg>
+        <span>日志</span>
+      </button>
+    </div>
+    <div class="next-more-sep"></div>
+    <button type="button" class="next-more-system" onclick="nextOpenMore(false); toggleConsoleWindow()">在新窗口打开运行日志</button>
+    <button type="button" class="next-more-system next-more-danger" onclick="nextOpenMore(false); shutdownGateway()">关闭网关服务</button>
+  </div>
 </div>
 
 <div class="modal-mask" id="codeartsOauthModal">
@@ -10306,9 +10999,13 @@ let ACTIVITY_LIMIT = ACTIVITY_PAGE;
 let ACTIVITY_LOADING = false;
 
 const ACTIVITY_TASK_LABEL = {checkin: '国内版签到', daily_chat: '国际版每日活跃'};
+function activityTaskLabel(r){
+  if(r && r.task === 'checkin' && r.realm === 'codearts') return 'CodeArts 签到';
+  return ACTIVITY_TASK_LABEL[r.task] || r.task || '—';
+}
 const ACTIVITY_TRIGGER_LABEL = {scheduler: '定时', manual: '手动', account_add: '添加账号',
                                 account_import: '导入', unknown: '未知'};
-const ACTIVITY_REALM_LABEL = {cn: '国内版', intl: '国际版'};
+const ACTIVITY_REALM_LABEL = {cn: '国内版', intl: '国际版', codearts: 'CodeArts'};
 
 function activityValue(id){
   const el = document.getElementById(id);
@@ -10393,7 +11090,7 @@ function renderActivityBoard(data){
           + esc(activityWho(r)) + '" data-no-i18n>' + esc(activityWho(r)) + '</span></td>'
         + '<td style="text-align:center" data-label="区域">'
           + esc(ACTIVITY_REALM_LABEL[r.realm] || '—') + '</td>'
-        + '<td data-label="任务">' + esc(ACTIVITY_TASK_LABEL[r.task] || r.task || '—') + '</td>'
+        + '<td data-label="任务">' + esc(activityTaskLabel(r)) + '</td>'
         + '<td style="text-align:center" data-label="来源">'
           + esc(ACTIVITY_TRIGGER_LABEL[r.trigger] || r.trigger || '—') + '</td>'
         + '<td style="text-align:center" data-label="结果">' + resultBadge(r.ok) + '</td>'
@@ -12287,7 +12984,7 @@ function generatePageList(current, total){
 
 // Tab ids in nav order. One list so the restore path and the nav cannot
 // drift apart.
-const MAIN_TABS = ['gateway', 'accounts', 'tasks', 'media', 'analytics', 'agents', 'settings', 'logs'];
+const MAIN_TABS = ['overview', 'gateway', 'accounts', 'tasks', 'media', 'analytics', 'agents', 'settings', 'logs'];
 const MAIN_TAB_STORE = 'wb-proxy-main-tab';
 let currentMainTab = 'gateway';
 let analyticsRange = 'today';
@@ -12463,6 +13160,9 @@ async function startDashboard(){
   // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
   // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
   await loadSettings();
+  // 新面板把账号固定成独立页：服务端仍保留 accounts_separate_tab 字段给旧壳，
+  // 但新壳每次都按拆分布局渲染，避免账号区被搬回总览。
+  if(window.__NEXT_UI__) applyAccountsTabLayout(true);
   await initRealm();
   // 成长任务那条走上游、约 2 秒，只服务「任务与福利」页，而且它自己渲染。原来
   // 它在这一批 Promise.all 里，switchMainTab 因此被押到它后面——落在数据看板
@@ -12474,7 +13174,9 @@ async function startDashboard(){
   updateRecentLimitButtons();
   // The head script already resolved this before first paint; re-apply it
   // here so the data loaders for the active page actually run.
-  switchMainTab(MAIN_TABS.includes(window.__MAIN_TAB__) ? window.__MAIN_TAB__ : 'gateway');
+  switchMainTab(MAIN_TABS.includes(window.__MAIN_TAB__)
+    ? window.__MAIN_TAB__
+    : (window.__NEXT_UI__ ? 'overview' : 'gateway'));
   // 首屏把数据表接上排序：静态标记里就有的表不会被任何 loader 触发 render，
   // 轮询那条兜底要等 5 秒才轮到它。
   applyAllTableSorts();
@@ -12932,6 +13634,15 @@ function navPageRows(){
    i18n 观察者翻译，切语言时也跟着 restore/walk 走，不用在这里额外重建一次。
    没被 walk 过的节点（界面一直是中文）没有 __wbSrc，textContent 本身就是原文。 */
 function navPageLabel(row){
+  // 新壳的导航文案与旧顶栏不同（任务与福利 → 自动化，数据看板 → 用量…），
+  // 设置里的「顶部页签显示」要跟着新壳走，不能把旧标签又露出来。
+  if(window.__NEXT_UI__){
+    const nextLabels = {
+      gateway: '网关', accounts: '账号', tasks: '自动化', analytics: '用量',
+      agents: '智能体', settings: '设置', logs: '日志'
+    };
+    if(nextLabels[row.key]) return nextLabels[row.key];
+  }
   const btn = row.btn;
   const node = btn ? btn.firstChild : null;
   const source = (node && node.nodeType === 3 && node.__wbSrc != null)
@@ -13110,7 +13821,7 @@ function insertBeforeAnchor(sections, anchor){
 
 function applyAccountsTabLayout(separate){
   _accountsSeparateTab = (separate === true);
-  const pageGateway = document.getElementById('pageGateway');
+  const pageGateway = document.getElementById('pageOverview') || document.getElementById('pageGateway');
   const pageAccounts = document.getElementById('pageAccounts');
   if(!pageGateway || !pageAccounts) return _accountsSeparateTab;
 
@@ -13142,8 +13853,12 @@ function applyAccountsTabLayout(separate){
   // 名字跟着走：账号已经不在这一页了，就不能再叫「网关与账号」。
   const gatewayLabel = document.getElementById('navGatewayLabel');
   if(gatewayLabel) gatewayLabel.textContent = document.documentElement.getAttribute('data-console-layout') === 'on' ? '运行概览' : (_accountsSeparateTab ? '网关' : '网关与账号');
-  // 页头（标题 + 一行说明）由 applyConsoleView 按当前视图（概览 / 模型 / 请求）统一维护。
-  if(document.documentElement.getAttribute('data-console-layout') === 'on') {
+  if(window.__NEXT_UI__){
+    const title = document.getElementById('gatewayPageTitle');
+    const desc = document.getElementById('gatewayPageDesc');
+    if(title) title.textContent = '总览';
+    if(desc) desc.textContent = '出口、账号健康、当日调用和最近请求一屏看完。';
+  } else if(document.documentElement.getAttribute('data-console-layout') === 'on') {
     if(typeof applyConsoleView === 'function') applyConsoleView(CONSOLE_VIEW);
   } else {
     const pageTitle = document.getElementById('gatewayPageTitle');
@@ -13367,7 +14082,16 @@ async function saveAccountsSeparateTab(btn){
 // ==== 账号页签模式结束 ====
 
 // Layout and color theme are independent; keep the original navigation by default.
+function toggleNextLayout(){
+  const url = new URL(window.location.href);
+  if(window.__NEXT_UI__) url.searchParams.delete('ui');
+  else url.searchParams.set('ui', 'next');
+  url.searchParams.delete('tab');
+  window.location.assign(url.toString());
+}
 function initConsoleLayout(){
+  const nextOption = document.getElementById('nextLayoutOption');
+  if(nextOption && window.__NEXT_UI__) nextOption.textContent = '返回原布局';
   const on = document.documentElement.getAttribute('data-console-layout') === 'on';
   const nav = document.querySelector('.main-nav');
   const sidebar = document.getElementById('consoleSidebar');
@@ -13638,7 +14362,7 @@ async function loadSettings(showToast){
     // 账号页签模式：同样只有明确存过 true 才拆开，其余（没存过、存坏了、
     // 后端没这个字段）都保持上游那个合并的「网关与账号」页。
     const separateTab = data.accounts_separate_tab === true;
-    applyAccountsTabLayout(separateTab);
+    applyAccountsTabLayout(window.__NEXT_UI__ || separateTab);
     applyMediaSettings(data.media);
     const separateState = document.getElementById('setAccountsSeparateState');
     if(separateState) separateState.textContent = separateTab ? '(已开启)' : '(默认：合并)';
@@ -13652,8 +14376,10 @@ async function loadSettings(showToast){
     const winMax = (typeof rawWinMax === 'number' && Number.isFinite(rawWinMax) && rawWinMax >= 0)
       ? rawWinMax : 640;
     applyWinMaxHeight(winMax);
-    const savedCat = (typeof localStorage !== 'undefined') ? (localStorage.getItem('WB_SETTINGS_CAT') || 'all') : 'all';
-    filterSettingsCategory(savedCat);
+    if(!window.__NEXT_UI__){
+      const savedCat = (typeof localStorage !== 'undefined') ? (localStorage.getItem('WB_SETTINGS_CAT') || 'all') : 'all';
+      filterSettingsCategory(savedCat);
+    }
     const winMaxInput = document.getElementById('setWinMaxHeight');
     if(winMaxInput) winMaxInput.value = String(Math.round(winMax));
 
@@ -13922,10 +14648,10 @@ async function loadSettings(showToast){
       await loadQuotaScanCatalog();
       renderQuotaScanModels();
       renderQuotaScanState(data);
-      // 上游响应头超时：没改过时后端给的就是默认 120，所以「等于 120」按默认态
-      // 显示，只有被改过才标出实际秒数。
       const maxPayload = document.getElementById('setMaxPayloadMB');
       if(maxPayload) maxPayload.value = data.max_payload_mb || Math.ceil((data.max_payload_bytes_effective || 16777216) / 1048576);
+      // 上游响应头超时：没改过时后端给的就是默认 120，所以「等于 120」按默认态
+      // 显示，只有被改过才标出实际秒数。
       const headerTimeout = (data.upstream || {}).header_timeout_seconds;
       const headerTimeoutInput = document.getElementById('setHeaderTimeout');
       if(headerTimeoutInput){
@@ -13978,7 +14704,9 @@ async function loadSettings(showToast){
     renderCodeartsSettings(data.codearts);
     updateUI();
     const set = (id, value) => { const el = document.getElementById(id); if(el) el.textContent = value || '-'; };
+    set('setProject', data.project);
     set('setVersion', data.version);
+    set('setUpdateRepo', data.update_repository);
     set('setAccountsDir', data.accounts_dir);
     set('setUsageDir', data.usage_dir);
     set('setFile', data.settings_file);
@@ -14077,7 +14805,15 @@ async function savePanelPassword(btn){
       pwdState.style.color = usingDefault ? 'var(--warn)' : 'var(--accent2)';
     }
   } catch(e) {
-    toast('修改失败: ' + e.message, 'bad');
+    if(isAuthError(e)) return;  // 会话真失效：闸门已经出来了，不再叠一条 toast
+    const msg = String((e && e.message) || '');
+    if(msg.indexOf('current password is wrong') >= 0){
+      toast('当前密码不正确，密码未修改', 'bad');
+    } else if(msg.indexOf('new password must be at least 4') >= 0){
+      toast('新密码至少 4 位', 'bad');
+    } else {
+      toast('修改失败: ' + msg, 'bad');
+    }
   } finally {
     btn.disabled = false;
   }
@@ -15146,8 +15882,6 @@ async function saveUsageKeep(btn){
     if(btn) btn.disabled = false;
   }
 }
-/* 上游响应头超时。后端只接受 >=1 的整数秒，所以先把输入收成整数再发：空值、
-   小数、非数字就地拦下，而不是送上去换一个 400 回来。 */
 async function saveMaxPayload(btn){
   const el = document.getElementById('setMaxPayloadMB');
   const value = Number(el && el.value);
@@ -15160,6 +15894,8 @@ async function saveMaxPayload(btn){
   } catch(e) { toast('保存失败: ' + e.message, 'bad'); }
   finally { if(btn) btn.disabled = false; }
 }
+/* 上游响应头超时。后端只接受 >=1 的整数秒，所以先把输入收成整数再发：空值、
+   小数、非数字就地拦下，而不是送上去换一个 400 回来。 */
 async function saveHeaderTimeout(btn){
   const el = document.getElementById('setHeaderTimeout');
   const value = Math.floor(Number(el && el.value));
@@ -15444,6 +16180,9 @@ function renderRollbackRows(data){
           : !enabled ? '更新服务未安装'
           : busy ? '已有更新任务正在运行' : '';
         const disabled = !!reason;
+        // Backup ids become inline onclick arguments too; keep the same
+        // conservative charset used for account ids, not just HTML escaping.
+        const argAttr = esc(String(arg || '').replace(/[^\w.@-]/g, ''));
         const integrity = complete ? '完整'
           : ('<span style="color:var(--warn)">不完整</span>'
              + (row.reason ? '<div style="font-size:11px;color:var(--dim)">' + esc(row.reason) + '</div>' : ''));
@@ -15454,7 +16193,7 @@ function renderRollbackRows(data){
           + '<td>' + integrity + '</td>'
           + '<td><button class="sec" ' + (disabled ? 'disabled ' : '')
           +   'title="' + esc(reason) + '" '
-          +   'onclick="rollbackToVersion(this, \'' + esc(arg) + '\')">回退到此版本</button></td>'
+          +   'onclick="rollbackToVersion(this, \'' + argAttr + '\')">回退到此版本</button></td>'
           + '</tr>';
       }).join('');
     }
@@ -15812,7 +16551,7 @@ function renderKeyRows(){
         +     '</div>'
         +     '<div id="editKeyAccountPicker_' + i + '" style="display:none;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px">'
         +       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'
-        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称、备注或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
+        +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',true)">全选</button>'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',false)">全不选</button>'
         +       '</div>'
@@ -16418,7 +17157,7 @@ function renderProxySlots(){
     + PROXY_SLOTS.map((s, i) =>
         '<tr>'
         + '<td data-label="名称"><input value="' + esc(s.name || '') + '" placeholder="' + esc(s.label || '') + '" oninput="PROXY_SLOTS[' + i + '].name=this.value; markSlotsDirty()" class="slot-input"></td>'
-        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" placeholder="http://user:pass@127.0.0.1:8080" oninput="PROXY_SLOTS[' + i + '].url=this.value; markSlotsDirty()" class="slot-input mono"></td>'
+        + '<td data-label="代理地址"><input value="' + esc(s.url || '') + '" oninput="PROXY_SLOTS[' + i + '].url=this.value; markSlotsDirty()" class="slot-input mono"></td>'
         + '<td data-label="出口">' + slotExitHtml(s) + '</td>'
         + '<td style="text-align:center" data-label="启用"><input type="checkbox" ' + (s.enabled === false ? '' : 'checked')
         +   ' onchange="PROXY_SLOTS[' + i + '].enabled=this.checked; markSlotsDirty()"></td>'
@@ -16600,8 +17339,9 @@ function switchMainTab(tab){
   // 否则页面容器带着 hidden 被点亮，屏幕上一片空白。
   if(pageHidden(tab)) tab = firstVisiblePage();
   // 账号页被合并掉之后（设置里的「账号独立成一个页签」关闭，默认），
-  // ?tab=accounts 的书签与上次停留的页签都退回「网关与账号」页——区块就在那一页里。
-  if(tab === 'accounts' && !_accountsSeparateTab) tab = 'gateway';
+  // ?tab=accounts 的书签与上次停留的页签都退回总览页——区块就在那一页里。
+  if(tab === 'accounts' && !_accountsSeparateTab) tab = window.__NEXT_UI__ ? 'overview' : 'gateway';
+  if(!window.__NEXT_UI__ && tab === 'overview') tab = 'gateway';
   currentMainTab = tab;
   syncConsoleContext(tab);
   // Remember the page across reloads. The URL is updated so the address bar
@@ -16614,6 +17354,7 @@ function switchMainTab(tab){
     history.replaceState(null, '', url.toString());
   } catch(e){}
   try { localStorage.setItem(MAIN_TAB_STORE, tab); } catch(e){}
+  const btnOverview = document.getElementById('btnNavOverview');
   const btnGateway = document.getElementById('btnNavGateway');
   const btnTasks = document.getElementById('btnNavTasks');
   const btnAccounts = document.getElementById('btnNavAccounts');
@@ -16621,6 +17362,7 @@ function switchMainTab(tab){
   const btnLogs = document.getElementById('btnNavLogs');
   const btnSettings = document.getElementById('btnNavSettings');
   const btnAgents = document.getElementById('btnNavAgents');
+  const pageOverview = document.getElementById('pageOverview');
   const btnMedia = document.getElementById('btnNavMedia');
   const pageGateway = document.getElementById('pageGateway');
   const pageTasks = document.getElementById('pageTasks');
@@ -16631,6 +17373,7 @@ function switchMainTab(tab){
   const pageAgents = document.getElementById('pageAgents');
   const pageMedia = document.getElementById('pageMedia');
   const tabs = [
+    ['overview', btnOverview, pageOverview],
     ['gateway', btnGateway, pageGateway],
     ['accounts', btnAccounts, pageAccounts],
     ['tasks', btnTasks, pageTasks],
@@ -16641,17 +17384,17 @@ function switchMainTab(tab){
     ['media', btnMedia, pageMedia]
   ];
   tabs.forEach(([name, btn, page]) => {
-    if(!btn || !page) return;
+    if(!page) return;
     const on = (name === tab);
-    btn.classList.toggle('active', on);
+    if(btn) btn.classList.toggle('active', on);
     page.classList.toggle('active', on);
     // 每个页面各自按自己的区块重建侧栏；非当前页的区块变化在切过来时补上
     if(on) initPageNav(page);
   });
-  // 从左侧菜单直接切到网关页时回到「运行概览」；内容入口会在这之后覆盖成自己的视图。
-  if(tab === 'gateway') applyConsoleView('overview');
+  if(!window.__NEXT_UI__ && tab === 'gateway') applyConsoleView('overview');
   if(tab === 'tasks'){ loadGrowthTasks(); }
   if(tab === 'accounts' || (!_accountsSeparateTab && tab === 'gateway')){ loadActivityBoard(); }
+  if(window.__NEXT_UI__ && !_accountsSeparateTab && tab === 'overview'){ loadActivityBoard(); }
   if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
   if(tab === 'settings'){ loadSettings(); loadProxySlots(); }
   if(tab === 'agents'){ loadAgents(); }
@@ -18621,9 +19364,8 @@ function nicknameOf(uid){
   const acc = ((state.analytics || {}).accounts || []).find(x => x.uid === uid);
   return acc ? (acc.nickname || acc.uid.slice(0, 8)) : (uid || '').slice(0, 8);
 }
-/* 「实时活动流」原先只截 HH:MM:SS：昨天 22:11 的请求和今天 22:11 的在同一列里
-   长得一模一样，往下翻一段就分不清哪条是刚才进来的。这里补上跨天判断：
-   同一天仍只显示时分秒（平时盯的就是这几行），不是今天的补上月日。 */
+/* 「实时活动流」原先只截 HH:MM:SS：昨天 22:11 和今天 22:11 看起来一模一样。
+   同一天仍只显示时分秒，跨天补上月日。 */
 function recentStamp(iso){
   const s = (iso || '').replace('T', ' ');
   const time = s.slice(11, 19);
@@ -20120,6 +20862,388 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
+})();
+</script>
+<script>
+/* ---- 新面板外壳（/next）----
+   只做导航、布局和状态同步，业务逻辑仍由上面的页面脚本负责。旧 / 不加载
+   这些视觉规则，但脚本本身是幂等的：没有新壳节点时直接返回。 */
+(function(){
+  'use strict';
+
+  var NEXT = !!window.__NEXT_UI__;
+  var MORE_TABS = ['tasks', 'agents', 'media', 'settings', 'logs'];
+
+  function nextCurrentTab(){
+    var page = document.querySelector('.main-page.active');
+    if(!page) return '';
+    var id = page.id || '';
+    if(id === 'pageOverview') return 'overview';
+    if(id === 'pageGateway') return 'gateway';
+    if(id === 'pageAccounts') return 'accounts';
+    if(id === 'pageTasks') return 'tasks';
+    if(id === 'pageAnalytics') return 'analytics';
+    if(id === 'pageAgents') return 'agents';
+    if(id === 'pageMedia') return 'media';
+    if(id === 'pageSettings') return 'settings';
+    if(id === 'pageLogs') return 'logs';
+    return '';
+  }
+
+  function nextRealmLabel(){
+    var realm = window.VIEW_REALM || 'intl';
+    if(realm === 'codearts') return 'CodeArts';
+    if(realm === 'cn') return '国内版';
+    return '国际版';
+  }
+
+  var NEXT_META = {
+    overview: { title: '总览', desc: '出口、账号健康和最近请求一屏看完。' },
+    gateway: { title: '网关', desc: '模型目录、能力、思考档位与在售倍率。' },
+    accounts: { title: '账号', desc: 'WorkBuddy 与 CodeArts 账号、积分和签到记录。' },
+    analytics: { title: '用量', desc: 'Token、请求、缓存、成本和剩余额度。' },
+    tasks: { title: '自动化', desc: '每日活跃、成长任务和后台调度器。' },
+    agents: { title: '智能体', desc: '把本机 AI 客户端一键指向当前网关。' },
+    media: { title: '媒体', desc: '图片与视频生成任务、额度、价格和账号分配。' },
+    settings: { title: '设置', desc: 'API Key、出口、模型、调度和系统选项。' },
+    logs: { title: '日志', desc: '实时运行日志、筛选、导出和落库状态。' }
+  };
+
+  function nextHideConflictingSettings(){
+    var sep = document.getElementById('setAccountsSeparate');
+    if(sep){
+      var sec = sep.closest ? sep.closest('section') : null;
+      if(sec){ sec.setAttribute('data-next-hidden', '1'); sec.hidden = true; }
+    }
+  }
+
+  function nextHideLegacyHeaders(){
+    [['pageSettings', '网关设置'], ['pageTasks', '任务与福利'], ['pageAgents', '智能体配置']].forEach(function(pair){
+      var page = document.getElementById(pair[0]);
+      if(!page) return;
+      var heads = page.querySelectorAll('h2');
+      for(var i = 0; i < heads.length; i++){
+        if((heads[i].textContent || '').indexOf(pair[1]) >= 0){
+          var box = heads[i].closest ? heads[i].closest('div') : null;
+          if(box && !(box.classList && box.classList.contains('page-nav-body'))) box.hidden = true;
+          break;
+        }
+      }
+    });
+  }
+
+  function nextApplyHiddenPages(){
+    var hidden = [];
+    try {
+      if(typeof _hiddenPages !== 'undefined' && Array.isArray(_hiddenPages)) hidden = _hiddenPages;
+    } catch(e){}
+    var order = ['overview', 'gateway', 'accounts', 'analytics', 'tasks', 'agents', 'media', 'settings', 'logs'];
+    var firstVisible = '';
+    order.forEach(function(key){
+      var off = hidden.indexOf(key) >= 0;
+      if(!off && !firstVisible) firstVisible = key;
+      Array.prototype.forEach.call(document.querySelectorAll('[data-next-tab="' + key + '"]'), function(el){
+        el.hidden = off;
+      });
+    });
+    var cur = nextCurrentTab();
+    if(cur && hidden.indexOf(cur) >= 0 && firstVisible && firstVisible !== cur){
+      if(typeof switchMainTab === 'function') switchMainTab(firstVisible);
+    }
+  }
+
+  function nextUpdateSchedSwitch(){
+    var sw = document.getElementById('nextSchedSwitch');
+    var txt = document.getElementById('schedStatusText');
+    if(!sw) return;
+    var on = txt ? (txt.textContent || '').indexOf('运行中') >= 0 : true;
+    sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+
+  function nextSyncChrome(tab){
+    if(!NEXT) return;
+    tab = tab || nextCurrentTab() || 'overview';
+    var meta = NEXT_META[tab] || NEXT_META.overview;
+    var title = document.getElementById('nextPageTitle');
+    var desc = document.getElementById('nextPageDesc');
+    if(title) title.textContent = meta.title;
+    if(desc) desc.textContent = meta.desc;
+
+    Array.prototype.forEach.call(document.querySelectorAll('#nextNav [data-next-tab]'), function(item){
+      item.classList.toggle('active', item.getAttribute('data-next-tab') === tab);
+    });
+    var inMore = MORE_TABS.indexOf(tab) >= 0;
+    Array.prototype.forEach.call(document.querySelectorAll('#nextBottomNav [data-next-tab]'), function(item){
+      item.classList.toggle('active', item.getAttribute('data-next-tab') === tab);
+    });
+    var moreBtn = document.getElementById('nextMoreBtn');
+    if(moreBtn) moreBtn.classList.toggle('active', inMore);
+    Array.prototype.forEach.call(document.querySelectorAll('#nextMoreSheet [data-next-tab]'), function(item){
+      item.classList.toggle('active', item.getAttribute('data-next-tab') === tab);
+    });
+
+    var realm = nextRealmLabel();
+    var realmKey = window.VIEW_REALM || 'intl';
+    var realmName = document.getElementById('nextRealmName');
+    if(realmName) realmName.textContent = realm;
+    var gatewayRealm = document.getElementById('nextGatewayRealm');
+    if(gatewayRealm) gatewayRealm.textContent = realm;
+    Array.prototype.forEach.call(document.querySelectorAll('#nextGatewayRealmSwitch [data-realm]'), function(btn){
+      btn.classList.toggle('active', btn.getAttribute('data-realm') === realmKey);
+    });
+    var caBtn = document.getElementById('nextGatewayRealmCodearts');
+    var caCard = document.getElementById('tabCodearts');
+    if(caBtn){
+      var caVisible = !!(caCard && getComputedStyle(caCard).display !== 'none');
+      caBtn.hidden = !caVisible;
+    }
+    var agentsOff = false;
+    try { agentsOff = (typeof AGENTS_AVAILABLE !== 'undefined' && !AGENTS_AVAILABLE); } catch(e){}
+    Array.prototype.forEach.call(document.querySelectorAll('[data-next-tab="agents"]'), function(el){
+      el.classList.toggle('next-disabled', agentsOff);
+      if(agentsOff){
+        el.setAttribute('title', '智能体配置只在网关本机、用 127.0.0.1 打开面板时可用');
+        el.setAttribute('data-disabled', '1');
+      } else {
+        el.removeAttribute('title');
+        el.removeAttribute('data-disabled');
+      }
+    });
+    if(tab === 'settings'){ nextHideConflictingSettings(); nextSettingsApplySaved(); }
+    nextHideLegacyHeaders();
+    nextApplyHiddenPages();
+    nextUpdateSchedSwitch();
+  }
+
+  function nextGo(tab){
+    var agentsOff = false;
+    try { agentsOff = (typeof AGENTS_AVAILABLE !== 'undefined' && !AGENTS_AVAILABLE); } catch(e){}
+    if(tab === 'agents' && agentsOff){
+      nextOpenMore(false);
+      nextOpenSidebar(false);
+      if(typeof toast === 'function'){
+        toast('智能体配置只在网关本机、用 127.0.0.1 打开面板时可用；当前是远程或容器访问。', 'warn');
+      }
+      return;
+    }
+    if(tab === 'accounts' && typeof applyAccountsTabLayout === 'function'){
+      applyAccountsTabLayout(true);
+    }
+    if(typeof switchMainTab === 'function') switchMainTab(tab);
+    nextSyncChrome(nextCurrentTab() || tab);
+    nextOpenMore(false);
+    nextOpenSidebar(false);
+  }
+
+  function nextOpenMore(open){
+    var sheet = document.getElementById('nextMoreSheet');
+    if(!sheet) return;
+    var on = !!open;
+    sheet.classList.toggle('open', on);
+    sheet.setAttribute('aria-hidden', on ? 'false' : 'true');
+    document.body.classList.toggle('next-more-open', on);
+  }
+
+  function nextOpenSidebar(open){
+    var sidebar = document.getElementById('nextSidebar');
+    if(!sidebar) return;
+    var on = (open === undefined) ? !document.body.classList.contains('next-sidebar-open') : !!open;
+    document.body.classList.toggle('next-sidebar-open', on);
+  }
+
+  var NEXT_SETTINGS_GROUP_ORDER = ['basic', 'api', 'model', 'automation', 'stability', 'system'];
+  var NEXT_SETTINGS_GROUPS = {
+    basic: {
+      title: '基础',
+      desc: '面板密码、界面语言、窗口限制和隐私声明。',
+      items: ['面板访问密码', '界面语言', '顶部页签显示', '账号独立成一个页签', '面板窗口限高', '数据用途声明']
+    },
+    api: {
+      title: 'API 与出口',
+      desc: 'API Key、CodeArts、代理槽、账号限额和出站身份。',
+      items: ['API Key', 'CodeArts 接入', '账号代理槽', '账号限额', '自动切换出站身份', '出站身份版本号', '跨出口回退']
+    },
+    model: {
+      title: '模型与定价',
+      desc: '价格估算、Anthropic 适配、思考档位和模型过滤。',
+      items: ['模型价格估算', '启用 Anthropic Messages', '思考等级挡位映射', '按 API Key 过滤模型列表', '只列出可用模型', '免费额度耗尽回退积分版']
+    },
+    automation: {
+      title: '自动化',
+      desc: '每日活跃、全局提示词、本地网络工具和剩余用量调度。',
+      items: ['国际版每日活跃打卡', '全局提示词', '本地网络工具', '剩余用量优先调度']
+    },
+    stability: {
+      title: '稳定性',
+      desc: '额度探针、退避、超时、并发上限和会话粘滞。',
+      items: ['模型额度窗口探针', '出口级瞬时失败退避', '模型额度定时主动查询', '用量聚合保留窗口', '上游响应头超时', '账号级并发上限', '单请求体上限', '更稳的会话粘滞键']
+    },
+    system: {
+      title: '日志与系统',
+      desc: '日志落库、更新、版本回退和运行信息。',
+      items: ['日志落库', '更新', '版本回退', '运行信息']
+    }
+  };
+
+  function nextSettingsSectionGroup(sec){
+    var h = sec.querySelector('h2');
+    var text = h ? (h.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    var lower = text.toLowerCase();
+    for(var i = 0; i < NEXT_SETTINGS_GROUP_ORDER.length; i++){
+      var key = NEXT_SETTINGS_GROUP_ORDER[i];
+      var items = NEXT_SETTINGS_GROUPS[key].items;
+      for(var j = 0; j < items.length; j++){
+        if(lower.indexOf(items[j].toLowerCase()) === 0) return key;
+      }
+    }
+    return 'system';
+  }
+
+  function nextSettingsApplySaved(){
+    var key = '';
+    try {
+      var q = new URLSearchParams(location.search).get('group');
+      if(q && NEXT_SETTINGS_GROUPS[q]) key = q;
+      if(!key){
+        var s = localStorage.getItem('wb-next-settings-group');
+        if(s && NEXT_SETTINGS_GROUPS[s]) key = s;
+      }
+    } catch(e){}
+    if(!key) key = 'basic';
+    nextSettingsGroup(key, null, { noScroll: true, noUrl: true });
+  }
+
+  function nextSettingsGroup(key, btn, opts){
+    opts = opts || {};
+    if(!NEXT_SETTINGS_GROUPS[key]) key = 'basic';
+    var page = document.getElementById('pageSettings');
+    if(!page) return;
+    nextHideConflictingSettings();
+    var sections = page.querySelectorAll('section');
+    Array.prototype.forEach.call(sections, function(sec){
+      var group = nextSettingsSectionGroup(sec);
+      var permanentlyHidden = sec.getAttribute('data-next-hidden') === '1';
+      sec.hidden = permanentlyHidden || group !== key;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#nextSettingsGroups .next-settings-group'), function(b){
+      b.classList.toggle('active', b.getAttribute('data-settings-group') === key);
+    });
+    var def = NEXT_SETTINGS_GROUPS[key];
+    var title = document.getElementById('nextSettingsTitle');
+    var desc = document.getElementById('nextSettingsDesc');
+    if(title) title.textContent = def.title;
+    if(desc) desc.textContent = def.desc;
+    try { localStorage.setItem('wb-next-settings-group', key); } catch(e){}
+    if(!opts.noUrl){
+      try {
+        var url = new URL(window.location.href);
+        url.searchParams.set('tab', 'settings');
+        url.searchParams.set('group', key);
+        history.replaceState(null, '', url.toString());
+      } catch(e){}
+    }
+    if(!opts.noScroll){
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  window.nextCurrentTab = nextCurrentTab;
+  window.nextSyncChrome = nextSyncChrome;
+  window.nextGo = nextGo;
+  window.nextOpenMore = nextOpenMore;
+  window.nextOpenSidebar = nextOpenSidebar;
+  window.nextSettingsGroup = nextSettingsGroup;
+
+  if(!NEXT){
+    /* 合并页面时保留 pageGateway，供控制台的模型和请求子视图使用。 */
+    var oldModels = document.getElementById('pageGateway');
+    var oldOverview = document.getElementById('pageOverview');
+    if(oldModels && oldOverview){
+      var firstModel = oldModels.firstChild;
+      while(oldOverview.firstChild) oldModels.insertBefore(oldOverview.firstChild, firstModel);
+      if(oldOverview.parentNode) oldOverview.parentNode.removeChild(oldOverview);
+    }
+    return;
+  }
+
+  /* 旧顶栏右侧（主题、语言、状态）搬进新顶栏，保留原 ID 和事件。 */
+  var headerRight = document.querySelector('header .header-right');
+  var actions = document.getElementById('nextTopbarActions');
+  if(headerRight && actions && headerRight.parentNode !== actions){
+    actions.appendChild(headerRight);
+  }
+
+  /* 调度器属于自动化页，不再占着总览的汇总卡。 */
+  var sched = document.getElementById('schedulerBar');
+  var tasksPage = document.getElementById('pageTasks');
+  if(sched && tasksPage && sched.parentNode !== tasksPage){
+    var schedSection = document.createElement('section');
+    schedSection.className = 'next-scheduler-section';
+    var schedHead = document.createElement('div');
+    schedHead.className = 'next-section-head';
+    schedHead.innerHTML = '<div><h2>后台调度器</h2><p>定时签到、活跃、保活和任务巡检；关闭后不再自动执行，手动按钮仍可用。</p></div>'
+      + '<div class="next-sched-toggle"><span>自动执行</span>'
+      + '<button type="button" id="nextSchedSwitch" class="next-switch" role="switch" aria-checked="true" onclick="toggleScheduler(this)" title="暂停或恢复后台调度器"><span class="next-switch-knob"></span></button></div>';
+    schedSection.appendChild(schedHead);
+    schedSection.appendChild(sched);
+    tasksPage.insertBefore(schedSection, tasksPage.firstChild);
+  }
+
+  /* 旧页签的 switchMainTab 是唯一入口：包一层，让新导航始终跟着真实页面走。 */
+  if(typeof window.switchMainTab === 'function' && !window.__NEXT_SWITCH_WRAPPED__){
+    window.__NEXT_SWITCH_WRAPPED__ = true;
+    var originalSwitch = window.switchMainTab;
+    window.switchMainTab = function(tab){
+      var result = originalSwitch.apply(this, arguments);
+      nextSyncChrome(nextCurrentTab() || tab);
+      return result;
+    };
+  }
+  if(typeof window.switchViewRealm === 'function' && !window.__NEXT_REALM_WRAPPED__){
+    window.__NEXT_REALM_WRAPPED__ = true;
+    var originalRealm = window.switchViewRealm;
+    window.switchViewRealm = function(){
+      var result = originalRealm.apply(this, arguments);
+      nextSyncChrome(nextCurrentTab());
+      return result;
+    };
+  }
+  if(typeof window.applyHiddenPages === 'function' && !window.__NEXT_HIDDEN_WRAPPED__){
+    window.__NEXT_HIDDEN_WRAPPED__ = true;
+    var originalHiddenPages = window.applyHiddenPages;
+    window.applyHiddenPages = function(){
+      var result = originalHiddenPages.apply(this, arguments);
+      nextApplyHiddenPages();
+      return result;
+    };
+  }
+  if(typeof window.loadSchedulerStatus === 'function' && !window.__NEXT_SCHED_WRAPPED__){
+    window.__NEXT_SCHED_WRAPPED__ = true;
+    var originalSchedulerStatus = window.loadSchedulerStatus;
+    window.loadSchedulerStatus = function(){
+      var result = originalSchedulerStatus.apply(this, arguments);
+      if(result && typeof result.then === 'function'){
+        return result.then(function(value){ nextUpdateSchedSwitch(); return value; });
+      }
+      nextUpdateSchedSwitch();
+      return result;
+    };
+  }
+
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape'){
+      nextOpenMore(false);
+      nextOpenSidebar(false);
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', function(){
+    nextHideConflictingSettings();
+    nextHideLegacyHeaders();
+    nextSyncChrome(nextCurrentTab() || 'overview');
+    setTimeout(function(){ nextHideConflictingSettings(); nextHideLegacyHeaders(); }, 800);
+  });
+  nextSyncChrome(nextCurrentTab() || 'overview');
 })();
 </script>
 </body>
