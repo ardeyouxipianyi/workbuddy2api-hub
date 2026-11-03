@@ -41,7 +41,8 @@ def row(at, account, total, outcome="completed"):
 
 def reset_cache():
     with P._daily_usage_lock:
-        P._daily_usage.update({"day": "", "totals": None, "offset": 0, "at": 0.0})
+        P._daily_usage.update({"day": "", "totals": None, "offset": 0, "at": 0.0,
+                               "key": None, "tail": None})
 
 
 class DailyTokenLimitTests(unittest.TestCase):
