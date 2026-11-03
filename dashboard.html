@@ -642,6 +642,14 @@ a:hover{text-decoration:underline}
 /* 内容包在 .page-nav-body 里，grid 就只有两项，1 / -1 才真的跨满整个内容区
    （否则它只跨第 1 行，首行被撑成侧栏高度）；区块间距也仍只由 section 自己
    的 margin 决定，不会被行间距再叠一次。 */
+/* 设置页二级分类胶囊导航 */
+.settings-cat-bar{display:flex;gap:8px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;align-items:center;padding:8px 0 12px;margin-bottom:14px;border-bottom:1px solid var(--line);position:sticky;top:var(--page-nav-top,84px);z-index:5;background:var(--header-bg);backdrop-filter:blur(10px)}
+.settings-cat-bar::-webkit-scrollbar{display:none}
+.settings-cat-btn{flex-shrink:0;appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--dim);padding:5px 12px;border-radius:20px;font:inherit;font-size:12px;font-weight:500;line-height:1.4;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.settings-cat-btn:hover{color:var(--fg);border-color:var(--line-hover);background:var(--panel)}
+.settings-cat-btn.active{background:var(--accent);border-color:transparent;color:#fff;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+.settings-cat-btn .cat-count{font-size:10px;opacity:.8;padding:1px 5px;border-radius:10px;background:rgba(0,0,0,.12)}
+.settings-cat-btn.active .cat-count{background:rgba(255,255,255,.25)}
 .main-page.page-nav-on > .page-sidebar{grid-column:1;grid-row:1 / -1;position:sticky;
   top:var(--page-nav-top,84px);z-index:6;background:var(--panel);border:1px solid var(--line);
   border-radius:14px;padding:10px;box-shadow:var(--shadow);
@@ -695,6 +703,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   /* 窄屏下导航是横向滚动的胶囊行，回到顶部钉在左端不跟着滚 */
   button.page-nav-top{width:auto;flex:0 0 auto;margin-bottom:0;padding:7px 12px;border-radius:999px;
     white-space:nowrap}
+  #pageSettings.page-nav-on > .page-sidebar{display:none}
 }
 .range-btn{background:transparent;border:none;color:var(--dim);padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s ease}
 .range-btn:hover{color:var(--fg)}
@@ -4803,10 +4812,20 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <h2 style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">网关设置</h2>
       <div style="font-size:12px;color:var(--dim);margin-top:4px">面板密码与界面语言、API Key 与出口绑定、代理槽与限额、价格估算、出站身份与本地网络工具。</div>
     </div>
+    <!-- 二级分类胶囊导航 -->
+    <div id="settingsCatBar" class="settings-cat-bar">
+      <button type="button" class="settings-cat-btn active" data-cat="all" onclick="filterSettingsCategory('all')">全部 <span class="cat-count">36</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="access" onclick="filterSettingsCategory('access')">🔑 访问与密钥 <span class="cat-count">6</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="models" onclick="filterSettingsCategory('models')">🤖 模型与调度 <span class="cat-count">10</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="limits" onclick="filterSettingsCategory('limits')">🛡️ 限额与并发 <span class="cat-count">4</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="network" onclick="filterSettingsCategory('network')">🌐 出口与网络 <span class="cat-count">7</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="tasks" onclick="filterSettingsCategory('tasks')">⏰ 自动化 <span class="cat-count">3</span></button>
+      <button type="button" class="settings-cat-btn" data-cat="system" onclick="filterSettingsCategory('system')">🛠️ 计费与运维 <span class="cat-count">6</span></button>
+    </div>
 
     <!-- 左侧导航由 initPageNav() 扫描本页的 section 自动生成，
          增删区块无需同步改动这里。 -->
-    <section>
+    <section data-cat="access">
       <h2>面板访问密码 <em id="setPwdState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">用于打开本看板。默认密码为 <b>admin</b>，建议立即修改。</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -4824,7 +4843,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </section>
 
-    <section>
+    <section data-cat="access">
       <h2>界面语言 <em id="setUiLanguageState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
         这里设置的是这台网关的实例默认语言；右上角语言按钮只覆盖当前浏览器，换端口、主机名或清掉站点数据后会回退到这个默认值。
@@ -4843,7 +4862,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </section>
 
-    <section>
+    <section data-cat="access">
       <h2>顶部页签显示 <em id="setPagesState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
         取消勾选就把该页签从顶部收起来，勾回来即恢复；清单按顶部现有的页签现场生成，上游增删页面这里自动跟上；偏好存在本网关，换浏览器、重启服务都记得。「设置」是这一页自己的入口，固定保留。
@@ -4851,7 +4870,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <div id="setPagesList" style="display:flex;flex-wrap:wrap;gap:8px 20px"></div>
     </section>
 
-    <section>
+    <section data-cat="access">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">账号独立成一个页签 <em id="setAccountsSeparateState"></em></h2>
@@ -4869,7 +4888,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </section>
 
-    <section>
+    <section data-cat="access">
       <h2>面板窗口限高 <em id="setWinMaxHeightState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
         每个窗口（区块）超过这个高度时在窗口内部滚动，不再把整页拉长；滚动时标题行固定在窗口顶部。单位像素；填 0 表示不限。
@@ -4882,7 +4901,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </section>
 
-    <section>
+    <section data-cat="access">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">API Key <em id="setKeyState"></em></h2>
@@ -4898,7 +4917,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <div id="deletedKeySection"></div>
     </section>
 
-    <section>
+    <section data-cat="network">
       <h2>CodeArts 接入 <em id="setCodeartsState"></em></h2>
       <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
         第三个出口直接连华为云 CodeArts：OAuth 登录、token 续期、模型发现、
@@ -4937,7 +4956,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       </div>
     </section>
 
-    <section>
+    <section data-cat="network">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">账号代理槽 <em id="slotState"></em></h2>
@@ -4955,7 +4974,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
       <div id="slotDiscover"></div>
     </section>
 
-    <section>
+    <section data-cat="limits">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">账号限额 <em id="setLimitsState"></em></h2>
@@ -5056,7 +5075,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
     </section>
 
 
-      <section>
+      <section data-cat="system">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">模型价格估算 <em id="setPricingEnabledState"></em></h2>
@@ -5102,7 +5121,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">启用 Anthropic Messages 接口 (Claude) <em id="setAnthropicMessagesState"></em></h2>
@@ -5123,7 +5142,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">思考等级挡位映射 <em id="setReasoningEffortMapState"></em></h2>
@@ -5141,7 +5160,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">按 API Key 过滤模型列表 <em id="setFilterModelsByKeyState"></em></h2>
@@ -5159,7 +5178,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">只列出可用模型 <em id="setModelsOnlyAvailableState"></em></h2>
@@ -5177,7 +5196,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">国际版 DeepSeek 后台出站模型 <em id="setDeepseekFlashForceSgState"></em></h2>
@@ -5198,7 +5217,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">免费额度耗尽回退积分版 <em id="setCreditFallbackState"></em></h2>
@@ -5219,7 +5238,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">自动切换出站身份 <em id="setAutoSwitchState"></em></h2>
@@ -5252,7 +5271,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">数据用途声明 <em id="setPrivateDataState"></em></h2>
@@ -5274,7 +5293,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">出站身份版本号 <em id="setIdentityVersionsState"></em></h2>
@@ -5327,7 +5346,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="tasks">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">国际版每日活跃打卡 <em id="setDailyChatWebState"></em></h2>
@@ -5470,7 +5489,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="tasks">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">全局提示词 <em id="setGlobalPromptState"></em></h2>
@@ -5493,7 +5512,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="tasks">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">本地网络工具 <em id="setLocalWebToolsState"></em></h2>
@@ -5514,7 +5533,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">剩余用量优先调度 <em id="setRemainingPriorityState"></em></h2>
@@ -5535,7 +5554,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">跨出口回退（国际版 → 国内版） <em id="setRealmFallbackState"></em></h2>
@@ -5556,7 +5575,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">模型额度窗口探针 <em id="setWindowProbeState"></em></h2>
@@ -5577,7 +5596,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="network">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">出口级瞬时失败退避 <em id="setEgressBackoffState"></em></h2>
@@ -5595,7 +5614,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">模型额度定时主动查询 <em id="setQuotaScanState"></em></h2>
@@ -5620,7 +5639,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         <div id="quotaScanState" style="margin-top:12px"></div>
       </section>
 
-      <section>
+      <section data-cat="system">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">用量聚合保留窗口 <em id="setUsageKeepState"></em></h2>
@@ -5647,13 +5666,13 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
           </div>
         </div>
       </section>
-      <section>
+      <section data-cat="limits">
         <h2>单请求体上限</h2>
         <div style="font-size:12px;color:var(--dim);margin:8px 0">超限时可临时调高后重试压缩请求；调高会增加并发请求的内存占用。保存后立即生效。</div>
         <input id="setMaxPayloadMB" type="number" min="1" max="256" step="1" style="width:90px"> MB
         <button onclick="saveMaxPayload(this)">保存</button>
       </section>
-      <section>
+      <section data-cat="limits">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">上游响应头超时 <em id="setHeaderTimeoutState"></em></h2>
@@ -5674,7 +5693,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="limits">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">账号级并发上限 <em id="setAccountConcurrentState"></em></h2>
@@ -5701,7 +5720,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">更稳的会话粘滞键 <span class="help-mark" role="button" tabindex="0" aria-label="功能说明" onclick="toggleHelpDetail('affinityStableKeyHelp', event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleHelpDetail('affinityStableKeyHelp', event);}">!</span> <em id="setAffinityStableKeyState"></em></h2>
@@ -5721,7 +5740,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="system">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">日志落库 <em id="setLogDbState"></em></h2>
@@ -5758,7 +5777,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="system">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">更新 <em id="setUpdateState"></em></h2>
@@ -5809,7 +5828,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         </div>
       </section>
 
-      <section>
+      <section data-cat="system">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
           <div>
             <h2 style="margin:0">版本回退 <em id="setRollbackState"></em></h2>
@@ -5832,7 +5851,7 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
         <div id="setRollbackHint" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
       </section>
 
-      <section>
+      <section data-cat="system">
         <h2>运行信息</h2>
       <table>
         <tbody>
@@ -11721,6 +11740,32 @@ function togglePageNavCollapse(page){
   applyPageNavCollapse(page, collapsed);
 }
 
+let CURRENT_SETTINGS_CAT = 'all';
+
+function filterSettingsCategory(cat){
+  CURRENT_SETTINGS_CAT = cat || 'all';
+  try { localStorage.setItem('WB_SETTINGS_CAT', CURRENT_SETTINGS_CAT); } catch(e){}
+  
+  // 1. Update capsule button active class
+  document.querySelectorAll('.settings-cat-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.cat === CURRENT_SETTINGS_CAT);
+  });
+
+  // 2. Filter sections inside #pageSettings
+  const page = document.getElementById('pageSettings');
+  if(!page) return;
+  const sections = page.querySelectorAll('section[data-cat]');
+  sections.forEach(sec => {
+    const match = (CURRENT_SETTINGS_CAT === 'all' || sec.dataset.cat === CURRENT_SETTINGS_CAT);
+    sec.style.display = match ? '' : 'none';
+  });
+
+  // 3. Refresh left sidebar navigation so it dynamically matches the filtered sections
+  if(typeof refreshPageNav === 'function'){
+    refreshPageNav();
+  }
+}
+
 function initPageNav(page){
   if(!page) return;
   syncPageNavOffset();
@@ -12272,6 +12317,8 @@ async function loadSettings(showToast){
     const winMax = (typeof rawWinMax === 'number' && Number.isFinite(rawWinMax) && rawWinMax >= 0)
       ? rawWinMax : 640;
     applyWinMaxHeight(winMax);
+    const savedCat = (typeof localStorage !== 'undefined') ? (localStorage.getItem('WB_SETTINGS_CAT') || 'all') : 'all';
+    filterSettingsCategory(savedCat);
     const winMaxInput = document.getElementById('setWinMaxHeight');
     if(winMaxInput) winMaxInput.value = String(Math.round(winMax));
 
