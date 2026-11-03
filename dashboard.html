@@ -1514,6 +1514,8 @@ header{height:var(--console-top-h);min-height:var(--console-top-h);padding:0 20p
 .console-sidebar .main-nav-btn.active::after{content:"";position:absolute;left:0;top:7px;bottom:7px;width:2px;background:var(--accent);border-radius:0 2px 2px 0}
 .console-sidebar .main-nav-btn.active::before,.console-nav-link.active::before{background:currentColor;opacity:1}
 .console-nav-link.active{color:var(--accent);background:var(--accent-soft);font-weight:600}
+/* 概览 / 模型管理 / 请求记录 是互斥视图：进入一个时，其它区块整块收起。 */
+.console-view-hidden{display:none!important}
 .console-sidebar-foot{display:flex;align-items:center;gap:6px;margin:auto 14px 14px;padding-top:13px;border-top:1px solid var(--line);color:var(--dim);font-size:11px;white-space:nowrap}
 .console-side-dot{width:5px;height:5px;border-radius:50%;background:var(--accent2)}
 .console-sidebar-foot .mono{margin-left:auto;font-size:10px}
@@ -4572,7 +4574,7 @@ body.console-collapsed .console-sidebar-foot span:not(.console-side-dot){display
   </div>
   <div id="pageGateway" class="main-page">
   <!-- 页面头部：标题 + 一行说明，与其它页面的头部结构保持一致 -->
-  <div style="margin-bottom:16px">
+  <div id="gatewayPageHead" style="margin-bottom:16px">
     <h2 id="gatewayPageTitle" style="margin:0;font-size:17px;color:var(--fg);font-family:var(--serif);font-weight:600;letter-spacing:.02em">网关与账号</h2>
     <div id="gatewayPageDesc" style="font-size:12px;color:var(--dim);margin-top:4px">管理账号池与代理出口，查看当日调用量、估算花费、成功率、最近请求与网关模型清单。</div>
   </div>
@@ -12798,15 +12800,8 @@ function applyAccountsTabLayout(separate){
   // 名字跟着走：账号已经不在这一页了，就不能再叫「网关与账号」。
   const gatewayLabel = document.getElementById('navGatewayLabel');
   if(gatewayLabel) gatewayLabel.textContent = '运行概览';
-  // 页头（标题 + 一行说明）跟着走：账号在不在这一页，名字与说明都得对得上。
-  const pageTitle = document.getElementById('gatewayPageTitle');
-  if(pageTitle) pageTitle.textContent = _accountsSeparateTab ? '网关' : '网关与账号';
-  const pageDesc = document.getElementById('gatewayPageDesc');
-  if(pageDesc){
-    pageDesc.textContent = _accountsSeparateTab
-      ? '管理代理出口与网关模型，查看当日调用量、估算花费、成功率与最近请求。'
-      : '管理账号池与代理出口，查看当日调用量、估算花费、成功率、最近请求与网关模型清单。';
-  }
+  // 页头（标题 + 一行说明）由 applyConsoleView 按当前视图（概览 / 模型 / 请求）统一维护。
+  if(typeof applyConsoleView === 'function') applyConsoleView(CONSOLE_VIEW);
   return _accountsSeparateTab;
 }
 
@@ -12921,39 +12916,77 @@ function syncConsoleContext(tab){
   if(label) label.textContent = CONSOLE_PAGE_LABELS[tab] || '控制台';
   document.querySelectorAll('.console-nav-link').forEach(function(item){ item.classList.remove('active'); });
 }
-// 内容入口（模型管理 / 请求记录）落在「运行概览」页内，但它们是独立的菜单项：
-// 点击后只让该入口保持选中，父级不再同时高亮，否则左侧会出现两个选中态。
-function selectConsoleEntry(linkId, label){
+// 内容入口（模型管理 / 请求记录）与「运行概览」是三个互斥视图：
+// 进入其中一个时，只显示它自己的区块，其余隐藏——不是在同一页里滚动定位。
+let CONSOLE_VIEW = 'overview';
+function setConsoleNavActive(linkId, label){
   document.querySelectorAll('.console-sidebar .main-nav-btn.active').forEach(function(btn){
     btn.classList.remove('active');
     btn.removeAttribute('aria-current');
   });
   document.querySelectorAll('.console-nav-link').forEach(function(item){
-    const on = item.id === linkId;
+    const on = !!linkId && item.id === linkId;
     item.classList.toggle('active', on);
     if(on) item.setAttribute('aria-current', 'page');
     else item.removeAttribute('aria-current');
   });
+  if(!linkId){
+    const gw = document.getElementById('btnNavGateway');
+    if(gw){ gw.classList.add('active'); gw.setAttribute('aria-current', 'page'); }
+  }
   const ctx = document.getElementById('consoleCurrentPage');
   if(ctx && label) ctx.textContent = label;
 }
+function applyConsoleView(view){
+  CONSOLE_VIEW = (view === 'models' || view === 'requests') ? view : 'overview';
+  const page = document.getElementById('pageGateway');
+  const head = document.getElementById('gatewayPageHead');
+  if(page){
+    const host = page.querySelector('.page-nav-body') || page;
+    const kids = host && host.children ? Array.from(host.children) : [];
+    kids.forEach(function(el){
+      if(!el || el.classList.contains('page-sidebar') || el.classList.contains('page-nav')) return;
+      let keep;
+      if(CONSOLE_VIEW === 'models') keep = el.id === 'gatewayModelsSection' || el.id === 'accountsRealmSwitch' || el === head;
+      else if(CONSOLE_VIEW === 'requests') keep = el.id === 'recentRequestsSection' || el.id === 'accountsRealmSwitch' || el === head;
+      // 概览：模型清单与请求记录各自成页，不在这里重复出现。
+      else keep = el.id !== 'gatewayModelsSection' && el.id !== 'recentRequestsSection';
+      // 用类而不是内联 display：其它代码（CodeArts 视图、账号分区等）也在管
+      // 这些元素的显隐，直接写 style.display 会把它们的判断覆盖掉。
+      el.classList.toggle('console-view-hidden', !keep);
+    });
+  }
+  // 页头随视图走：三个视图各有自己的标题与说明。
+  const title = document.getElementById('gatewayPageTitle');
+  const desc = document.getElementById('gatewayPageDesc');
+  const COPY = {
+    overview: ['运行概览', _accountsSeparateTab
+      ? '管理代理出口与网关模型，查看当日调用量、估算花费、成功率与最近请求。'
+      : '管理账号池与代理出口，查看当日调用量、估算花费、成功率、最近请求与网关模型清单。'],
+    models: ['模型管理', '当前视图下官方对话大模型、上下文容量、推理/视觉能力、思考控制、默认采样参数与在售倍率。'],
+    requests: ['请求记录', '当前视图的请求明细：模型、账号、结果、耗时与用量，可按关键词和结果筛选。']
+  }[CONSOLE_VIEW];
+  if(title) title.textContent = COPY[0];
+  if(desc) desc.textContent = COPY[1];
+  if(CONSOLE_VIEW === 'models') setConsoleNavActive('btnNavModels', '模型管理');
+  else if(CONSOLE_VIEW === 'requests') setConsoleNavActive('btnNavRequests', '请求记录');
+  else setConsoleNavActive(null, '运行概览');
+}
+// 兼容旧调用点：保持原来的函数名语义不变。
+function selectConsoleEntry(linkId, label){
+  if(linkId === 'btnNavModels') return applyConsoleView('models');
+  if(linkId === 'btnNavRequests') return applyConsoleView('requests');
+  return applyConsoleView('overview');
+}
 function openModelCatalog(){
   switchMainTab('gateway');
-  selectConsoleEntry('btnNavModels', '模型管理');
-  const target = document.getElementById('gatewayModelsSection');
-  if(target){
-    const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
-    window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
-  }
+  applyConsoleView('models');
+  window.scrollTo({top: 0, behavior: 'smooth'});
 }
 function openRecentRequests(){
   switchMainTab('gateway');
-  selectConsoleEntry('btnNavRequests', '请求记录');
-  const target = document.getElementById('recentRequestsSection');
-  if(target){
-    const top = target.getBoundingClientRect().top + window.pageYOffset - 76;
-    window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
-  }
+  applyConsoleView('requests');
+  window.scrollTo({top: 0, behavior: 'smooth'});
 }
 // ==== 全局控制台导航结束 ====
 
@@ -16028,6 +16061,8 @@ function switchMainTab(tab){
     // 每个页面各自按自己的区块重建侧栏；非当前页的区块变化在切过来时补上
     if(on) initPageNav(page);
   });
+  // 从左侧菜单直接切到网关页时回到「运行概览」；内容入口会在这之后覆盖成自己的视图。
+  if(tab === 'gateway') applyConsoleView('overview');
   if(tab === 'tasks'){ loadGrowthTasks(); }
   if(tab === 'accounts' || (!_accountsSeparateTab && tab === 'gateway')){ loadActivityBoard(); }
   if(tab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }

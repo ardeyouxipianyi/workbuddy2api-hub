@@ -65,19 +65,23 @@ check(/id="btnNavRequests"[^>]*onclick="openRecentRequests\(\)"/.test(html),
 check(html.includes('id="gatewayModelsSection"') && html.includes('id="recentRequestsSection"'),
   '两个内容入口需要稳定锚点');
 
-// 内容入口是独立菜单项：点击后只能有一个选中态。父级「运行概览」若同时保持
-// active，左侧就会出现两个高亮（用户实测反馈过）。
-check(/function selectConsoleEntry\(linkId, label\)/.test(script), '缺少内容入口的选中态切换');
-const selectEntry = script.slice(script.indexOf('function selectConsoleEntry('),
-                                 script.indexOf('function openModelCatalog('));
-check(/main-nav-btn\.active[\s\S]{0,120}classList\.remove\('active'\)/.test(selectEntry),
+// 内容入口是独立「页面」而不只是滚动定位：切到模型管理 / 请求记录时，网关页里
+// 其它区块要整块收起，左侧也只保留一个选中态。
+check(/function applyConsoleView\(view\)/.test(script), '缺少内容入口的视图切换');
+const view = script.slice(script.indexOf('function applyConsoleView('),
+                          script.indexOf('function openModelCatalog('));
+check(/console-view-hidden/.test(view), '切换视图要把非当前区块收起');
+check(/main-nav-btn\.active[\s\S]{0,160}classList\.remove\('active'\)/.test(view),
   '选中内容入口时必须先清掉父级主导航的选中态');
-check(/classList\.toggle\('active', on\)/.test(selectEntry),
-  '内容入口之间应当互斥，只保留一个选中');
-check(/openModelCatalog\(\)\{[\s\S]{0,200}selectConsoleEntry\('btnNavModels'/.test(script),
-  '模型管理点击后要切到自己的选中态');
-check(/openRecentRequests\(\)\{[\s\S]{0,200}selectConsoleEntry\('btnNavRequests'/.test(script),
-  '请求记录点击后要切到自己的选中态');
+check(/classList\.toggle\('active', on\)/.test(view), '内容入口之间应当互斥，只保留一个选中');
+check(/openModelCatalog\(\)\{[\s\S]{0,200}applyConsoleView\('models'\)/.test(script),
+  '模型管理要切到自己的视图');
+check(/openRecentRequests\(\)\{[\s\S]{0,200}applyConsoleView\('requests'\)/.test(script),
+  '请求记录要切到自己的视图');
+check(/if\(tab === 'gateway'\) applyConsoleView\('overview'\)/.test(script),
+  '从左侧菜单回到网关页时应回到概览视图');
+check(/\.console-view-hidden\{display:none!important\}/.test(html),
+  '缺少视图收起的样式');
 
 // 页面清单没变：书签与首屏选页仍按原来的七页走。
 const headTabs = html.match(/var TABS = \[([^\]]*)\];/);
