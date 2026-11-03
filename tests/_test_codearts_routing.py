@@ -209,12 +209,19 @@ try:
           and cost["source"] == "codearts:unpriced", cost)
 
     print("== key restrictions ==")
-    image_chat = dict(chat, messages=[{"role": "user", "content": [
+    image_chat = dict(chat, model="Qwen3-VL-235B",
+                      messages=[{"role": "user", "content": [
         {"type": "text", "text": "describe"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]}])
     before = len(state.requests)
     status, raw = post("/v1/chat/completions", image_chat, "hub-key-1234")
-    check("image rejected before upstream", status == 400 and len(state.requests) == before, (status, raw))
+    check("image forwarded to upstream", status == 200
+          and len(state.requests) == before + 1, (status, raw))
+    content = ((state.last_body or {}).get("messages") or [{}])[0].get("content")
+    check("image content preserved", isinstance(content, list)
+          and any(isinstance(p, dict) and p.get("type") == "image_url"
+                  and (p.get("image_url") or {}).get("url")
+                  == "data:image/png;base64,abc" for p in content), content)
     wb_settings.set_api_keys(ACCOUNTS, [
         {"key": "model-limit", "name": "model", "realm": "codearts", "models": ["other-model"]},
         {"key": "account-limit", "name": "account", "realm": "codearts", "accounts": ["other-uid"]},

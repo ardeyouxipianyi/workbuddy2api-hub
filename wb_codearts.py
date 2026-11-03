@@ -1012,6 +1012,44 @@ def _canonical_model(acct, model):
     return static.get(lower, mid)
 
 
+#: CodeArts models known to read images even when a discovery source omits
+#: `supports_images`. Deliberately CodeArts-specific: several overlapping ids
+#: are marked as vision by other catalogues, but the CodeArts backend answers
+#: "The request model is not multimodal" for them.
+_KNOWN_VISION_IDS = {
+    "qwen3-vl-235b", "qwen3.5-397b-a17b-vl",
+    "qwen3.6-27b-vl", "kimi-k2.6-vl",
+}
+
+
+def _known_vision(mid):
+    """Fallback vision metadata when a discovery source omits the flag."""
+    return str(mid or "").strip().lower() in _KNOWN_VISION_IDS
+
+
+def _wb_catalog_limits(mid):
+    """Context/output limits from the WorkBuddy catalog for the same model id.
+
+    CodeArts' builtin list often omits context_window/max_tokens. For ids that
+    are the same backend model, the WorkBuddy catalogue has the spec; use it as
+    a fallback rather than advertising no limit at all.
+    """
+    key = str(mid or "").strip().lower()
+    if not key:
+        return 0, 0
+    try:
+        import wb_catalog
+        for table in (wb_catalog.STATIC_MODELS, wb_catalog.STATIC_CN_MODELS):
+            for item in table:
+                if str(item.get("id") or "").strip().lower() != key:
+                    continue
+                return (int(item.get("maxInputTokens") or 0),
+                        int(item.get("maxOutputTokens") or 0))
+    except Exception:
+        pass
+    return 0, 0
+
+
 def _merge_models(sets):
     merged = {}
     for source, items in sets:
@@ -1029,6 +1067,10 @@ def _merge_models(sets):
                     "max_tokens": int(item.get("max_tokens") or 0),
                     "desc": str(item.get("desc") or ""),
                     "benefit": bool(item.get("benefit")),
+                    "supports_images": (item.get("supports_images")
+                                        if isinstance(item.get("supports_images"), bool)
+                                        else None),
+                    "model_category": str(item.get("model_category") or ""),
                 }
                 continue
             if not current.get("context_window") and item.get("context_window"):
@@ -1039,6 +1081,13 @@ def _merge_models(sets):
                 current["benefit"] = True
             if not current.get("desc") and item.get("desc"):
                 current["desc"] = item["desc"]
+            if item.get("supports_images") is True:
+                current["supports_images"] = True
+            elif (item.get("supports_images") is False
+                  and current.get("supports_images") is None):
+                current["supports_images"] = False
+            if not current.get("model_category") and item.get("model_category"):
+                current["model_category"] = item["model_category"]
     return list(merged.values())
 
 
@@ -1076,6 +1125,7 @@ def _fetch_agent_models(acct, timeout):
                or item.get("model_alias") or params.get("model_id") or "")
         if not mid:
             continue
+        supports = params.get("supports_images", item.get("supports_images"))
         out.append({
             "id": str(mid),
             "name": str(mid),
@@ -1083,6 +1133,9 @@ def _fetch_agent_models(acct, timeout):
             "max_tokens": int(params.get("max_tokens") or 0),
             "desc": str(params.get("model_desc") or ""),
             "benefit": False,
+            "supports_images": (supports if isinstance(supports, bool) else None),
+            "model_category": str(params.get("model_category")
+                                  or item.get("model_category") or ""),
         })
     return out
 
@@ -1102,6 +1155,10 @@ def _fetch_builtin_models(acct, timeout):
             "max_tokens": int(item.get("max_tokens") or 0),
             "desc": str(item.get("model_desc") or ""),
             "benefit": False,
+            "supports_images": (item.get("supports_images")
+                                if isinstance(item.get("supports_images"), bool)
+                                else None),
+            "model_category": str(item.get("model_category") or ""),
         })
     return out
 
@@ -1132,6 +1189,10 @@ def _fetch_benefit_models(acct, timeout, auto_claim=True):
             "max_tokens": int(item.get("max_tokens") or 0),
             "desc": str(item.get("model_desc") or ""),
             "benefit": True,
+            "supports_images": (item.get("supports_images")
+                                if isinstance(item.get("supports_images"), bool)
+                                else None),
+            "model_category": str(item.get("model_category") or ""),
         })
     return out
 
@@ -1168,7 +1229,8 @@ def fetch_models(acct, timeout=20.0, auto_claim=True):
             return acct.models
         merged = _merge_models([("seed", [
             {"id": mid, "name": mid,
-             "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS}}
+             "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS},
+             "supports_images": _known_vision(mid)}
             for mid in SEED_MODELS])])
     acct.models = merged
     acct.model_benefit = {str(m["id"]).lower(): bool(m.get("benefit"))
@@ -1212,7 +1274,8 @@ def model_entries(config):
     if not merged:
         merged = _merge_models([("seed", [
             {"id": mid, "name": mid,
-             "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS}}
+             "benefit": mid.lower() in {m.lower() for m in SEED_BENEFIT_MODELS},
+             "supports_images": _known_vision(mid)}
             for mid in SEED_MODELS])])
     now = int(time.time())
     out = []
@@ -1225,12 +1288,50 @@ def model_entries(config):
             "provider": "codearts",
             "name": item.get("name") or item["id"],
         }
-        if item.get("context_window"):
-            entry["context_window"] = item["context_window"]
-        if item.get("max_tokens"):
-            entry["max_tokens"] = item["max_tokens"]
+        ctx = int(item.get("context_window") or 0)
+        out_tokens = int(item.get("max_tokens") or 0)
+        if not ctx or not out_tokens:
+            wb_ctx, wb_out = _wb_catalog_limits(item["id"])
+            ctx = ctx or wb_ctx
+            out_tokens = out_tokens or wb_out
+        if ctx:
+            entry["context_window"] = ctx
+            entry["context_length"] = ctx
+            entry["max_input_tokens"] = ctx
+        if out_tokens:
+            entry["max_tokens"] = out_tokens
+            entry["max_output_tokens"] = out_tokens
+            entry["max_completion_tokens"] = out_tokens
+            entry["max_output"] = out_tokens
         if item.get("benefit"):
             entry["benefit"] = True
+        supports = item.get("supports_images")
+        if not isinstance(supports, bool):
+            supports = _known_vision(item["id"])
+        vision = bool(supports)
+        inputs = ["text"] + (["image"] if vision else [])
+        # Same convention set WorkBuddy emits: clients read different spellings
+        # for vision support, and some clients need input modalities.
+        entry["capabilities"] = {"vision": vision, "tool_calls": True}
+        entry["supports_vision"] = vision
+        entry["supports_images"] = vision
+        entry["supports_tool_calls"] = True
+        entry["vision"] = vision
+        entry["multimodal"] = vision
+        entry["abilities"] = {"vision": vision, "functionCall": True,
+                              "function_call": True}
+        entry["input_modalities"] = inputs
+        entry["output_modalities"] = ["text"]
+        entry["modalities"] = {"input": inputs, "output": ["text"]}
+        entry["architecture"] = {
+            "input_modalities": inputs,
+            "output_modalities": ["text"],
+            "modality": "+".join(inputs) + "->text",
+        }
+        if item.get("desc"):
+            entry["description"] = item["desc"]
+        if item.get("model_category"):
+            entry["category"] = item["model_category"]
         out.append(entry)
     return out
 
@@ -1305,18 +1406,66 @@ def _ot_session_enabled():
 
 
 def _flatten_content(content):
-    """把 OpenAI 内容分片压成纯文本；CodeArts 只消费 text 分片。"""
+    """Normalize text/image content parts for CodeArts.
+
+    CodeArts accepts OpenAI-style content arrays on `/api/v2/chat/completions`:
+    `{"type":"text","text":...}` and
+    `{"type":"image_url","image_url":{"url":"data:..." | "https://..."}}`.
+    Text-only content is still flattened to a string so existing requests keep
+    their exact wire shape; any image part switches the message to a structured
+    array. Anthropic `image` blocks and Responses `input_image` parts are
+    normalized to the same `image_url` shape.
+    """
     if content is None:
         return ""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        if any(isinstance(part, dict) and (part.get("type") in ("image", "image_url", "input_image")
-                                         or "image_url" in part) for part in content):
-            raise CodeArtsBadRequest("CodeArts 出口暂不支持图片输入，请移除图片或选择其他出口")
-        return "".join(str(part.get("text") or "")
-                       for part in content if isinstance(part, dict))
-    return str(content)
+    if not isinstance(content, list):
+        return str(content)
+    parts = []
+    for piece in content:
+        if isinstance(piece, str):
+            parts.append({"type": "text", "text": piece})
+            continue
+        if not isinstance(piece, dict):
+            continue
+        ptype = str(piece.get("type") or "")
+        if ptype in ("text", "input_text", "output_text", "summary_text"):
+            text = piece.get("text")
+            if text is not None:
+                parts.append({"type": "text", "text": str(text)})
+            continue
+        if ptype not in ("image_url", "input_image", "image") \
+                and "image_url" not in piece:
+            continue
+        raw = piece.get("image_url") or piece.get("url")
+        url = ""
+        if isinstance(raw, dict):
+            url = str(raw.get("url") or "")
+        elif raw:
+            url = str(raw)
+        if not url and isinstance(piece.get("source"), dict):
+            source = piece["source"]
+            stype = str(source.get("type") or "")
+            if stype == "base64":
+                media = str(source.get("media_type") or "image/png")
+                data = str(source.get("data") or "")
+                if data:
+                    url = "data:%s;base64,%s" % (media, data)
+            elif stype == "url":
+                url = str(source.get("url") or "")
+        if not url and piece.get("data"):
+            mime = str(piece.get("mimeType")
+                       or piece.get("mime_type") or "image/png")
+            url = "data:%s;base64,%s" % (mime, piece["data"])
+        if url:
+            image = {"url": url}
+            if isinstance(raw, dict) and raw.get("detail"):
+                image["detail"] = str(raw["detail"])
+            parts.append({"type": "image_url", "image_url": image})
+    if any(part.get("type") == "image_url" for part in parts):
+        return parts
+    return "".join(str(part.get("text") or "") for part in parts)
 
 
 def build_chat_body(payload, session_key=None):
