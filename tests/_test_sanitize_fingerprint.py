@@ -389,6 +389,44 @@ class DshFileReferenceParagraphTests(unittest.TestCase):
             self.assertEqual(P.sanitize_text(text), text)
 
 
+class CodexIntroFingerprintTests(unittest.TestCase):
+    """Codex 基础提示词首段（#743）。
+
+    旧规则把中性句改写成 ``You are a coding agent running in the Codex CLI
+    tool, ...``，而 ``SANITIZE_FEATURES`` 恰好在找 ``... running in the Codex
+    CLI``，于是 sanitize 之后 has_fingerprint() 仍为 True，出站 body 继续
+    11-128。这里钉住两件事：首段必须被中性化；改写必须是幂等的。
+    """
+
+    INTRO = ("You are a coding agent running in the Codex CLI, a terminal-based "
+             "coding assistant.")
+    INTRO_TOOL = ("You are a coding agent running in the Codex CLI tool, a "
+                  "terminal-based coding assistant.")
+    CLEAN = "You are a helpful AI assistant."
+
+    def test_codex_intro_is_neutralized(self):
+        for text in (self.INTRO, self.INTRO_TOOL):
+            self.assertTrue(P.has_fingerprint(text))
+            self.assertEqual(P.sanitize_text(text), self.CLEAN, text)
+            self.assertFalse(P.has_fingerprint(P.sanitize_text(text)))
+
+    def test_embedded_after_neutral_sentence_still_matches(self):
+        # 真实 Codex base_instructions 的形态：中性首句 + 自述句 + 后续段落。
+        text = ("You are a helpful AI assistant. " + self.INTRO +
+                "\n\nYour capabilities:\n\n- Receive user prompts.")
+        out = P.sanitize_text(text)
+        self.assertFalse(P.has_fingerprint(out))
+        self.assertIn("Your capabilities:", out)
+
+    def test_neutral_sentence_is_untouched(self):
+        self.assertEqual(P.sanitize_text(self.CLEAN), self.CLEAN)
+        self.assertFalse(P.has_fingerprint(self.CLEAN))
+
+    def test_idempotent(self):
+        once = P.sanitize_text(self.INTRO)
+        self.assertEqual(P.sanitize_text(once), once)
+
+
 if __name__ == "__main__":
     unittest.main()
 

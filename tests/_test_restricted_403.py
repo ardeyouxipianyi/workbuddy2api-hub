@@ -325,6 +325,67 @@ class Restricted403DispatchTests(unittest.TestCase):
         self.assertEqual(flaky.fails, 1)
 
 
+class ChannelGuardAttributionTests(unittest.TestCase):
+    """400 透传也要写明用了哪个账号、哪个代理出口（#743）。
+
+    400 在 open_upstream() 里直接 raise（不轮转、不改正文），旧实现因此
+    绕过了函数末尾的 account_uid 附加，错误行只能记成 unattributed。
+    """
+
+    def setUp(self):
+        self._old_pool = P.POOL
+        self._old_rotate = P.RESTRICTED_403_ROTATE_MAX
+        P.RESTRICTED_403_ROTATE_MAX = 0
+
+    def tearDown(self):
+        P.POOL = self._old_pool
+        P.RESTRICTED_403_ROTATE_MAX = self._old_rotate
+
+    def _run(self, scripts):
+        account = wb_accounts.Account({
+            "uid": "400-user-1", "accessToken": "t-800",
+            "realm": "intl", "proxy": "http://user:pass@127.0.0.1:17913",
+            "proxySlot": "slot-8",
+        })
+        P.POOL = StubPool([account])
+        upstream = ScriptedUpstream(scripts)
+        real_urlopen = wb_accounts.urlopen
+        wb_accounts.urlopen = upstream
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                P.open_upstream(dict(PAYLOAD), target_realm="intl")
+        finally:
+            wb_accounts.urlopen = real_urlopen
+        return ctx.exception, upstream
+
+    def test_400_carries_account_and_egress(self):
+        body = json.dumps({
+            "code": "11-128",
+            "msg": "Illegal API invocation from an unapproved channel",
+        }).encode("utf-8")
+        raised, upstream = self._run([http_error(400, body)])
+        self.assertIsInstance(raised, urllib.error.HTTPError)
+        self.assertEqual(len(upstream.calls), 1)
+        self.assertEqual(getattr(raised, "account_uid", None), "400-user-1")
+        self.assertEqual(getattr(raised, "proxy_slot", None), "slot-8")
+        self.assertEqual(getattr(raised, "proxy_exit", None), "127.0.0.1:17913")
+
+    def test_hundreds_of_400s_keep_the_attribution(self):
+        body = b'{"code":11-128,"msg":"Illegal API invocation"}'
+        for _ in range(22):
+            raised, _upstream = self._run([http_error(400, body)])
+            self.assertEqual(getattr(raised, "account_uid", None), "400-user-1")
+            self.assertEqual(getattr(raised, "proxy_slot", None), "slot-8")
+            self.assertEqual(getattr(raised, "proxy_exit", None),
+                             "127.0.0.1:17913")
+
+    def test_egress_exit_never_leaks_proxy_credentials(self):
+        self.assertEqual(P.egress_exit(""), "direct")
+        self.assertEqual(P.egress_exit("http://user:secret@10.0.0.9:8080"),
+                         "10.0.0.9:8080")
+        self.assertEqual(P.egress_exit("10.0.0.9:8080"), "10.0.0.9:8080")
+
+
 class IdentityOnRetryTests(unittest.TestCase):
     """换号重试时的出站身份语义（官方 CLI 2.168.2 对齐）。"""
 
