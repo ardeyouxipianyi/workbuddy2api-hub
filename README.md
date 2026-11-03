@@ -202,7 +202,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 258 个套件：195 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 259 个套件：196 个 Python + 63 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -518,6 +518,7 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 - **CodeArts 每日签到按活动类型识别（修复假成功）**：`checkin_account()` 不再按硬编码 `campaignId (1, 4)` 白名单过滤，改为 `type=USER_LOGIN` / `extra.triggerEvent=user.login` / 历史 id 三条任一命中；每日签到换季改 id 后不再出现「面板显示已签到、实际一分没领」的假成功。新增 `tests/_test_codearts_checkin_campaign.py`。
 - **CodeArts 每日自动签到（默认关闭）**：`pool_for()` 惰性触发，后台线程每账号每天最多 3 次、间隔 ≥1 小时；手动签到与自动签到互斥。开关为 `codearts.credits_auto_claim`，**默认 `false`**，开启后不必每天点面板。 / **CodeArts daily auto check-in (off by default)**: lazily triggered from `pool_for()`, at most 3 attempts per account per day with a 1-hour gap; opt in with `codearts.credits_auto_claim`.
+- **修复国内版 deepseek-v4.1-flash 被误标「限时免费」**：`model_entry()` 的免费 / 强制 `-sg` 口径只在国际版生效，国内版照目录里的 0.11x 显示；`_apply_deepseek_flash_target()` 也只在国际版改写请求，避免把国内版请求改成目录里不存在的 `-sg`。面板的「出站: 原生免费 / 强制 -sg」徽章与快捷胶囊同样只在国际版显示。新增 `tests/_test_deepseek_flash_realm.py`。 / **Fix the domestic `deepseek-v4.1-flash` being shown as free**: the free / forced `-sg` rules now apply to the international catalog only; domestic keys keep the catalog's 0.11x rate, and the request rewrite and the outbound badge are international-only.
 - **v1.10.6 发布**：生图与异步生视频媒体能力集成（#728）、并发日志原子追加加固、设置页二级分类胶囊导航。完整变更、验证范围与已知限制见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1106)**；下一版的改动继续写在本段。
 - **新增生图 / 生视频能力（默认关闭）**：`POST /v1/images/generations`、`/v1/images/edits`、`/v1/videos`（+ `/{id}` 查状态、`/{id}/content` 下 mp4）、`GET /v1/media/models`。视频是**异步任务**：提交立刻 202，后台 worker 轮询到完成再下载，`?wait=1` 可阻塞。复用现有账号池（面板权重 / 临期积分优先 / 轮转 / 熔断全部继承），单次调用约 5.7 积分一张图、57–129 积分一条 5 秒视频，所以默认关闭、按 Key 限每分钟次数与每日积分、且一次只出一张/一条。输入图只接受 data URL 与公网 http(s)——本地路径会让网关把服务器上的文件发给上游。设计、实现与测试记录见 `docs/MEDIA-PLAN.md`、`docs/MEDIA-IMPL.md`、`docs/MEDIA-TEST-PLAN.md`。**注意：媒体接口目前不幂等，请勿对超时请求自动重试**（会重复扣费）。
 - **v1.10.5 发布**：国际版 DeepSeek 免费通道恢复与出站节点切换、Codex 首段脱敏去指纹修复与出口归因（#743/#744）、glm-5.1 推理档位自动补齐防 11150（#742）、临期积分优先权重按剩余积分对数优化（#741）。完整变更与验证范围见 **[docs/CHANGELOG.md](docs/CHANGELOG.md#v1105)**；下一版的改动继续写在本段。
