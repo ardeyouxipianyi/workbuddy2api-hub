@@ -3266,6 +3266,8 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '账号当日消耗的 token 达到该值后暂停接单，请求自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示不限（不限额）；与「保留积分」各自独立，任一命中都会暂停接单。': 'Once the token use of an account for the day reaches this, it stops taking orders and requests switch to other accounts; it recovers after local midnight. 0 means no limit; it is independent of Reserved credits, and either one pauses order taking.',
     '账号当日消费的积分达到该值后，只允许请求免费模型（目录中标记为 x0.00 的模型），需要花费积分的模型自动切到其他账号；本地时间 0 点后自动恢复。填 0 表示关闭（默认）。': 'Once the credit spend of an account for the day reaches this, only free models are allowed (those marked x0.00 in the catalog) and models that cost credits switch to other accounts; it recovers after local midnight. 0 turns it off (default).',
     '账号，之后相关请求都会走该账号': 'account; requests will then go through it',
+    '定时自动打卡': 'scheduled check-in',
+    '关闭后调度器不再自动打卡（定时、启动补跑、立即巡检保活都跳过）；账号上的手动打卡不受影响': 'When off, the scheduler no longer runs the check-in (scheduled slots, startup catch-up and the keep-alive check-now all skip it); the manual check-in on each account still works',
     '走网页通道': 'use the web channel',
     '证书失败改走活跃上报': 'report activity when the certificate fails',
     '活跃使用的模型': 'Model for the daily activity',
@@ -3674,6 +3676,8 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "已启用：429 时自动切换出站身份": "已啟用：429 時自動切換出站身份",
     "已启用：余额低于": "已啟用：餘額低於",
     "已启用：国际版打卡走网页通道": "已啟用：國際版打卡走網頁通道",
+    "定时自动打卡": "定時自動打卡",
+    "关闭后调度器不再自动打卡（定时、启动补跑、立即巡检保活都跳过）；账号上的手动打卡不受影响": "關閉後排程器不再自動打卡（定時、啟動補跑、立即巡檢保活都跳過）；帳號上的手動打卡不受影響",
     "证书失败改走活跃上报": "憑證失敗改走活躍上報",
     "失败重试": "失敗重試",
     "最多尝试次数": "最多嘗試次數",
@@ -6659,6 +6663,11 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px" title="关闭后调度器不再自动打卡（定时、启动补跑、立即巡检保活都跳过）；账号上的手动打卡不受影响">
+              <input id="setDailyActivity" type="checkbox" checked style="width:16px;height:16px">
+              定时自动打卡
+              <em id="setDailyActivityState" style="font-style:normal;font-size:12px;color:var(--dim)"></em>
+            </label>
             <label style="display:flex;align-items:center;gap:6px;font-size:13px;min-height:40px">
               <input id="setDailyChatWeb" type="checkbox" style="width:16px;height:16px">
               走网页通道
@@ -14507,6 +14516,18 @@ async function loadSettings(showToast){
         privateDataState.style.color = privateData === 'auto'
           ? 'var(--dim)' : 'var(--accent2)';
       }
+      const dailyActivity = data.daily_activity !== false;
+      const dailyActivityInput = document.getElementById('setDailyActivity');
+      if(dailyActivityInput){
+        dailyActivityInput.checked = dailyActivity;
+        // 只有真读到过 /settings 才允许保存时带上总开关（见 saveDailyChatModule）。
+        dailyActivityInput.dataset.loaded = '1';
+      }
+      const dailyActivityState = document.getElementById('setDailyActivityState');
+      if(dailyActivityState){
+        dailyActivityState.textContent = dailyActivity ? '(已启用)' : '(未启用)';
+        dailyActivityState.style.color = dailyActivity ? 'var(--accent2)' : 'var(--dim)';
+      }
       const dailyWeb = data.daily_chat_web !== false;
       const dailyWebInput = document.getElementById('setDailyChatWeb');
       if(dailyWebInput) dailyWebInput.checked = dailyWeb;
@@ -15633,6 +15654,7 @@ function resetDailyChatTimes(){
 }
 
 async function saveDailyChatModule(btn){
+  const activityEl = document.getElementById('setDailyActivity');
   const webEl = document.getElementById('setDailyChatWeb');
   const budgetEl = document.getElementById('setDailyChatBudget');
   const turnEl = document.getElementById('setDailyChatTurnTimeout');
@@ -15651,6 +15673,11 @@ async function saveDailyChatModule(btn){
     daily_chat_web_fallback_activity: !!(fallbackEl && fallbackEl.checked),
     schedule: {daily_chat: DAILY_CHAT_TIMES_SELECTED.slice()}
   };
+  // 总开关只在勾选框已按 /settings 回填过时才提交：设置没读到（或页面上没有
+  // 这个元素）时不能凭默认状态把它悄悄写成关闭——缺省是开，不提交就保持原值。
+  if(activityEl && activityEl.dataset && activityEl.dataset.loaded === '1'){
+    payload.daily_activity = !!activityEl.checked;
+  }
   if(btn) btn.disabled = true;
   const state = document.getElementById('setDailyChatSaveState');
   try {

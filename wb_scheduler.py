@@ -118,6 +118,8 @@ class Scheduler:
         # 启动后第一次巡检要补跑当天还没活跃的国际版账号：进程在时段内停过
         # （或调度线程被卡住）时，旧实现只能等下一个时段，最多再等 12 小时。
         self._catchup_pending = True
+        # 每日活跃总开关关闭的提示每次关闭只打一条日志，避免每个时段刷屏。
+        self._daily_activity_notice = False
         self.all_hours = sorted(list(set(self.checkin_hours + self.travel_hours + self.keepalive_hours + self.cat_hours)))
         self.enabled = True
         self._stop_event = threading.Event()
@@ -424,9 +426,20 @@ class Scheduler:
             return
         # 时段永远存在（面板留空时是「今天随机抽的两个」），所以国际版活跃只按
         # 时段触发；启动后的第一次巡检额外补跑一次当天还没活跃的账号。
-        catchup = self._consume_startup_catchup()
-        run_daily_chat = (force or daily_chat_only or catchup
-                          or (not self.daily_chat_times and run_checkin))
+        # 总开关（settings.daily_activity，缺省开）：显式关掉时排程不再跑国际版
+        # 每日活跃——时段命中、「立即巡检保活」(force) 与启动补跑都跳过；启动补跑
+        # 留到开关重新打开后再消费。面板上的单账号 / 批量手动打卡是显式操作，不受影响。
+        activity_on = self._daily_activity_on()
+        catchup = self._consume_startup_catchup() if activity_on else False
+        run_daily_chat = activity_on and (
+            force or daily_chat_only or catchup
+            or (not self.daily_chat_times and run_checkin))
+        if not activity_on:
+            if not self._daily_activity_notice:
+                self._daily_activity_notice = True
+                self.log("国际版每日活跃已在设置中关闭（daily_activity=false），本轮跳过")
+        else:
+            self._daily_activity_notice = False
 
         for idx, acc in enumerate(accounts):
             if idx > 0:
@@ -655,6 +668,16 @@ class Scheduler:
                          f"{res.get('message') or ''}")
             time.sleep(1.0)
         return checked
+
+    def _daily_activity_on(self):
+        """Read the daily-activity master switch; anything unreadable keeps it on."""
+        directory = getattr(self.pool, "dir", "") or ""
+        if not directory:
+            return True
+        try:
+            return bool(wb_settings.daily_activity_enabled(directory))
+        except Exception:
+            return True
 
     def _daily_chat_concurrency(self):
         directory = getattr(self.pool, "dir", "") or ""

@@ -11034,6 +11034,7 @@ def runtime_settings_view():
         "identity": wb_settings.identity_config(ACCOUNTS_DIR),
         "identity_version_defaults": wb_identity.default_versions(),
         "codearts": wb_codearts.masked_config(ACCOUNTS_DIR),
+        "daily_activity": wb_settings.daily_activity_enabled(ACCOUNTS_DIR),
         "daily_chat_web": wb_settings.daily_chat_web(ACCOUNTS_DIR),
         "daily_chat_web_timeout":
             wb_settings.daily_chat_web_timeout(ACCOUNTS_DIR,
@@ -22059,6 +22060,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self._error(400, str(exc), "invalid_request_error")
             reply["auto_switch_products"] = clean
+        if "daily_activity" in payload:
+            # Strictly a JSON boolean, like the other switches: a string "false"
+            # must not be read as "on" (or the other way round).
+            raw = payload.get("daily_activity")
+            if not isinstance(raw, bool):
+                return self._error(400, "daily_activity must be true or false",
+                                   "invalid_request_error")
+            wb_settings.set_daily_activity_enabled(ACCOUNTS_DIR, raw)
+            reply["daily_activity"] = raw
         if "daily_chat_web" in payload:
             raw = payload.get("daily_chat_web")
             if not isinstance(raw, bool):

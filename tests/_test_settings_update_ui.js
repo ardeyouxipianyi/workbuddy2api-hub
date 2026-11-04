@@ -114,6 +114,19 @@ const posts = () => calls.filter(c => c.method === 'POST');
     assert.ok(cond, label + (extra !== undefined ? '  [' + extra + ']' : ''));
   };
 
+  // ---- 0. 每日活跃总开关：设置还没读到就保存，不能把总开关写成关闭 ----
+  document.getElementById('setDailyActivity').checked = false;   // 未回填的勾选框（首次取用即建元素）
+  calls.length = 0;
+  await api.saveDailyChatModule({disabled: false});
+  await settled();
+  {
+    const early = posts().filter(c => c.url === '/settings/save');
+    const earlyBody = early.length ? JSON.parse(early[0].body) : {};
+    check('设置未加载时保存不带 daily_activity=false',
+          early.length === 1 && earlyBody.daily_activity !== false, JSON.stringify(earlyBody));
+  }
+  toasts.length = 0;
+
   // ---- 1. 打开设置页：显示当前版本、最新版本与状态 ----
   updatesPayload = {
     current_version: '1.6.17', latest_version: '1.6.18', update_available: true,
@@ -128,6 +141,8 @@ const posts = () => calls.filter(c => c.method === 'POST');
   await api.loadSettings(true);
   await settled();
 
+  check('/settings 缺 daily_activity 时总开关按缺省（开）勾上',
+        element('setDailyActivity').checked === true);
   check('当前版本来自 /updates', element('setUpdateCurrent').textContent === '1.6.17',
         element('setUpdateCurrent').textContent);
   check('最新版本来自 /updates', element('setUpdateLatest').textContent === '1.6.18',
@@ -297,6 +312,7 @@ const posts = () => calls.filter(c => c.method === 'POST');
   // ---- 8. 每日活跃模块：一次提交预算 / 候选序列 / 时段 ----
   calls.length = 0;
   toasts.length = 0;
+  element('setDailyActivity').checked = false;
   element('setDailyChatWeb').checked = true;
   element('setDailyChatBudget').value = '900';
   element('setDailyChatTurnTimeout').value = '45';
@@ -314,6 +330,7 @@ const posts = () => calls.filter(c => c.method === 'POST');
   check('提交并发数与建会话退避', body.daily_chat_web_concurrency === 2 &&
         body.daily_chat_web_retry_backoff === 7, JSON.stringify(body));
   check('提交启动补跑开关', body.daily_chat_startup_catchup === false, JSON.stringify(body));
+  check('提交每日活跃总开关', body.daily_activity === false, JSON.stringify(body));
   check('提交证书失败改走活跃上报开关',
         body.daily_chat_web_fallback_activity === true, JSON.stringify(body));
   check('候选序列与时段随模块一起提交',
