@@ -437,6 +437,14 @@ TIER_TTL_SECONDS = 24 * 3600.0
 
 LOGIN_PENDING = 11217
 LOGIN_TTL_SECONDS = 600
+# proxySlot value asking start_login to pick a random free proxy slot.
+LOGIN_SLOT_AUTO = "auto"
+
+
+class LoginProxySlotError(ValueError):
+    """The proxy slot asked for by a login does not exist or is disabled."""
+
+
 USER_AGENT = REALM_CONFIGS['intl']['chat_ua']
 
 #: 签到文案判据。10001 在本仓库**不是**「签到成功」专属码：活动补偿的
@@ -4204,6 +4212,8 @@ class AccountPool(object):
         self.log = log or (lambda msg: None)
         self.accounts = []
         self.logins = {}
+        # Slots picked by a login whose auth/state request is still in flight.
+        self._login_slot_reserved = set()
         self._lock = threading.RLock()
         self._cursor = 0
         # Smooth weighted round-robin state for the expiring-credits window,
@@ -5128,7 +5138,56 @@ class AccountPool(object):
             return None, "is ambiguous"
         return None, "was not found"
 
-    def start_login(self, realm="intl", platform="CLI"):
+    def _login_proxy(self, slot_id=None, taken_slots=()):
+        """Resolve the egress used by one OAuth login (start + poll).
+
+        Order: explicit slot id > LOGIN_SLOT_AUTO (a random enabled slot that
+        is not bound to an account - here or in `taken_slots`, the caller's
+        other pools such as CodeArts - and not held by another pending login). Nothing given means direct, exactly as before
+        this option existed - configured slots are only used when asked for.
+        Random rather than list order, so new accounts spread over the free
+        exits instead of always taking the head of the list.
+        Returns (slot_id, proxy_url); ("", "") means direct. An auto-picked
+        slot is reserved until start_login records (or drops) its state, so two
+        concurrent logins cannot pick the same slot; logins past their TTL no
+        longer hold one.
+        """
+        wanted = str(slot_id or "").strip()
+        if not wanted:
+            return "", ""
+        slots = [s for s in wb_settings.proxy_slots(self.dir) if s.get("enabled")]
+        for s in slots:
+            if s["id"] == wanted:
+                return s["id"], s["url"]
+        if wanted != LOGIN_SLOT_AUTO:
+            raise LoginProxySlotError(
+                "proxy slot %s does not exist or is disabled" % wanted)
+        now = time.time()
+        with self._lock:
+            taken = {a.proxy_slot for a in self.accounts if a.proxy_slot}
+            taken |= {str(t) for t in (taken_slots or ()) if t}
+            taken |= {str(i.get("proxy_slot") or "") for i in self.logins.values()
+                      if now - i.get("created", 0) <= LOGIN_TTL_SECONDS}
+            taken |= self._login_slot_reserved
+            free = [s for s in slots if s["id"] not in taken]
+            if not free:
+                return "", ""
+            pick = random.choice(free)
+            self._login_slot_reserved.add(pick["id"])
+        return pick["id"], pick["url"]
+
+    def start_login(self, realm="intl", platform="CLI", proxy_slot=None,
+                    taken_slots=()):
+        auto_slot = str(proxy_slot or "").strip() == LOGIN_SLOT_AUTO
+        slot_id, proxy_url = self._login_proxy(proxy_slot, taken_slots)
+        try:
+            return self._start_login(realm, platform, slot_id, proxy_url, auto_slot)
+        finally:
+            if auto_slot and slot_id:  # explicit picks never reserved anything
+                with self._lock:
+                    self._login_slot_reserved.discard(slot_id)
+
+    def _start_login(self, realm, platform, slot_id, proxy_url, auto_slot):
         cfg = get_realm_config(realm)
         url = "%s%s?platform=%s" % (cfg["chat_upstream"], AUTH_STATE_PATH, urllib.parse.quote(str(platform)))
         headers = {
@@ -5140,15 +5199,18 @@ class AccountPool(object):
             "Referer": cfg["origin"] + "/",
         }
         payload = http_json(url, data=b"{}", method="POST", headers=headers,
-                            timeout=30, retries=3, log=self.log)
+                            timeout=30, retries=3, log=self.log, proxy=proxy_url)
         data = payload.get("data") or {}
         state = data.get("state")
         auth_url = data.get("authUrl")
         if not state or not auth_url:
             raise RuntimeError("auth/state returned no state/authUrl: %s" % payload)
         with self._lock:
-            self.logins[state] = {"created": time.time(), "platform": platform, "realm": realm}
-        return {"state": state, "authUrl": auth_url, "realm": realm, "platform": platform}
+            self.logins[state] = {"created": time.time(), "platform": platform,
+                                  "realm": realm, "proxy_slot": slot_id,
+                                  "proxy": proxy_url, "auto_slot": auto_slot}
+        return {"state": state, "authUrl": auth_url, "realm": realm,
+                "platform": platform, "proxySlot": slot_id, "proxy": proxy_url}
 
     def poll_login(self, state):
         state = str(state or "").strip()
@@ -5160,6 +5222,7 @@ class AccountPool(object):
             with self._lock: self.logins.pop(state, None)
             return {"status": "expired", "message": "login window expired - start again"}
         realm = info.get("realm") or "intl"
+        proxy_url = info.get("proxy") or ""
         cfg = get_realm_config(realm)
         url = "%s%s?state=%s" % (cfg["chat_upstream"], AUTH_TOKEN_PATH, urllib.parse.quote(state))
         headers = {
@@ -5171,7 +5234,8 @@ class AccountPool(object):
             "Referer": cfg["origin"] + "/",
         }
         try:
-            payload = http_json(url, method="GET", headers=headers, timeout=30, retries=2)
+            payload = http_json(url, method="GET", headers=headers, timeout=30, retries=2,
+                                proxy=proxy_url)
         except Exception as exc:
             return {"status": "pending", "message": "poll error: %s" % exc}
         code = payload.get("code")
@@ -5184,13 +5248,24 @@ class AccountPool(object):
         if not token:
             return {"status": "pending", "message": "waiting for token"}
         uid = jwt_uid(token)
+        slot_id = info.get("proxy_slot") or ""
+        if info.get("auto_slot"):
+            # Re-login of a bound account keeps its exit; the auto pick only
+            # served this login (add() keeps the existing slot when ours is "").
+            with self._lock:
+                existing = self.get(uid)
+            if existing is not None and existing.proxy_slot:
+                slot_id = ""
         nickname = ""
         try:
             acct_url = "%s%s?state=%s" % (cfg["chat_upstream"], LOGIN_ACCOUNT_PATH, urllib.parse.quote(state))
             acct_headers = dict(headers)
             acct_headers["Authorization"] = "Bearer " + token
             req_acct = urllib.request.Request(acct_url, method="GET", headers=acct_headers)
-            with urllib.request.urlopen(req_acct, timeout=15) as resp_acct:
+            # Direct logins keep the exact pre-slot path (plain urllib).
+            opened = (urlopen(req_acct, timeout=15, proxy=proxy_url) if proxy_url
+                      else urllib.request.urlopen(req_acct, timeout=15))
+            with opened as resp_acct:
                 profile = json.loads(resp_acct.read().decode("utf-8"))
                 profile_data = profile.get("data") or {}
                 nickname = str(profile_data.get("nickname") or "")
@@ -5206,6 +5281,10 @@ class AccountPool(object):
             "expiresAt": normalize_epoch(data.get("expiresAt")) or jwt_exp(token),
             "source": "oauth",
             "enabled": True,
+            # Only the slot id is stored; copying its URL into the legacy
+            # "proxy" field would keep the account on it after the slot is
+            # removed/disabled.
+            "proxySlot": slot_id,
         })
         self.add(account)
         if realm == "cn":
