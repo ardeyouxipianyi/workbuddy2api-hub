@@ -33,4 +33,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # No --port on purpose: the gateway already reads PORT from the environment
 # (default 8788), and the exec form cannot expand a variable. Keeping the exec
 # form leaves python as PID 1, so `docker stop` still delivers SIGTERM.
-CMD ["python", "wb_proxy.py", "--host", "0.0.0.0", "--lan"]
+CMD ["python", "-m", "wb_proxy", "--host", "0.0.0.0", "--lan"]
