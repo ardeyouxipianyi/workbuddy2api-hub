@@ -10796,6 +10796,23 @@ def _usage_cache_series_entry(realm, state):
             "hits_overflow": bool(state["hits_overflow"])}
 
 
+class _lock_if_free(object):
+    """Hold `lock` if it is free right now; `as` gives whether it was taken."""
+
+    def __init__(self, lock):
+        self.lock = lock
+        self.held = False
+
+    def __enter__(self):
+        self.held = self.lock.acquire(blocking=False)
+        return self.held
+
+    def __exit__(self, *exc):
+        if self.held:
+            self.lock.release()
+        return False
+
+
 def _usage_cache_collect_kind(kind):
     """逐把取一类状态，做锁外可序列化的深拷贝；返回 (entries, offset) 或 None。
 
@@ -10806,11 +10823,18 @@ def _usage_cache_collect_kind(kind):
 
     entries 为空（状态都归零/不可复现）时返回 None：没得写就不写，等下一次
     折叠成功再落盘。offset 是该类各 realm 状态里的最远位置。
+
+    状态锁只做非阻塞尝试：拿不到（别的线程正在这把锁里全量重折）同样返回
+    None，这一类留到下次再写。全量重折会在锁里扫完整个日志（GB 级日志要几十
+    分钟），而调用方持着 _usage_cache_write_lock、往往还持着自己视图的缓存锁
+    （如 _byacct_lock）——阻塞等待会把别的视图一起拖死（面板 by-account 524）。
     """
     if kind == "snapshot":
         entries = []
         done = 0
-        with _usage_snap_state_lock:
+        with _lock_if_free(_usage_snap_state_lock) as held:
+            if not held:
+                return None
             for realm, state in _usage_snap_state.items():
                 entry = _usage_cache_snapshot_entry(realm, state)
                 if entry is not None:
@@ -10818,7 +10842,9 @@ def _usage_cache_collect_kind(kind):
                     done = max(done, state["offset"])
         return (entries, done) if entries else None
     if kind == "by_account":
-        with _byacct_state_lock:
+        with _lock_if_free(_byacct_state_lock) as held:
+            if not held:
+                return None
             entry = _usage_cache_by_account_entry(_byacct_state)
             if entry is None:
                 return None
@@ -10826,7 +10852,9 @@ def _usage_cache_collect_kind(kind):
     if kind == "analytics":
         entries = []
         done = 0
-        with _analytics_state_lock:
+        with _lock_if_free(_analytics_state_lock) as held:
+            if not held:
+                return None
             for realm, state in _analytics_state.items():
                 entry = _usage_cache_analytics_entry(realm, state)
                 if entry is not None:
@@ -10836,7 +10864,9 @@ def _usage_cache_collect_kind(kind):
     if kind == "series":
         entries = []
         done = 0
-        with _series_state_lock:
+        with _lock_if_free(_series_state_lock) as held:
+            if not held:
+                return None
             for realm, state in _series_state.items():
                 entry = _usage_cache_series_entry(realm, state)
                 if entry is not None:
@@ -10844,7 +10874,9 @@ def _usage_cache_collect_kind(kind):
                     done = max(done, state["offset"])
         return (entries, done) if entries else None
     if kind == "remaining":
-        with _remaining_state_lock:
+        with _lock_if_free(_remaining_state_lock) as held:
+            if not held:
+                return None
             entry = _usage_cache_remaining_entry(_remaining_state)
             if entry is None:
                 return None
