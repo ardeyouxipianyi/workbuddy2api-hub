@@ -195,6 +195,9 @@ def port_owner_hint(port):
     if IS_WINDOWS:
         return "netstat -ano | findstr :%d" % port
     return "lsof -nP -iTCP:%d -sTCP:LISTEN" % port
+def restart_hint():
+    """Launcher that stops every running copy first."""
+    return "restart-wb-proxy.bat" if IS_WINDOWS else "./restart-wb-proxy.sh"
 CURRENT_REALM = os.environ.get("WB_PROXY_DEFAULT_REALM", "intl")
 def detect_model_realm(model_id):
     if not model_id:
@@ -25354,18 +25357,87 @@ def _apply_cli_overrides(args):
     # 的第一轮巡检不能落在 --usage-dir 生效之前，否则记录会写进默认目录。
     wb_activity.set_data_dir(USAGE_DIR)
 
+class _SilentListener(Exception):
+    """A port that accepts TCP connections but never answers HTTP.
+
+    A stuck instance holds the port exactly like a healthy one: the kernel
+    completes the handshake (the listen backlog) but no thread ever writes a
+    reply. Reading that timeout as "nothing here, the port is free" let the
+    launcher start yet another copy on top of it, and on Windows -
+    SO_REUSEADDR - both sockets then keep LISTENING while the kernel hands
+    every new connection to the stuck one. The dashboard and the log viewer
+    just hang.
+    """
+
+
+def _probe_health(host, port, timeout=2.0):
+    """GET /health and return its JSON, or None when nothing answers HTTP.
+
+    Raises _SilentListener when the port accepts the connection but says
+    nothing (see above). Plain sockets, not urllib: a loopback probe must not
+    be routed through a proxy set in the environment.
+    """
+    try:
+        conn = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return None  # nothing listening - let the bind below decide
+    raw = b""
+    try:
+        conn.settimeout(timeout)
+        conn.sendall(("GET /health HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                      "Connection: close\r\n\r\n" % port).encode("ascii"))
+        while True:
+            try:
+                chunk = conn.recv(65536)
+            except (socket.timeout, TimeoutError):
+                if not raw:
+                    raise _SilentListener()
+                break
+            if not chunk:
+                break
+            raw += chunk
+            if len(raw) > 1 << 20:
+                break
+    except _SilentListener:
+        raise
+    except OSError:
+        return None
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+    if not raw:
+        raise _SilentListener()  # accepted, then hung up without a word
+    if b" 200 " not in raw.split(b"\r\n", 1)[0]:
+        return None  # 401/404/... - not our /health, the bind decides
+    body = raw.partition(b"\r\n\r\n")[2]
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
 def _probe_running_instance(args):
     # Refuse to start a second copy. On Windows SO_REUSEADDR lets two sockets
     # bind the same port, which silently splits incoming connections between
     # them - confusing and hard to diagnose.
+    host = args.host if args.host != "0.0.0.0" else "127.0.0.1"
     try:
-        probe = urllib.request.urlopen(
-            f"http://{args.host if args.host != '0.0.0.0' else '127.0.0.1'}:{args.port}/health",
-            timeout=2,
-        )
-        existing = json.loads(probe.read().decode("utf-8"))
-    except Exception:
-        existing = None  # nothing answering /health - let the bind below decide
+        existing = _probe_health(host, args.port)
+    except _SilentListener:
+        print()
+        print(f"  [ERROR] port {args.port} accepts connections but answers nothing:")
+        print("          a stuck wb-proxy (or another silent program) is holding it.")
+        print("          wb-proxy itself did NOT start - a second copy would only")
+        print("          split the port and leave every request hanging.")
+        print()
+        print("  Fix: stop whatever holds the port, then start again.")
+        print("          %s   (shows the PID)" % port_owner_hint(args.port))
+        print("          %s   (stops every wb-proxy on this machine)"
+              % restart_hint())
+        print()
+        raise SystemExit(1)
     if isinstance(existing, dict):
         # Only OUR /health carries the account-pool fields ("accounts"). Other
         # services can occupy the same port and also answer /health with JSON
