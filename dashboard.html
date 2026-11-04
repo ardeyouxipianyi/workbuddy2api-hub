@@ -5254,7 +5254,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
   <nav class="main-nav">
     <div class="console-nav-group">
       <div class="console-nav-caption">工作台</div>
-      <button class="main-nav-btn active" id="btnNavGateway" onclick="switchMainTab('gateway')"><span id="navGatewayLabel">网关</span></button>
+      <button class="main-nav-btn active" id="btnNavGateway" aria-current="page" onclick="switchMainTab('gateway')"><span id="navGatewayLabel">网关</span></button>
     </div>
     <div class="console-nav-group">
       <div class="console-nav-caption">资源管理</div>
@@ -14217,25 +14217,44 @@ function initConsoleShell(){
 function syncConsoleContext(tab){
   const label = document.getElementById('consoleCurrentPage');
   if(label) label.textContent = CONSOLE_PAGE_LABELS[tab] || '控制台';
-  document.querySelectorAll('.console-nav-link').forEach(function(item){ item.classList.remove('active'); });
+  // 视觉高亮与 aria-current 必须由「同一个函数」一起清、一起设。
+  // 原先这里只摘 active 类、不管 aria-current，而 setConsoleNavActive() 又只给
+  // console-nav-link 设 aria-current —— 结果切到任务/媒体/看板/日志/智能体时，
+  // 屏幕上高亮的是新页，屏幕阅读器读到的仍是「运行概览」，两套状态分叉。
+  document.querySelectorAll('.console-nav-link').forEach(function(item){
+    item.classList.remove('active');
+    item.removeAttribute('aria-current');
+  });
 }
 // 内容入口（模型管理 / 请求记录）与「运行概览」是三个互斥视图：
 // 进入其中一个时，只显示它自己的区块，其余隐藏——不是在同一页里滚动定位。
 let CONSOLE_VIEW = 'overview';
 function setConsoleNavActive(linkId, label){
-  document.querySelectorAll('.console-sidebar .main-nav-btn.active').forEach(function(btn){
-    btn.classList.remove('active');
-    btn.removeAttribute('aria-current');
-  });
+  // 只清「网关页内部」的三个视图入口（运行概览 / 模型管理 / 请求记录）。
+  // 原先是 .console-sidebar .main-nav-btn.active —— 那条选择器会命中侧栏里
+  // 所有一级页面按钮（设置、日志…），而这个函数在每次网关视图重算时都会跑，
+  // 于是切到设置页后它刚被 switchMainTab() 点亮的 active 与 aria-current
+  // 会在几帧之内被这里摘掉，表现为「点设置没有任何高亮」。
+  document.querySelectorAll('#btnNavGateway.active, #btnNavModels.active, #btnNavRequests.active')
+    .forEach(function(btn){
+      btn.classList.remove('active');
+      btn.removeAttribute('aria-current');
+    });
   document.querySelectorAll('.console-nav-link').forEach(function(item){
     const on = !!linkId && item.id === linkId;
     item.classList.toggle('active', on);
     if(on) item.setAttribute('aria-current', 'page');
     else item.removeAttribute('aria-current');
   });
+  // 只有真的停在网关页时才把「当前页」还给网关按钮。
+  // 这个函数由 applyConsoleView() 在网关页内部切换 模型管理/请求记录/运行概览
+  // 三个视图时调用；如果不管当前 tab 就无条件点亮网关门，切到任务/媒体/看板
+  // 时它会和 switchMainTab() 刚设好的 aria-current 打架——屏幕上高亮的是新页，
+  // 读屏软件却仍报「网关」。
   if(!linkId){
     const gw = document.getElementById('btnNavGateway');
-    if(gw){ gw.classList.add('active'); gw.setAttribute('aria-current', 'page'); }
+    const onGateway = (typeof currentMainTab === 'undefined' || currentMainTab === 'gateway');
+    if(gw && onGateway){ gw.classList.add('active'); gw.setAttribute('aria-current', 'page'); }
   }
   const ctx = document.getElementById('consoleCurrentPage');
   if(ctx && label) ctx.textContent = label;
@@ -17388,7 +17407,13 @@ function switchMainTab(tab){
   tabs.forEach(([name, btn, page]) => {
     if(!page) return;
     const on = (name === tab);
-    if(btn) btn.classList.toggle('active', on);
+    if(btn){
+      btn.classList.toggle('active', on);
+      // active 类只影响颜色，读屏软件不看它；aria-current 才是「当前页」的
+      // 语义标记。两者必须在同一处一起更新，否则视觉与语义会分叉。
+      if(on) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    }
     page.classList.toggle('active', on);
     // 每个页面各自按自己的区块重建侧栏；非当前页的区块变化在切过来时补上
     if(on) initPageNav(page);
