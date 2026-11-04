@@ -11103,6 +11103,10 @@ def runtime_settings_view():
             wb_settings.remaining_priority_enabled(ACCOUNTS_DIR),
         "egress_backoff_enabled":
             wb_settings.egress_backoff_enabled(ACCOUNTS_DIR),
+        "restriction_hold_seconds":
+            int(wb_settings.restriction_hold_seconds(ACCOUNTS_DIR)),
+        "restriction_holds":
+            all_restriction_holds(),
         "realm_fallback_enabled":
             wb_settings.realm_fallback_enabled(ACCOUNTS_DIR),
         "account_max_concurrent":
@@ -15632,46 +15636,73 @@ _RESTRICTION_EVENTS = {}   # realm -> {uid: epoch}（窗口内被限制的账号
 _RESTRICTION_HOLD = {}     # realm -> 暂停到哪个 epoch
 
 
-def reset_restriction_state():
-    """清空连坐保护状态（测试，以及人工确认「已申诉、可以恢复派发」时用）。"""
+def reset_restriction_state(realm=None):
+    """重置风控连坐状态。若指定 realm 则清空该区域，否则全部清空。"""
     with _RESTRICTION_LOCK:
-        _RESTRICTION_EVENTS.clear()
-        _RESTRICTION_HOLD.clear()
+        if realm:
+            _RESTRICTION_EVENTS.pop(realm, None)
+            _RESTRICTION_HOLD.pop(realm, None)
+        else:
+            _RESTRICTION_EVENTS.clear()
+            _RESTRICTION_HOLD.clear()
 
 
 def restriction_hold_remaining(realm, now=None):
-    """该区域整池暂停还剩多少秒（0 = 没有暂停）。"""
+    """查询指定区域连坐暂停的剩余秒数（0 = 没有暂停）。"""
     now = time.time() if now is None else now
     with _RESTRICTION_LOCK:
         return max(0.0, _RESTRICTION_HOLD.get(realm, 0.0) - now)
 
 
-def note_account_restriction(realm, uid="", now=None):
-    """记一次账号级风控限制；返回整池暂停的到期 epoch（0 = 尚未触发）。
+def all_restriction_holds(now=None):
+    """返回所有处于连坐暂停中的 realm 及剩余秒数（整数）。"""
+    now = time.time() if now is None else now
+    with _RESTRICTION_LOCK:
+        return {
+            realm: max(0, int(until - now))
+            for realm, until in _RESTRICTION_HOLD.items()
+            if until > now
+        }
 
-    同一窗口内达到 RESTRICTION_WAVE_MIN 个**不同**账号被限制，就认为上游在
-    按设备 / 出口做连坐清扫：把整个区域暂停 RESTRICTION_HOLD_SECONDS，期间
-    不再向上游发任何请求（open_upstream 直接快速失败），等人工确认或时间到
-    再恢复。按 uid 去重，所以同一个号被反复探测 / 测试不会把暂停骗出来。
+
+def clamp_restriction_holds(max_seconds, now=None):
+    """当用户调整了暂停时长，实时截断当前现存的暂停倒计时。"""
+    now = time.time() if now is None else now
+    with _RESTRICTION_LOCK:
+        if max_seconds <= 0:
+            _RESTRICTION_HOLD.clear()
+            return
+        for realm, until in list(_RESTRICTION_HOLD.items()):
+            if until > now + max_seconds:
+                _RESTRICTION_HOLD[realm] = now + max_seconds
+
+
+def note_account_restriction(realm, uid="", now=None):
+    """记一次账号级风控限制；若触发连坐暂停则返回暂停到的 epoch（0 = 尚未触发）。
+
+    同一个区域内达到 RESTRICTION_WAVE_MIN 个**不同**账号被限制，判定为该区域
+    遭到了设备 / 出口级别的风控连坐扫荡，全区域紧急暂停配置的 hold_seconds 秒；期间
+    所有发往该区域的任何请求（open_upstream）直接快速失败，直到人工确认或时间到
+    才恢复。按 uid 去重，避免同一个账号被重复探测 / 重试反复把暂停骗长。
     """
     now = time.time() if now is None else now
     uid = str(uid or "").strip() or "-"
+    hold_sec = wb_settings.restriction_hold_seconds(ACCOUNTS_DIR)
     with _RESTRICTION_LOCK:
         events = {key: at for key, at in _RESTRICTION_EVENTS.get(realm, {}).items()
                   if now - at <= RESTRICTION_WAVE_WINDOW}
         events[uid] = now
         _RESTRICTION_EVENTS[realm] = events
-        if len(events) < RESTRICTION_WAVE_MIN or RESTRICTION_HOLD_SECONDS <= 0:
+        if len(events) < RESTRICTION_WAVE_MIN or hold_sec <= 0:
             return 0.0
         until = max(_RESTRICTION_HOLD.get(realm, 0.0),
-                    now + RESTRICTION_HOLD_SECONDS)
+                    now + hold_sec)
         _RESTRICTION_HOLD[realm] = until
     log("upstream restriction wave on %s: %d account(s) restricted within %.0fs; "
         "pausing dispatch for %.0fs to avoid cross-account bans (uid %s)"
         % (realm, len(events), RESTRICTION_WAVE_WINDOW,
-           RESTRICTION_HOLD_SECONDS, uid[:8]))
+           hold_sec, uid[:8]))
     return until
-
 
 def restriction_hold_message(realm, remaining):
     """整池暂停期间交给客户端的说明。"""
@@ -19798,7 +19829,8 @@ def _release_key_slot(key_entry):
 # /shutdown 修好之后，/updates/check、/updates/install、/quota-scan/run 又漏了。
 # 新增这类「不读 body」的面板路由，请加进这个元组，别在路由里另写一份。
 BODYLESS_PANEL_POSTS = ("/console/toggle", "/shutdown", "/updates/check",
-                        "/updates/install", "/quota-scan/run")
+                        "/updates/install", "/quota-scan/run",
+                        "/settings/restriction/reset")
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -22609,6 +22641,18 @@ class Handler(BaseHTTPRequestHandler):
                                    "invalid_request_error")
             wb_settings.set_realm_fallback_enabled(ACCOUNTS_DIR, raw)
             reply["realm_fallback_enabled"] = raw
+        if "restriction_hold_seconds" in payload:
+            raw = payload.get("restriction_hold_seconds")
+            try:
+                val = float(raw)
+                if val < 0:
+                    raise ValueError("negative")
+                saved = wb_settings.set_restriction_hold_seconds(ACCOUNTS_DIR, val)
+                clamp_restriction_holds(saved)
+                reply["restriction_hold_seconds"] = saved
+            except (ValueError, TypeError):
+                return self._error(400, "restriction_hold_seconds must be a non-negative number",
+                                   "invalid_request_error")
         if "account_max_concurrent" in payload:
             # 账号级并发上限：0 = 不限（默认，与上游一字不差）；1..10 = 每账号
             # 同时最多几个 chat 请求。严格整数，字符串 "1" 不算数（它会被当成
@@ -24998,6 +25042,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self._panel_ok():
                 return self._error(401, "panel password required", "invalid_request_error")
             return self._handle_settings_save()
+        if path == "/settings/restriction/reset":
+            if not self._panel_ok():
+                return self._error(401, "panel password required", "invalid_request_error")
+            reset_restriction_state()
+            return self._json(200, {
+                "ok": True,
+                "message": "风控连坐暂停已立即解除 / Restriction hold cleared",
+                "restriction_holds": {},
+            })
         if path == "/updates/check":
             # Panel-only management write, like the pricing ones. No body to
             # read: the action takes no parameters, so a button that posts

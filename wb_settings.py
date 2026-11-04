@@ -2172,6 +2172,44 @@ def set_egress_backoff_enabled(accounts_dir, enabled):
     return enabled
 
 
+RESTRICTION_HOLD_SECONDS_KEY = "restriction_hold_seconds"
+DEFAULT_RESTRICTION_HOLD_SECONDS = 1800
+MAX_RESTRICTION_HOLD_SECONDS = 86400 * 7
+
+
+def restriction_hold_seconds(accounts_dir):
+    """How many seconds the gateway pauses dispatch when upstream reports an
+    unusual activity restriction (403 / 11140).
+
+    Defaults to 1800 seconds (30 minutes). When set to 0, restriction hold is
+    disabled. Operator can configure custom duration via panel settings.
+    """
+    val = load(accounts_dir).get(RESTRICTION_HOLD_SECONDS_KEY)
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and val >= 0:
+        return float(val)
+    env_val = os.environ.get("WB_RESTRICTION_HOLD_SECONDS")
+    if env_val is not None:
+        try:
+            return max(0.0, float(env_val))
+        except (ValueError, TypeError):
+            pass
+    return float(DEFAULT_RESTRICTION_HOLD_SECONDS)
+
+
+def set_restriction_hold_seconds(accounts_dir, value):
+    """Persist the restriction hold duration in seconds."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError("restriction_hold_seconds must be a non-negative number")
+    if value > MAX_RESTRICTION_HOLD_SECONDS:
+        raise ValueError("restriction_hold_seconds exceeds maximum allowed")
+    stored = int(value) if float(value).is_integer() else round(float(value), 1)
+    with _lock:
+        data = load(accounts_dir)
+        data[RESTRICTION_HOLD_SECONDS_KEY] = stored
+        save(accounts_dir, data)
+    return stored
+
+
 def realm_fallback_enabled(accounts_dir):
     """Whether a throttled international exit may fail over to the domestic one.
 

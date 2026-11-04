@@ -6940,6 +6940,27 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
           </div>
         </div>
       </section>
+      <section data-cat="stability">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div>
+            <h2 style="margin:0">风控连坐暂停保护 <em id="setRestrictionHoldState"></em></h2>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              当上游检测到异常行为（403 / code 11140）时，为防同一设备或 IP 下其他账号连坐封禁，网关自动对该区域暂停派发。默认 1800 秒（30 分钟），填 0 可彻底关闭该熔断。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)">
+              暂停时长（秒，0 为关闭）
+              <input id="setRestrictionHoldSeconds" type="number" min="0" max="604800" step="1" style="width:130px" placeholder="1800">
+            </label>
+            <button onclick="saveRestrictionHold(this)">保存时长</button>
+            <button class="btn-warn" onclick="resetRestrictionHold(this)" title="立即清除正在生效的暂停倒计时">立即解除暂停</button>
+          </div>
+        </div>
+        <div id="restrictionHoldAlert" style="display:none;padding:10px 14px;background:var(--card-bg, #1e1e24);border:1px solid var(--accent, #e5a00d);border-radius:6px;font-size:13px;color:var(--accent, #e5a00d);margin-top:8px">
+          ⚠️ <span id="restrictionHoldDetails">当前处于风控连坐暂停中</span>。若需立即继续请求，可点击上方「立即解除暂停」。
+        </div>
+      </section>
 
       <section data-cat="models">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -14854,6 +14875,35 @@ async function loadSettings(showToast){
         egressBackoffState.textContent = egressBackoff ? '(已启用)' : '(未启用)';
         egressBackoffState.style.color = egressBackoff ? 'var(--accent2)' : 'var(--dim)';
       }
+      const holdSec = typeof data.restriction_hold_seconds === 'number' ? data.restriction_hold_seconds : 1800;
+      const holdInput = document.getElementById('setRestrictionHoldSeconds');
+      if(holdInput) holdInput.value = holdSec;
+      const holdState = document.getElementById('setRestrictionHoldState');
+      if(holdState){
+        if(holdSec <= 0){
+          holdState.textContent = '(已关闭熔断)';
+          holdState.style.color = 'var(--dim)';
+        } else {
+          holdState.textContent = '(' + holdSec + 's 保护中)';
+          holdState.style.color = 'var(--accent2)';
+        }
+      }
+      const activeHolds = data.restriction_holds || {};
+      const holdAlert = document.getElementById('restrictionHoldAlert');
+      const holdDetails = document.getElementById('restrictionHoldDetails');
+      const activeRealms = Object.keys(activeHolds).filter(function(k){ return activeHolds[k] > 0; });
+      if(holdAlert && holdDetails){
+        if(activeRealms.length > 0){
+          const desc = activeRealms.map(function(r){
+            const name = r === 'international' ? '国际版' : (r === 'domestic' ? '国内版' : r);
+            return name + ' 剩余 ' + activeHolds[r] + ' 秒';
+          }).join('，');
+          holdDetails.textContent = '当前 ' + desc + ' 触发了连坐暂停';
+          holdAlert.style.display = 'block';
+        } else {
+          holdAlert.style.display = 'none';
+        }
+      }
       const accountConcurrent = (typeof data.account_max_concurrent === 'number') ? data.account_max_concurrent : 0;
       const accountConcurrentInput = document.getElementById('setAccountConcurrent');
       if(accountConcurrentInput) accountConcurrentInput.value = accountConcurrent;
@@ -16088,6 +16138,37 @@ async function saveEgressBackoff(btn){
     loadSettings();
   } catch(e) {
     toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+async function saveRestrictionHold(btn){
+  const el = document.getElementById('setRestrictionHoldSeconds');
+  const val = parseInt(el ? el.value : '1800', 10);
+  if(isNaN(val) || val < 0){
+    toast('暂停时长必须为非负整数', 'bad');
+    return;
+  }
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {restriction_hold_seconds: val});
+    toast(val <= 0 ? '已关闭风控连坐暂停' : '已保存连坐暂停时长: ' + val + ' 秒', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function resetRestrictionHold(btn){
+  if(btn) btn.disabled = true;
+  try {
+    const res = await postJSON('/settings/restriction/reset', {});
+    toast(res.message || '风控连坐暂停已立即解除', 'ok');
+    loadSettings();
+  } catch(e) {
+    toast('解除失败: ' + e.message, 'bad');
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -21318,7 +21399,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     stability: {
       title: '稳定性',
       desc: '额度探针、退避、超时、并发上限和会话粘滞。',
-      items: ['模型额度窗口探针', '出口级瞬时失败退避', '模型额度定时主动查询', '用量聚合保留窗口', '上游响应头超时', '账号级并发上限', '单请求体上限', '更稳的会话粘滞键']
+      items: ['风控连坐暂停保护', '模型额度窗口探针', '出口级瞬时失败退避', '模型额度定时主动查询', '用量聚合保留窗口', '上游响应头超时', '账号级并发上限', '单请求体上限', '更稳的会话粘滞键']
     },
     system: {
       title: '日志与系统',
