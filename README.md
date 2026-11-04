@@ -210,7 +210,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### Unreleased
 
-- 暂无。
+- 新增 `start-workbuddy-all.bat`：双开一条命令——2api 代理未监听时自动拉起（已在跑则复用，不重启），随后打开 WorkBuddy 执行器的工作台窗口。网关目录、Node、Python 可用 `WORKBUDDY_GATEWAY_DIR` / `WORKBUDDY_NODE` / `WORKBUDDY_PYTHON` 覆盖，端口用第一个参数指定（默认 8788）；`WORKBUDDY_LAUNCH_SKIP_WINDOW=1` 只起代理不开窗口。不设这些变量时行为与原来手动双击两个脚本一致。
 
 完整历史版本与详细变更日志请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
