@@ -215,6 +215,7 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
   `You are Claude Code, Anthropic's official CLI tool for Claude.` 整句中性化；
   旧规则只把 `CLI for Claude` 改写成 `CLI tool for Claude`，反而保留了
   `You are Claude Code` 指纹。覆盖大小写与弯引号，`user` / `tool` 内容不改写。
+- 启动检查不再把"端口能连上但一直不答"当成端口空闲。此前 `--probe-only` 用 2 秒超时探 `/health`，卡死的实例只会让它超时，于是判定端口可用、又叠了一层实例；Windows 的 `SO_REUSEADDR` 允许重复监听，内核仍把新连接分给卡死的那个，看板与日志查看器就一直是空的。现在这种情况明确报错（退出码 1）并给出占端口 PID 的查法，不再静默重复启动。
 
 完整历史版本与详细变更日志请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
