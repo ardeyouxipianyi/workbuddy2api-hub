@@ -4301,6 +4301,7 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     [/有 (\d+) 把 Key 没有绑定出口/, function(m, n){ return n + ' keys have no exit bound'; }],
     [/共 (\d+) 条记录/, function(m, n){ return n + ' records'; }],
     [/第 (\d+) \/ (\d+) 页 · 共 ([\d,]+) 条记录/, function(m, a, b, c){ return 'Page ' + a + ' / ' + b + ' · ' + c + ' records'; }],
+    [/第 (\d+) \/ (\d+) 页 · 共 ([\d,]+) 个账号/, function(m, a, b, c){ return 'Page ' + a + ' / ' + b + ' · ' + c + ' accounts'; }],
     [/共 (\d+) 个，启用 (\d+) 个/, function(m, a, b){ return a + ' total, ' + b + ' enabled'; }],
     [/含失败共 ([\d,]+) 次/, function(m, n){ return n + ' calls including failures'; }],
     [/失败 ([\d,]+) 次/, function(m, n){ return n + ' failed'; }],
@@ -9645,10 +9646,12 @@ function colKind(id, i, rows, nCols){
   return inferColKind(rows, i);
 }
 
-/* 按当前选中的列重排表体。 */
-function applyTableSort(id){
+/* 按当前选中的列重排表体。返回各列的类型（给账号表分页记下全量口径用）。 */
+function applyTableSort(id, rootEl){
   if(SORT_DENY_TABLES.has(id)) return;
-  const root = document.getElementById(id);
+  // rootEl：账号表分页时先在一个游离节点里把全部账号排好再切页（见 renderAccounts），
+  // 那张表不在文档里，按 id 取不到。
+  const root = rootEl || document.getElementById(id);
   const table = !root ? null
     : (root.tagName === 'TABLE' ? root : root.querySelector('table'));
   if(!table) return;
@@ -9671,7 +9674,12 @@ function applyTableSort(id){
   }
   const body = units.slice(pinN).map(u => u.row);
   const ths = Array.from(thead.querySelectorAll('th'));
-  const kinds = ths.map((th, i) => colKind(id, i, body, ths.length));
+  /* 账号表分页且有表头排序时，全量已在 renderAccounts 里排好、这一页只是切片：
+     页内只挂表头装饰、不重排，列类型沿用全量推断的那份——只看这 50 行推断，
+     某列这一页全是「—」就会被判成不可排，箭头被摘、顺序也可能跟全量对不上。 */
+  const fixedKinds = (id === 'accounts' && !rootEl) ? ACCT_FIXED_KINDS : null;
+  const kinds = (fixedKinds && fixedKinds.length === ths.length)
+    ? fixedKinds : ths.map((th, i) => colKind(id, i, body, ths.length));
   const st = SORT_STATE[id] || null;
   ths.forEach((th, i) => {
     const kind = kinds[i];
@@ -9710,7 +9718,7 @@ function applyTableSort(id){
         '<span class="' + cls + '" aria-hidden="true">' + want + '</span>');
     }
   });
-  if(!st || !kinds[st.col]) return;
+  if(fixedKinds || !st || !kinds[st.col]) return kinds;
   const kind = kinds[st.col];
   const dir = st.dir === 'asc' ? 1 : -1;
   const sorted = units.slice(pinN)
@@ -9734,6 +9742,7 @@ function applyTableSort(id){
     // appendChild 对已在册的子节点是「移动」，所以这一遍就把顺序定下来了。
     ordered.forEach(r => tbody.appendChild(r));
   }
+  return kinds;
 }
 
 /* 扫一遍页面上所有数据表，把排序接上。挂在每 5 秒那条轮询上，新加一张表只要带
@@ -9771,6 +9780,13 @@ function toggleTableSort(id, col){
   if(st && st.col === col) st.dir = st.dir === 'desc' ? 'asc' : 'desc';
   else SORT_STATE[id] = {col: col, dir: 'desc'};
   try { localStorage.setItem(SORT_KEY_PREFIX + id, col + ':' + SORT_STATE[id].dir); } catch(e) {}
+  // 账号表是分页的：只重排 DOM 只能排当前这一页。改成整表重画（全部账号先排序
+  // 再切页），并回到第一页。
+  if(id === 'accounts' && typeof renderAccounts === 'function'){
+    ACCT_PAGE = 1;
+    renderAccounts();
+    return;
+  }
   applyTableSort(id);
 }
 
@@ -11195,6 +11211,60 @@ async function loadActivityBoard(showToast, more){
   }
 }
 
+// 账号表客户端分页（上百个号时整表重画是面板卡顿的主因之一）。排序在全部账号上
+// 做完再切页；页码跨轮询保留，账号变少时夹回最后一页，切换视图区域回第一页。
+const ACCT_PAGE_SIZE = 50;
+let ACCT_PAGE = 1;
+let ACCT_TOTAL_PAGES = 1;
+let ACCT_PAGE_REALM = null;
+let ACCT_PAGE_FILTER = null;
+// 账号表上次真正画进 DOM 的内容指纹（同最近请求表的 lastRecentFp）：轮询拿回来
+// 的数据没变就整段跳过，不重拼 HTML、不重排。
+let lastAccountsFp = null;
+// 分页 + 表头排序时，全量排序那一遍推断出的列类型；页内的 applyTableSort（含每 5
+// 秒的 applyAllTableSorts）照它挂表头、且不再重排。其余情况为 null，照常推断。
+let ACCT_FIXED_KINDS = null;
+function accountsRenderFp(){
+  // 行里用到的全部输入：账号本身、按账号用量、代理槽（出口下拉）、今日活动
+  // （今日活动列）、视图区域、页码、表头排序、筛选条件、本地日期（「今日」口径）。
+  // 筛选也进指纹：不靠「改筛选一定无参调用 renderAccounts()」这条约定兜底。
+  return [
+    window.VIEW_REALM || 'intl', ACCT_PAGE, JSON.stringify(SORT_STATE.accounts || null),
+    JSON.stringify(ACCOUNT_FILTERS),
+    new Date().toDateString(),
+    JSON.stringify(window.ACCOUNTS || []), JSON.stringify(USAGE_BY_ACCOUNT || {}),
+    JSON.stringify(PROXY_SLOTS || []), JSON.stringify(ACTIVITY_TODAY || null),
+  ].join('\u0002');
+}
+function changeAcctPage(delta){
+  const next = ACCT_PAGE + delta;
+  if(next < 1 || next > ACCT_TOTAL_PAGES) return;
+  ACCT_PAGE = next;
+  renderAccounts();
+}
+function gotoAcctPage(p){
+  if(p < 1 || p > ACCT_TOTAL_PAGES || p === ACCT_PAGE) return;
+  ACCT_PAGE = p;
+  renderAccounts();
+}
+function acctPagerHtml(total){
+  // 与最近请求表的分页条同一套样式（generatePageList + range-btn）。
+  const pages = generatePageList(ACCT_PAGE, ACCT_TOTAL_PAGES);
+  return '<div id="acctPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex-wrap:wrap;gap:8px">'
+    + '<div id="acctPageInfo">第 ' + ACCT_PAGE + ' / ' + ACCT_TOTAL_PAGES + ' 页 · 共 ' + fmt(total) + ' 个账号</div>'
+    + '<div style="display:inline-flex;gap:5px;align-items:center">'
+    +   '<button class="sec mini" id="btnAcctPrev" onclick="changeAcctPage(-1)"' + (ACCT_PAGE <= 1 ? ' disabled' : '') + '>上一页</button>'
+    +   '<div style="display:inline-flex;gap:3px;align-items:center">'
+    +     pages.map(p => p === '...'
+            ? '<span style="color:var(--dim);padding:0 3px">…</span>'
+            : '<button class="range-btn' + (p === ACCT_PAGE ? ' active' : '') + '" style="min-width:26px;padding:3px 6px;font-size:11px" onclick="gotoAcctPage(' + p + ')">' + p + '</button>').join('')
+    +   '</div>'
+    +   '<button class="sec mini" id="btnAcctNext" onclick="changeAcctPage(1)"' + (ACCT_PAGE >= ACCT_TOTAL_PAGES ? ' disabled' : '') + '>下一页</button>'
+    + '</div></div>';
+}
+// 第一个参数严格等于 true（只有轮询这么传）——数据与视图都没变就不重画表格。
+// 用户操作（启停、排序、翻页、切区域）一律无参调用，照常重画；只认 === true，
+// 免得被当回调时传进来的事件/数据对象误触发跳过。
 function renderAccounts(){
   // Same data source as the account cards, so the two views can never disagree.
   renderDisabled();
@@ -11202,6 +11272,10 @@ function renderAccounts(){
   const box = document.getElementById('accounts');
   const currentView = (window.VIEW_REALM || "intl");
   let list = accountsInView();
+  const skipIfSame = arguments[0] === true;
+  if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
+  const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status;
+  if(ACCT_PAGE_FILTER !== filterKey){ ACCT_PAGE_FILTER = filterKey; ACCT_PAGE = 1; }
   const unfilteredCount = list.length;
   list = list.filter(accountMatchesFilters);
   const filterCount = document.getElementById('accountFilterCount');
@@ -11221,6 +11295,12 @@ function renderAccounts(){
     .map(pair => pair[0]);
   const usable = list.filter(a => a.enabled).length;
   const viewName = currentView === 'cn' ? '国内版' : '国际版';
+  ACCT_TOTAL_PAGES = Math.max(1, Math.ceil(list.length / ACCT_PAGE_SIZE));
+  if(ACCT_PAGE > ACCT_TOTAL_PAGES) ACCT_PAGE = ACCT_TOTAL_PAGES;
+  if(ACCT_PAGE < 1) ACCT_PAGE = 1;
+  const fp = accountsRenderFp();
+  if(skipIfSame && fp === lastAccountsFp) return;
+  lastAccountsFp = fp;
   document.getElementById('acctCount').textContent =
     list.length ? ('（' + viewName + '共 ' + list.length + ' 个，启用 ' + usable + ' 个）') : '';
   if(!list.length){
@@ -11240,7 +11320,7 @@ function renderAccounts(){
       + '</div>';
     return;
   }
-  box.innerHTML = '<div class="table-wrap"><table class="data-cards account-cards"><thead><tr>'
+  const tableHtml = body => '<div class="table-wrap"><table class="data-cards account-cards"><thead><tr>'
     + '<th style="text-align:center;width:76px">版本</th>'
     + '<th style="text-align:left">账号</th>'
     + '<th style="text-align:center;width:84px">状态</th>'
@@ -11252,13 +11332,60 @@ function renderAccounts(){
     + '<th style="text-align:right;width:88px">总 token</th>'
     + '<th style="text-align:right;width:80px">缓存</th>'
     + '<th style="text-align:center;width:232px">操作</th>'
-    + '</tr></thead><tbody>' + list.map(accountRow).join('') + '</tbody></table></div>';
+    + '</tr></thead><tbody>' + body + '</tbody></table></div>';
+  const pager = ACCT_TOTAL_PAGES > 1 ? acctPagerHtml(list.length) : '';
+  const lo = (ACCT_PAGE - 1) * ACCT_PAGE_SIZE;
+  ACCT_FIXED_KINDS = null;
+  if(ACCT_TOTAL_PAGES > 1 && SORT_STATE.accounts){
+    // 有表头排序时按单元格排（applyTableSort 的口径），而它只认 DOM：先在游离
+    // 节点里画出全部账号排好序（不进文档、不触发布局），再把这一页的行搬进来。
+    const tmp = document.createElement('div');
+    tmp.innerHTML = tableHtml(list.map(accountRow).join(''));
+    ACCT_FIXED_KINDS = applyTableSort('accounts', tmp) || null;
+    const units = [];
+    Array.from(tmp.querySelector('tbody').children).forEach(r => {
+      if(units.length && r.classList.contains('cool-row')) units[units.length - 1].push(r);
+      else units.push([r]);
+    });
+    box.innerHTML = tableHtml('') + pager;
+    const tbody = box.querySelector('tbody');
+    units.slice(lo, lo + ACCT_PAGE_SIZE).forEach(u => u.forEach(r => tbody.appendChild(r)));
+  } else {
+    box.innerHTML = tableHtml(list.slice(lo, lo + ACCT_PAGE_SIZE).map(accountRow).join('')) + pager;
+  }
   // 表下不再堆两行说明图例（出站身份解释留在每行身份按钮组的悬停提示里，
   // 轮询/粘性说明挂到「账号列表」标题上），表格底部保持干净。
   applyTableSort('accounts');
 }
 
-async function loadAccounts(){
+// 自动补积分快照：每个账号每次页面加载最多补一次，只补缺积分的那几个号。原来
+// 只要有一个号缺积分就 POST 不带参数的 /accounts/credits——服务端把整池逐个
+// 刷一遍（上百个号要几分钟），刷不到的号（失效 / API Key）每 15 秒再触发一轮。
+// 手动「一键刷新积分」不走这里，行为不变。
+const CREDITS_AUTO_TRIED = new Set();
+let CREDITS_AUTO_BUSY = false;
+function autoFetchMissingCredits(){
+  if(CREDITS_AUTO_BUSY) return;
+  const uids = (window.ACCOUNTS || [])
+    .filter(a => a && a.uid && !a.credits && !CREDITS_AUTO_TRIED.has(a.uid))
+    .map(a => a.uid);
+  if(!uids.length) return;
+  uids.forEach(u => CREDITS_AUTO_TRIED.add(u));
+  CREDITS_AUTO_BUSY = true;
+  postJSON('/accounts/credits', {uids: uids}).then(r => {
+    // 撞上别人正在跑的全量刷（busy）：这一次什么都没刷，放回去下一轮再补。
+    if(r && r.busy){ uids.forEach(u => CREDITS_AUTO_TRIED.delete(u)); return; }
+    window.ACCOUNTS = r.accounts || ACCOUNTS;
+    renderAccounts();
+  }).catch(e => {
+    console.log('[wb] 自动补积分失败: ' + (e && e.message));
+  }).finally(() => { CREDITS_AUTO_BUSY = false; });
+}
+
+// poll=true 只给定时轮询 / 切页签 / 回到前台用：数据没变时不重画表格。操作之后
+// 的回读一律不带参数，整表重画。/accounts 始终 no-store：响应里有带凭据的代理
+// 地址，不能落浏览器磁盘缓存。
+async function loadAccounts(poll){
   try{
     const [acct, byAcct] = await Promise.all([
       getJSON('/accounts?realm=all'),
@@ -11270,18 +11397,12 @@ async function loadAccounts(){
     USAGE_BY_ACCOUNT = {};
     (byAcct.accounts || []).forEach(a => { USAGE_BY_ACCOUNT[a.account] = a; });
     await loadProxySlots();
-    renderAccounts();
+    renderAccounts(!!poll);
     renderConsoleAccountHealth(window.ACCOUNTS || []);
     updateUI();
     // 昵称刚到位，补画一次积分扣减历史：它和本请求是并行的，先渲染的那次只有 uid。
     if(LAST_CREDIT_DATA) renderCreditHistory();
-    // Auto-fetch credits once if not present
-    if(window.ACCOUNTS.length && window.ACCOUNTS.some(a => !a.credits)){
-      postJSON('/accounts/credits', {}).then(r => {
-        window.ACCOUNTS = r.accounts || ACCOUNTS;
-        renderAccounts();
-      }).catch(()=>{});
-    }
+    autoFetchMissingCredits();
   }catch(e){ toast('账号加载失败: ' + e.message); }
 }
 
@@ -13216,6 +13337,16 @@ async function bootPanel(){
 
 let PANEL_READY = false;
 let PANEL_TIMERS = [];
+// 显示账号数据（window.ACCOUNTS）、需要 15 秒轮询跟着刷的页签：网关页（出口卡片
+// 的账号数 / Key 数；合并模式下账号表也在这一页）、账号页、任务页（签到 /
+// 每日活跃卡片与未完成名单）。数据看板（积分历史的昵称）与设置页（Key 绑定、
+// 一键分配代理）只用名单本身，启动时那一次加载与操作后的回读就够了。
+function accountsTabActive(tab){
+  const t = tab || currentMainTab;
+  // 新导航（?ui=next）的总览页：账号区块合并在这一页，且健康卡总在这一页
+  return t === 'gateway' || t === 'accounts' || t === 'tasks' ||
+    (t === 'overview' && !!window.__NEXT_UI__);
+}
 let visHookInstalled = false;
 
 async function startDashboard(){
@@ -13260,7 +13391,8 @@ async function startDashboard(){
     // 一张表不必在它的 render 函数里再写一行，下一轮自己就接上了。
     setInterval(() => { if(!document.hidden){ refresh(); applyAllTableSorts(); } }, 5000),
     setInterval(() => { if(!document.hidden) loadSchedulerStatus(); }, 30000),
-    setInterval(() => { if(!document.hidden) loadAccounts(); }, 15000),
+    // 账号轮询只在显示账号数据的页签上跑（见 accountsTabActive）。
+    setInterval(() => { if(!document.hidden && accountsTabActive()) loadAccounts(true); }, 15000),
   ];
   if(!visHookInstalled){
     visHookInstalled = true;
@@ -13269,7 +13401,7 @@ async function startDashboard(){
     document.addEventListener('visibilitychange', () => {
       if(document.hidden || !PANEL_READY) return;
       refresh();
-      loadAccounts();
+      if(accountsTabActive()) loadAccounts(true);
       loadSchedulerStatus();
       if(currentMainTab === 'analytics'){ loadAnalytics(); loadAnalyticsMatrix(); }
       if(currentMainTab === 'logs' && logAutoRefresh) fetchNewLogs(false);
@@ -17443,8 +17575,11 @@ function switchMainTab(tab){
   // ?tab=accounts 的书签与上次停留的页签都退回总览页——区块就在那一页里。
   if(tab === 'accounts' && !_accountsSeparateTab) tab = window.__NEXT_UI__ ? 'overview' : 'gateway';
   if(!window.__NEXT_UI__ && tab === 'overview') tab = 'gateway';
+  const prevTab = currentMainTab;
   currentMainTab = tab;
   syncConsoleContext(tab);
+  // 从不轮询账号的页签切过来：立刻拉一次，不等下一轮 15 秒。
+  if(PANEL_READY && accountsTabActive(tab) && !accountsTabActive(prevTab)) loadAccounts(true);
   // Remember the page across reloads. The URL is updated so the address bar
   // matches what is on screen and a copied link reopens the same page;
   // storage covers a plain reload and the ?key= link, which strips the
