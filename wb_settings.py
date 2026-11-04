@@ -2342,6 +2342,31 @@ def set_log_db_max_bytes(accounts_dir, value):
     return stored
 
 
+def daily_activity_enabled(accounts_dir):
+    """Whether the scheduler runs the intl daily activity at all (master switch).
+
+    On unless the operator turns it off: an install that never touched the
+    setting keeps the scheduled daily activity exactly as before. Writing
+    ``false`` stops it (like ``daily_chat_web``, any stored value other than
+    unset / ``true`` reads as off; the panel and API only ever write booleans):
+    the scheduled slots, the forced "check now" cycle and the startup catch-up
+    all skip it, while the manual per-account / batch buttons in the panel
+    still work, because those are explicit operator actions.
+    """
+    value = load(accounts_dir).get("daily_activity")
+    return True if value is None else value is True
+
+
+def set_daily_activity_enabled(accounts_dir, enabled):
+    """Persist the daily-activity master switch. Returns the stored boolean."""
+    enabled = bool(enabled)
+    with _lock:
+        data = load(accounts_dir)
+        data["daily_activity"] = enabled
+        save(accounts_dir, data)
+    return enabled
+
+
 def daily_chat_web(accounts_dir):
     """Whether the intl daily check-in also opens a web-channel conversation.
 

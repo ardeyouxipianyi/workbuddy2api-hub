@@ -127,6 +127,41 @@ class CycleScopeTests(unittest.TestCase):
         self.acc.checkin.assert_not_called()
         self.acc.refresh.assert_not_called()
 
+    def test_daily_activity_switch_defaults_on(self):
+        """没设置过总开关的老安装保持原行为：每日活跃照常跑。"""
+        self.assertNotIn("daily_activity", wb_settings.load(self.dir))
+        self.assertTrue(wb_settings.daily_activity_enabled(self.dir))
+        self.run_cycle(daily_chat_only=True)
+        self.acc.daily_chat.assert_called_once_with(trigger="scheduler")
+
+    def test_daily_activity_switch_off_skips_even_forced_runs(self):
+        """显式关掉总开关：时段命中、立即巡检（force）、启动补跑都不跑。"""
+        wb_settings.set_daily_activity_enabled(self.dir, False)
+        self.assertFalse(wb_settings.daily_activity_enabled(self.dir))
+        self.run_cycle()
+        self.run_cycle(daily_chat_only=True)
+        self.run_cycle(force=True)
+        self.acc.daily_chat.assert_not_called()
+
+    def test_daily_activity_switch_keeps_catchup_until_turned_back_on(self):
+        """关着的时候不消费启动补跑；重新打开后第一轮照常补跑。"""
+        self.sched.daily_chat_times = ["23:30"]      # 今天还没到点
+        wb_settings.set_daily_activity_enabled(self.dir, False)
+        self.run_cycle()
+        self.acc.daily_chat.assert_not_called()
+        wb_settings.set_daily_activity_enabled(self.dir, True)
+        self.run_cycle()
+        self.acc.daily_chat.assert_called_once_with(trigger="scheduler")
+
+    def test_daily_activity_switch_round_trips(self):
+        """写 true 是开；把键删掉回到缺省（开），不需要迁移老配置。"""
+        wb_settings.set_daily_activity_enabled(self.dir, True)
+        self.assertTrue(wb_settings.daily_activity_enabled(self.dir))
+        data = wb_settings.load(self.dir)
+        data.pop("daily_activity", None)
+        wb_settings.save(self.dir, data)
+        self.assertTrue(wb_settings.daily_activity_enabled(self.dir))
+
     def test_empty_slots_use_todays_random_slots(self):
         """时段留空时仍按当天随机时段运行，启动补跑先跑一轮。"""
         self.sched.daily_chat_random_slots = True
@@ -167,6 +202,60 @@ class CycleScopeTests(unittest.TestCase):
         self.sched.daily_chat_times = ["23:30"]
         self.run_cycle()
         acc.daily_chat.assert_not_called()
+
+class DailyActivitySwitchRouteTests(unittest.TestCase):
+    """/settings/save 只收 JSON 布尔：字符串 "false" 不能被读成开或关。"""
+
+    class Request(object):
+        _handle_settings_save = wb_proxy.Handler._handle_settings_save
+
+        def __init__(self, payload):
+            self.payload = payload
+            self.status = None
+            self.reply = None
+
+        def _payload_or_error(self, allow_list=False):
+            return self.payload
+
+        def _authorized(self):
+            return True
+
+        def _panel_ok(self):
+            return True
+
+        def _error(self, status, message, kind=""):
+            self.status = status
+            self.reply = message
+            return status, message
+
+        def _json(self, status, payload):
+            self.status = status
+            self.reply = payload
+            return status, payload
+
+    def _save(self, directory, payload):
+        request = self.Request(payload)
+        with mock.patch.object(wb_proxy, "ACCOUNTS_DIR", directory):
+            request._handle_settings_save()
+        return request
+
+    def test_settings_save_toggles_the_switch(self):
+        directory = tempfile.mkdtemp(prefix="daily-activity-route-")
+        request = self._save(directory, {"daily_activity": False})
+        self.assertEqual(request.status, 200)
+        self.assertIs(request.reply["daily_activity"], False)
+        self.assertFalse(wb_settings.daily_activity_enabled(directory))
+        self._save(directory, {"daily_activity": True})
+        self.assertTrue(wb_settings.daily_activity_enabled(directory))
+
+    def test_settings_save_refuses_a_non_boolean(self):
+        directory = tempfile.mkdtemp(prefix="daily-activity-route-")
+        for value in ("false", 0, 1, None, "yes"):
+            request = self._save(directory, {"daily_activity": value})
+            self.assertEqual(request.status, 400, value)
+        self.assertNotIn("daily_activity", wb_settings.load(directory))
+        self.assertTrue(wb_settings.daily_activity_enabled(directory))
+
 
 class RandomSlotTests(unittest.TestCase):
     """面板留空时段时：每天随机抽两个、间隔 12 小时、当日不重抽。"""
