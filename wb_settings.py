@@ -1902,14 +1902,6 @@ def set_enable_anthropic_messages(accounts_dir, enabled):
     return enabled
 
 
-def deepseek_flash_force_sg(accounts_dir):
-    return False
-
-
-def set_deepseek_flash_force_sg(accounts_dir, enabled):
-    return False
-
-
 def free_model_credit_fallback(accounts_dir):
     """Whether exhausted free models (deepseek-v4.1-flash) can fall back to credit siblings."""
     return load(accounts_dir).get("free_model_credit_fallback") is True
