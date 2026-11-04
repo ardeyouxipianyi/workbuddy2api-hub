@@ -114,6 +114,17 @@ try:
     glm = next(m for m in payload["data"] if m["id"] == "GLM-5.2")
     check("reasoning metadata", glm.get("supports_reasoning") is True
           and "high" in glm.get("reasoning_efforts", []), glm)
+    check("credits use the catalogue form", glm.get("credits") == "x0.7", glm)
+    tiered = next(m for m in payload["data"] if m["id"] == "GLM-4.7")
+    check("credits skip the off-peak discount",
+          tiered.get("credits") == "x0.18", tiered)
+    check("no multiplier stays absent", "credits" not in vision, vision)
+    check("unusable ratio is not a price",
+          C._credit_label([{"ratio_display": "按量计费"}]) == ""
+          and C._credit_label([{"ratio_display": "x"}]) == ""
+          and C._credit_label(None) == "")
+    check("no multiplier is not free", not wb_proxy.credits_is_free(
+        vision.get("credits")))
 
     # Key 模型限制
     wb_settings.set_filter_models_by_key(ACCOUNTS, True)

@@ -1150,6 +1150,7 @@ def _merge_models(sets):
                                         if isinstance(item.get("supports_images"), bool)
                                         else None),
                     "model_category": str(item.get("model_category") or ""),
+                    "credits": str(item.get("credits") or ""),
                 }
                 continue
             if not current.get("context_window") and item.get("context_window"):
@@ -1167,6 +1168,8 @@ def _merge_models(sets):
                 current["supports_images"] = False
             if not current.get("model_category") and item.get("model_category"):
                 current["model_category"] = item["model_category"]
+            if not current.get("credits") and item.get("credits"):
+                current["credits"] = item["credits"]
     return list(merged.values())
 
 
@@ -1219,6 +1222,30 @@ def _fetch_agent_models(acct, timeout):
     return out
 
 
+def _credit_label(rows):
+    """The multiplier a request normally pays, in the catalogue's `x0.18` form.
+
+    `credit` holds one row per input-length tier and, on some models, one per
+    time slot. An `off_peak` row is a discount (its `before_display_ratio` is
+    the regular rate), so it must not be advertised as the model's price. A
+    model without a usable row stays blank: no multiplier does not mean free.
+    """
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
+            continue
+        if row.get("time_slot_id") not in (None, "", "default"):
+            continue
+        text = str(row.get("ratio_display") or "").strip().lower()
+        if not text.endswith("x"):
+            continue
+        try:
+            float(text[:-1])
+        except ValueError:
+            continue
+        return "x" + text[:-1]
+    return ""
+
+
 def _fetch_builtin_models(acct, timeout):
     data = signed_get(acct, SNAP_HOST + EP_MODEL_BUILTIN,
                       timeout=timeout, agent_type="PromptCenter")
@@ -1238,6 +1265,7 @@ def _fetch_builtin_models(acct, timeout):
                                 if isinstance(item.get("supports_images"), bool)
                                 else None),
             "model_category": str(item.get("model_category") or ""),
+            "credits": _credit_label(item.get("credit")),
         })
     return out
 
@@ -1384,6 +1412,8 @@ def model_entries(config):
             entry["max_output"] = out_tokens
         if item.get("benefit"):
             entry["benefit"] = True
+        if item.get("credits"):
+            entry["credits"] = item["credits"]
         supports = item.get("supports_images")
         if not isinstance(supports, bool):
             supports = _known_vision(item["id"])
