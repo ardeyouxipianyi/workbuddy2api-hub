@@ -40,11 +40,25 @@ class FakeState(object):
         self.omit_identity = False
         self.builtin = [
             {"model_id": "GLM-5.2", "model_name": "GLM-5.2",
-             "context_window": 131072, "max_tokens": 8192},
-            {"model_id": "GLM-4.7", "model_name": "GLM-4.7"},
+             "context_window": 131072, "max_tokens": 8192,
+             "credit": [
+                 {"input_from": 0, "input_to": 32000, "ratio_display": "0.7x",
+                  "time_slot_id": None, "before_display_ratio": None},
+                 {"input_from": 32001, "input_to": -1, "ratio_display": "0.7x",
+                  "time_slot_id": None, "before_display_ratio": None},
+             ]},
+            # 错峰档排在前面：标价不能取到折扣。
+            {"model_id": "GLM-4.7", "model_name": "GLM-4.7",
+             "credit": [
+                 {"ratio_display": "0.09x", "time_slot_id": "off_peak",
+                  "before_display_ratio": "0.18x"},
+                 {"ratio_display": "0.18x", "time_slot_id": "default",
+                  "before_display_ratio": None},
+             ]},
             {"model_id": "Qwen3-VL-235B", "model_name": "Qwen3-VL-235B",
              "context_window": 131072, "max_tokens": 8192,
-             "supports_images": True, "model_category": "图片理解"},
+             "supports_images": True, "model_category": "图片理解",
+             "credit": []},
         ]
         self.agent_models = [
             {"model_name": "GLM-5.2", "model_id": "GLM-5.2",
