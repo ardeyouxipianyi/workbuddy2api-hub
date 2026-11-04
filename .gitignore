@@ -12,6 +12,7 @@ usage/*.sqlite3-wal
 usage/*.sqlite3-shm
 !usage/README.txt
 usage/*.bak*
+usage/11-128-dumps/
 
 # 运行时模型目录落盘缓存（上游 /v3/config 成功响应的副本，重启后作兜底；删除安全）
 catalog/*.json
