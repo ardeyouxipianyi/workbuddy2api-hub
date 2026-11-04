@@ -2443,6 +2443,12 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     '国际版账号每日打卡时，除桌面端身分的轻量对话外，再走一次网页通道的会话。默认开启。': 'When a Global account checks in, besides the light desktop-identity chat it also runs one web-channel session. On by default.',
     '在家待命中': 'At home, idle',
     '在浏览器里打开下方链接并完成登录授权': 'Open the link below in a browser and finish the sign-in authorization',
+    '登录出口代理（申请授权链接与等待回调都走它）：': 'Login exit proxy (used to request the authorization link and to wait for the callback):',
+    '直连（不走代理槽）': 'Direct (no proxy slot)',
+    '自动（随机挑选未使用的代理槽）': 'Auto (a random unused proxy slot)',
+    '本次登录出口：': 'Exit for this login: ',
+    '本次登录直连': 'This login goes direct',
+    '没有空闲的代理槽，本次登录直连': 'No free proxy slot; this login goes direct',
     '域名': 'Domain',
     '备注名称': 'Label',
     '复制': 'Copy',
@@ -3619,6 +3625,12 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     "导入密钥": "匯入金鑰",
     "国际版账号每日打卡时，除桌面端身分的轻量对话外，再走一次网页通道的会话。默认开启。": "國際版帳號每日打卡時，除桌面端身分的輕量對話外，再走一次網頁通道的會話。預設開啟。",
     "在浏览器里打开下方链接并完成登录授权": "在瀏覽器裡開啟下方連結並完成登入授權",
+    "登录出口代理（申请授权链接与等待回调都走它）：": "登入出口代理（申請授權連結與等待回呼都走它）：",
+    "直连（不走代理槽）": "直連（不走代理槽）",
+    "自动（随机挑选未使用的代理槽）": "自動（隨機挑選未使用的代理槽）",
+    "本次登录出口：": "本次登入出口：",
+    "本次登录直连": "本次登入直連",
+    "没有空闲的代理槽，本次登录直连": "沒有空閒的代理槽，本次登入直連",
     "备注名称": "備註名稱",
     "复制": "複製",
     "复制失败:": "複製失敗:",
@@ -4291,7 +4303,8 @@ if(!window.__NEXT_UI__ && defaultConsoleLayout) {
     [/第 (\d+) \/ (\d+) 页 · 共 ([\d,]+) 条记录/, function(m, a, b, c){ return 'Page ' + a + ' / ' + b + ' · ' + c + ' records'; }],
     [/共 (\d+) 个，启用 (\d+) 个/, function(m, a, b){ return a + ' total, ' + b + ' enabled'; }],
     [/含失败共 ([\d,]+) 次/, function(m, n){ return n + ' calls including failures'; }],
-    [/失败 ([\d,]+) 次/, function(m, n){ return n + ' failed'; }]
+    [/失败 ([\d,]+) 次/, function(m, n){ return n + ' failed'; }],
+    [/已绑定 (\d+) 个账号/, function(m, n){ return n + ' accounts bound'; }]
   ];
   var KEYS = Object.keys(DICT);
   KEYS.sort(function(a, b){ return b.length - a.length; });
@@ -7421,6 +7434,13 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
           </label>
         </div>
       </div>
+      <div id="loginProxyBox" style="display:none;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:8px;font-weight:600">登录出口代理（申请授权链接与等待回调都走它）：</div>
+        <select id="loginProxySlot" onchange="restartLogin()" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:13px">
+          <option value="">直连（不走代理槽）</option>
+        </select>
+        <div class="hint" id="loginProxyHint" style="margin-top:6px"></div>
+      </div>
       <div class="step" id="step1"><div class="n">1</div><div class="t" id="step1Text">正在申请授权登录链接…</div></div>
       <div class="step" id="step2"><div class="n">2</div><div class="t">在浏览器里打开下方链接并完成登录授权</div></div>
       <div id="loginLinkBox"></div>
@@ -7690,8 +7710,35 @@ function closeLogin(){
   if(loginState){ postJSON("/accounts/login/cancel", {state: loginState}).catch(()=>{}); loginState = null; }
 }
 
-function openLoginModal(targetRealm){
+// 登录出口代理下拉：没有启用的代理槽时整块隐藏，登录与以前一样直连。
+// 默认选「直连」；「自动」(value=auto) 由后端随机挑一个没绑定、没被其他登录占着的槽。
+async function loadLoginProxyOptions(){
+  const sel = document.getElementById("loginProxySlot");
+  const box = document.getElementById("loginProxyBox");
+  if(!sel) return;
+  const keep = sel.value || "";
+  try{
+    const r = await getJSON("/proxy/slots");
+    const slots = ((r && r.slots) || []).filter(s => s.enabled !== false);
+    const opts = ['<option value="">直连（不走代理槽）</option>'];
+    if(slots.length) opts.push('<option value="auto">自动（随机挑选未使用的代理槽）</option>');
+    for(const s of slots){
+      const label = (s.label || s.name || s.id) + (s.ip ? " · " + s.ip : "") + (s.bound ? " · 已绑定 " + s.bound + " 个账号" : "");
+      opts.push('<option value="' + esc(s.id) + '">' + esc(label) + '</option>');
+    }
+    sel.innerHTML = opts.join("");
+    if(keep === "auto" && slots.length) sel.value = "auto";
+    else if(keep && slots.some(x => x.id === keep)) sel.value = keep;
+    if(box) box.style.display = slots.length ? "" : "none";
+  }catch(e){
+    console.warn("loadLoginProxyOptions failed", e);
+  }
+}
+
+async function openLoginModal(targetRealm){
   openLogin();
+  // 先刷新下拉再发起登录：上次选的槽若已删除/停用，这里会回落到「直连」。
+  await loadLoginProxyOptions();
   const realm = targetRealm || window.VIEW_REALM || "intl";
   const isCn = (realm === "cn");
   const rCn = document.getElementById("radioCn");
@@ -7733,8 +7780,14 @@ async function triggerLoginForSelectedRealm(){
   if(s1Text) s1Text.textContent = isCn ? "正在向 copilot.tencent.com (国内版) 申请授权..." : "正在向 www.workbuddy.ai (国际版) 申请授权...";
 
   try{
-    const r = await postJSON("/accounts/login/start", {platform: "CLI", realm: realm});
+    const proxySel = document.getElementById("loginProxySlot");
+    const proxySlot = proxySel ? proxySel.value : "";
+    const r = await postJSON("/accounts/login/start", {platform: "CLI", realm: realm, proxySlot: proxySlot});
     loginState = r.state;
+    const ph = document.getElementById("loginProxyHint");
+    // r.proxy 只有 host:port（后端已去掉用户名密码）。
+    if(ph) ph.textContent = r.proxy ? ("本次登录出口：" + (r.proxySlot ? r.proxySlot + " · " : "") + r.proxy)
+      : (proxySlot === "auto" ? "没有空闲的代理槽，本次登录直连" : "本次登录直连");
     if(s1) s1.className = "step done";
     if(s2) s2.className = "step active";
     if(linkBox) linkBox.innerHTML =

@@ -23994,15 +23994,37 @@ class Handler(BaseHTTPRequestHandler):
     def _route_accounts_login_start(self, payload):
         platform = payload.get("platform") or "CLI"
         target_realm = payload.get("realm") or CURRENT_REALM
+        slot_id = payload.get("proxySlot")
+        if slot_id is not None and not isinstance(slot_id, str):
+            return self._error(400, "proxySlot must be a string", "invalid_request_error")
+        taken = set()
+        if slot_id == wb_accounts.LOGIN_SLOT_AUTO:
+            # "auto" must not hand out a slot a CodeArts account already uses.
+            try:
+                taken = {a.proxy_slot for a in wb_codearts.pool_for(ACCOUNTS_DIR).accounts
+                         if a.proxy_slot}
+            except Exception as exc:
+                log("login auto proxy slot: CodeArts bindings unavailable (%s)" % exc)
         try:
-            started = POOL.start_login(realm=target_realm, platform=platform)
+            started = POOL.start_login(realm=target_realm, platform=platform,
+                                       proxy_slot=slot_id, taken_slots=taken)
+        except wb_accounts.LoginProxySlotError as exc:
+            return self._error(400, str(exc), "invalid_request_error")
         except wb_accounts.TLSVerifyError as exc:
             # The hint already names the file/variable to fix; prefixing it
             # with "could not start login" only buries it.
             return self._error(502, str(exc))
         except Exception as exc:
             return self._error(502, "could not start login: %s" % exc)
-        log("oauth login started (realm=%s, platform=%s, state=%s)" % (target_realm, platform, started["state"][:8]))
+        # A proxy URL may carry user:pass; the log and the panel only ever get
+        # its host:port (egress_exit), never the URL itself.
+        exit_label = egress_exit(started.get("proxy")) if started.get("proxy") else ""
+        started = dict(started, proxy=exit_label)
+        via = "direct"
+        if exit_label:
+            via = ("%s %s" % (started.get("proxySlot") or "", exit_label)).strip()
+        log("oauth login started (realm=%s, platform=%s, state=%s, proxy=%s)"
+            % (target_realm, platform, started["state"][:8], via))
         return self._json(200, started)
 
     def _route_accounts_login_cancel(self, payload):
