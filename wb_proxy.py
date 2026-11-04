@@ -19,6 +19,7 @@ import base64
 import bisect
 import calendar
 import errno
+import gzip
 import hashlib
 import heapq
 import http.client
@@ -15034,6 +15035,368 @@ def read_http_error(exc, limit=600):
         return b""
 
 
+# ---------------------------------------------------------------- 11-128 取证
+# 上游回 400 / code 11-128 时，日志里只有 600 字节错误体，无法判断是出站
+# body 的哪一段触发了渠道校验。这里提供一个**默认关闭**的本地取证开关：
+#
+#   WB_DUMP_11_128=1      只写摘要：消息结构、长度、哈希、已知指纹命中、头
+#   WB_DUMP_11_128=full   摘要 + 实际发往上游的 body（含对话明文，仅本机）
+#
+# 摘要不含任何提示词文本；full 会写明文，用来和另一台机器 / 另一个客户端做
+# 逐字节对比。两种模式都不写 Authorization、API Key、Cookie 或设备 token。
+DUMP_11_128_DIR = "11-128-dumps"
+_DUMP_11_128_SEEN = deque()
+_DUMP_11_128_SEEN_MAX = 64
+_DUMP_11_128_LOCK = threading.Lock()
+_DUMP_11_128_SECRET_PARTS = (
+    "authorization", "api-key", "apikey", "token", "cookie", "secret",
+    "signature", "password",
+)
+_DUMP_11_128_KEEP_HEADERS = frozenset((
+    "user-agent", "content-type", "content-encoding", "accept",
+    "accept-encoding", "anthropic-version", "anthropic-beta",
+    "anthropic-dangerous-direct-browser-access", "x-model-id",
+))
+
+
+def dump_11_128_mode():
+    """Return "", "summary" or "full" for the current process environment."""
+    raw = str(os.environ.get("WB_DUMP_11_128", "")).strip().lower()
+    if raw in ("full", "body", "2"):
+        return "full"
+    if raw in ("1", "true", "yes", "on", "summary"):
+        return "summary"
+    return ""
+
+
+def is_channel_rejection(status, detail):
+    """True for the upstream channel check that returns 400 / 11-128."""
+    if status is not None:
+        try:
+            if int(status) not in (400, 403):
+                return False
+        except (TypeError, ValueError):
+            return False
+    text = detail if isinstance(detail, str) else ""
+    low = text.lower()
+    return "11-128" in low or "unapproved channel" in low
+
+
+def _dump_sha12(value):
+    if isinstance(value, bytes):
+        blob = value
+    else:
+        blob = str(value).encode("utf-8", "replace")
+    return hashlib.sha256(blob).hexdigest()[:12]
+
+
+def _dump_url(url):
+    """Drop the query / fragment: it can carry a token even on a fixed URL."""
+    return str(url or "").split("?", 1)[0].split("#", 1)[0]
+
+
+def _dump_text_meta(value):
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            text = str(value)
+    return {"chars": len(text), "sha12": _dump_sha12(text)}
+
+
+def _dump_message_shape(messages):
+    """Per-message role / content shape without storing the text itself."""
+    out = []
+    for index, message in enumerate(messages or []):
+        if not isinstance(message, dict):
+            out.append({"i": index, "type": type(message).__name__})
+            continue
+        item = {"i": index, "role": message.get("role", "")}
+        content = message.get("content")
+        if isinstance(content, str):
+            item["content"] = {"type": "text", "chars": len(content),
+                               "sha12": _dump_sha12(content)}
+        elif isinstance(content, list):
+            parts = []
+            for part in content[:20]:
+                if not isinstance(part, dict):
+                    parts.append({"type": type(part).__name__})
+                    continue
+                shape = {"type": part.get("type", "")}
+                if isinstance(part.get("text"), str):
+                    shape.update(_dump_text_meta(part["text"]))
+                elif part.get("image_url") is not None:
+                    shape.update(_dump_text_meta(part.get("image_url")))
+                parts.append(shape)
+            item["content"] = {"type": "parts", "n_parts": len(content),
+                               "parts": parts}
+        elif content is None:
+            item["content"] = {"type": "none"}
+        else:
+            item["content"] = {"type": type(content).__name__}
+        if message.get("tool_calls"):
+            names = []
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") if isinstance(call, dict) else None
+                if isinstance(function, dict) and function.get("name"):
+                    names.append(str(function["name"])[:80])
+            item["tool_calls"] = names[:20]
+        if message.get("name"):
+            item["name"] = str(message["name"])[:80]
+        out.append(item)
+    return out
+
+
+def _dump_tool_names(tools):
+    names = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        source = function if isinstance(function, dict) else tool
+        name = source.get("name")
+        if name:
+            names.append(str(name)[:80])
+    return names[:100]
+
+
+def _dump_fingerprint_hits(messages):
+    """Which known channel fingerprints still occur in identity messages."""
+    hits = set()
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") not in ("system", "developer", "assistant"):
+            continue
+        content = message.get("content")
+        texts = []
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+        for text in texts:
+            for feature in SANITIZE_FEATURES:
+                if feature in text:
+                    hits.add(feature)
+    return sorted(hits)
+
+
+def _dump_safe_headers(headers):
+    """Keep identity headers, redact credentials, hash the rest."""
+    if not headers:
+        return {}
+    pairs = headers.items() if hasattr(headers, "items") else headers
+    out = {}
+    for name, value in pairs:
+        name = str(name)
+        low = name.lower()
+        text = "" if value is None else str(value)
+        if any(part in low for part in _DUMP_11_128_SECRET_PARTS):
+            out[name] = "<redacted>"
+        elif low in _DUMP_11_128_KEEP_HEADERS or low.startswith("x-stainless-"):
+            out[name] = text[:300]
+        else:
+            out[name] = "<%d chars, sha256:%s>" % (len(text), _dump_sha12(text))
+    return out
+
+
+def _dump_request_id(detail):
+    try:
+        payload = json.loads(detail or "")
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("requestId", "request_id", "request-id", "reqId"):
+            if payload.get(key):
+                return str(payload[key])[:120]
+        for key in ("data", "error", "result"):
+            nested = payload.get(key)
+            if isinstance(nested, dict):
+                for inner in ("requestId", "request_id", "request-id", "reqId"):
+                    if nested.get(inner):
+                        return str(nested[inner])[:120]
+    match = re.search(
+        r'"?request[_-]?id"?\s*[:=]\s*"?([A-Za-z0-9._:-]{6,120})',
+        detail or "", re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _dump_response_request_id(exc):
+    headers = getattr(exc, "headers", None)
+    if not headers:
+        return ""
+    for key in ("x-request-id", "x-requestid", "request-id", "x-trace-id"):
+        try:
+            value = headers.get(key)
+        except Exception:
+            value = None
+        if value:
+            return str(value)[:120]
+    return ""
+
+
+def _dump_outbound_body(exc):
+    raw = getattr(exc, "wb_outbound_body", None)
+    if raw is None:
+        return b""
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = str(raw).encode("utf-8", "replace")
+    raw = bytes(raw)
+    if str(getattr(exc, "wb_outbound_encoding", "")).lower() == "gzip":
+        try:
+            raw = gzip.decompress(raw)
+        except Exception:
+            pass
+    return raw
+
+
+def _dump_filename_part(value):
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or ""))
+    return text[:64].strip("._-") or "unknown"
+
+
+def _dump_write_bytes(path, data):
+    """Atomic write with owner-only permissions where the OS supports it."""
+    tmp = "%s.%d.%s.tmp" % (path, os.getpid(), uuid.uuid4().hex[:8])
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _dump_write_json(path, payload):
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    _dump_write_bytes(path, (text + "\n").encode("utf-8"))
+
+
+def maybe_dump_11_128(exc, detail, endpoint, model, fp=None, stream=None,
+                      client_headers=None):
+    """Write one local evidence bundle when an upstream 11-128 is seen.
+
+    The outbound body is attached by open_upstream() only while the switch is
+    on, so the disabled path pays nothing and never holds a second copy of a
+    large request. All exceptions are swallowed: a diagnostic must never turn
+    an upstream 400 into a gateway 500.
+    """
+    try:
+        mode = dump_11_128_mode()
+        if not mode:
+            return ""
+        status = getattr(exc, "code", None)
+        if not is_channel_rejection(status, detail):
+            return ""
+        body = _dump_outbound_body(exc)
+        body_key = "%s|%s|%s|%s" % (
+            hashlib.sha256(body).hexdigest() if body else _dump_sha12(detail),
+            endpoint, getattr(exc, "wb_outbound_product", ""),
+            getattr(exc, "wb_outbound_realm", ""))
+        with _DUMP_11_128_LOCK:
+            if body_key in _DUMP_11_128_SEEN:
+                return ""
+            if len(_DUMP_11_128_SEEN) >= _DUMP_11_128_SEEN_MAX:
+                _DUMP_11_128_SEEN.popleft()
+
+        parsed = None
+        if body:
+            try:
+                parsed = json.loads(body.decode("utf-8"))
+            except Exception:
+                parsed = None
+        messages = parsed.get("messages") if isinstance(parsed, dict) else None
+        if not isinstance(messages, list):
+            messages = []
+        tools = parsed.get("tools") if isinstance(parsed, dict) else None
+        if not isinstance(tools, list):
+            tools = []
+        request_id = _dump_request_id(detail)
+        if not request_id:
+            request_id = _dump_response_request_id(exc)
+
+        outbound_fp = (prompt_fingerprint(messages)
+                       if isinstance(parsed, dict) else (fp or {}))
+        summary = {
+            "schema": 1,
+            "at": time.time(),
+            "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "endpoint": endpoint,
+            "status": status,
+            "model": model,
+            "stream": bool(stream) if stream is not None else None,
+            "request_id": request_id,
+            "account": {
+                "uid8": str(getattr(exc, "account_uid", "") or "")[:8],
+                "product": str(getattr(exc, "wb_outbound_product", "") or ""),
+                "realm": str(getattr(exc, "wb_outbound_realm", "") or ""),
+                "proxy_slot": str(getattr(exc, "proxy_slot", "") or ""),
+                "proxy_exit": str(getattr(exc, "proxy_exit", "") or ""),
+            },
+            "upstream_url": _dump_url(getattr(exc, "wb_outbound_url", "")),
+            "body": {
+                "available": bool(body),
+                "encoding": str(getattr(exc, "wb_outbound_encoding", "") or ""),
+                "bytes": len(body),
+                "sha256": hashlib.sha256(body).hexdigest() if body else "",
+                "json": bool(isinstance(parsed, dict)),
+                "n_messages": len(messages),
+                "n_tools": len(tools),
+                "tool_names": _dump_tool_names(tools),
+                "fingerprint_hits": _dump_fingerprint_hits(messages),
+            },
+            "prompt_fingerprint": outbound_fp,
+            "handler_fingerprint": fp or {},
+            "messages": _dump_message_shape(messages),
+            "headers": _dump_safe_headers(
+                getattr(exc, "wb_outbound_headers", None)),
+            "client_headers": _dump_safe_headers(client_headers),
+            "upstream_error": (detail or "")[:2000],
+        }
+
+        outdir = os.path.join(USAGE_DIR, DUMP_11_128_DIR)
+        os.makedirs(outdir, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        base = "%s-%s-%s" % (stamp, _dump_filename_part(endpoint),
+                             _dump_filename_part(request_id or body_key[:12]))
+        path = os.path.join(outdir, base + ".json")
+        suffix = 2
+        while os.path.exists(path):
+            path = os.path.join(outdir, "%s-%d.json" % (base, suffix))
+            suffix += 1
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if mode == "full" and body:
+            body_name = stem + (".body.json" if isinstance(parsed, dict)
+                                else ".body.bin")
+            _dump_write_bytes(os.path.join(outdir, body_name), body)
+            summary["body"]["file"] = body_name
+        _dump_write_json(path, summary)
+        with _DUMP_11_128_LOCK:
+            _DUMP_11_128_SEEN.append(body_key)
+        log("11-128 dump: %s (mode=%s, body=%d bytes)"
+            % (os.path.basename(path), mode, len(body)), level="WARNING",
+            tag="upstream")
+        return path
+    except Exception as exc2:
+        try:
+            log("11-128 dump failed: %s" % exc2, level="WARNING",
+                tag="upstream")
+        except Exception:
+            pass
+        return ""
+
+
 def model_scoped_errors_penalize_account():
     """Escape hatch: restore the old "any 5xx charges the account" behaviour."""
     raw = os.environ.get("WB_MODEL_SCOPED_ERRORS_PENALIZE", "")
@@ -15896,6 +16259,14 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
                 exc.account_uid = account.uid
                 exc.proxy_slot = account.proxy_slot
                 exc.proxy_exit = egress_exit(account.proxy)
+                if dump_11_128_mode():
+                    exc.wb_outbound_body = attempt_data
+                    exc.wb_outbound_encoding = (
+                        "gzip" if (cli_identity or vscode_identity) else "identity")
+                    exc.wb_outbound_headers = dict(req_headers)
+                    exc.wb_outbound_url = chat_url
+                    exc.wb_outbound_product = getattr(account, "product", "")
+                    exc.wb_outbound_realm = getattr(account, "realm", "")
             except Exception:
                 pass
             if exc.code == 429:
@@ -24060,6 +24431,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
             detail = read_http_error(exc, 600).decode("utf-8", "replace")
+            maybe_dump_11_128(exc, detail, "responses", model, fp=fp,
+                              stream=want_stream,
+                              client_headers=getattr(self, "headers", None))
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),
@@ -24414,6 +24788,9 @@ class Handler(BaseHTTPRequestHandler):
                 detail = read_http_error(exc, 600).decode("utf-8", "replace")
             except Exception:
                 detail = str(exc)
+            maybe_dump_11_128(exc, detail, "messages", model, fp=fp,
+                              stream=want_stream,
+                              client_headers=getattr(self, "headers", None))
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),
@@ -24841,6 +25218,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._rate_limited(exc)
         except urllib.error.HTTPError as exc:
             detail = read_http_error(exc, 600).decode("utf-8", "replace")
+            maybe_dump_11_128(exc, detail, "chat", model, fp=fp,
+                              stream=want_stream,
+                              client_headers=getattr(self, "headers", None))
             record_error(model, exc.code, detail,
                          elapsed_ms=int((time.time() - t_start) * 1000),
                          account=getattr(exc, "account_uid", None),

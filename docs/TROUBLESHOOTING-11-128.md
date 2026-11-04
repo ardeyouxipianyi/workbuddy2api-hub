@@ -53,6 +53,38 @@ curl -sS -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:8788/logs/export 
 `proxy_slot` / `proxy_exit`（如果走了代理槽），以及成功请求才有的
 `system_sha` / `msgs_sha` / `n_msgs`。不要只贴一行 `[failed]` 徽章。
 
+### 2.1 抓取出站 body（可选，默认关闭）
+
+网关可以只在遇到 `400 / 11-128` 时把**实际发往上游**的 body 落到本机。
+这是显式开启的诊断开关，默认不写任何文件；复现一次后就可以关掉并重启。
+
+PowerShell：
+
+```powershell
+$env:WB_DUMP_11_128 = "full"
+.\start-wb-proxy.bat 8788
+# 复现一次失败后：
+Get-ChildItem usage\11-128-dumps
+```
+
+Linux / macOS：
+
+```bash
+WB_DUMP_11_128=full ./start-wb-proxy.sh 8788
+# 复现一次失败后：
+ls usage/11-128-dumps
+```
+
+两种取值：
+
+- `WB_DUMP_11_128=1`：只写摘要。包含消息角色 / 长度 / 哈希、工具名、已知指纹命中、
+  脱敏后的请求头与上游错误体，**不含提示词明文**；
+- `WB_DUMP_11_128=full`：摘要 + `*.body.json`（或 `.body.bin`），内容就是当时发往
+  上游的 body，已解压 gzip。**会含对话明文**，分享前请自行检查。
+
+Authorization、API Key、Cookie、设备 token 等头在这两种模式下都不会落盘。
+同一个 body 的重试只写一份，避免客户端重试刷出大量文件。
+
 ## 3. 查看有效的出站身份
 
 仓库自带一个**不发网络请求**的诊断脚本。它会为每个账号构造真实 chat 头，
@@ -172,6 +204,8 @@ $env:WB_IDENTITY_NODE_VERSION = "v22.21.1"
 4. 提示词模式对照实验的结果；
 5. `usage/usage.jsonl` 对应失败行，以及网关日志中的 `request error` 行；
 6. Windows 与 Ubuntu 的 `environment`、`product`、`headers` 差异。
+7. 如维护者要求，附上 `usage/11-128-dumps/` 里本次失败对应的摘要；分享 `full`
+   生成的 body 前先检查其中的提示词与业务数据。
 
 如果第 3 节显示两种机器只有 `x-stainless-os` 不同，而账号身份是 WB 或 VSC，
 请先不要把它当成根因；此时平台变量根本不在请求里。
