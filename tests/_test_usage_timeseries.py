@@ -93,7 +93,10 @@ class TimeseriesTests(unittest.TestCase):
         """issue #447：面板热力图用 since=now-366d（任意时刻）拉日桶——
         桶仍必须按本地午夜切分，否则相邻两天会被并进同一个桶（当天的量
         画进昨天的格子）。"""
-        now = time.time()
+        # Pin the fixture to local noon: using the real clock made this test
+        # fail when CI happened to run in the first seconds after midnight,
+        # because some "today" rows then fell after `until=now`.
+        now = wb_proxy._local_midnight(time.time()) + 12 * 3600
         today0 = wb_proxy._local_midnight(now)
         yest0 = today0 - 86400.0
         rows = [row(yest0 + 60 + i * 3600) for i in range(10)]
