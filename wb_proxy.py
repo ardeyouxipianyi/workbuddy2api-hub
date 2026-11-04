@@ -12645,8 +12645,6 @@ SANITIZE_FEATURES = (
     "11128",
 )
 SANITIZE_REWRITES = (
-    ("You are Claude Code, Anthropic's official CLI for Claude",
-     "You are Claude Code, Anthropic's official CLI tool for Claude"),
     ("Default branch (you will usually use this for PRs)",
      "Default branch (you will usually use this for PRs)"),
     ("To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
@@ -12660,6 +12658,14 @@ SANITIZE_CODEX_INTRO_RE = re.compile(
     r"(?i)You are a coding agent running in the Codex CLI(?: tool)?"
     r"[^.\n]*\.")
 SANITIZE_CODEX_INTRO_REPLACEMENT = "You are a helpful AI assistant."
+# Claude Code 的自述首段（#733）：报告者把提示词模式改成「替换」后 400 消失，
+# 说明指纹在 system 文本里。这里按 #743 处理 Codex 自述句的同一套办法整句
+# 中性化；只锚定这一句，其余 Claude Code 提示词原样保留。
+SANITIZE_CLAUDE_CODE_INTRO_RE = re.compile(
+    r"(?i)You are Claude Code,\s*Anthropic['’]s official CLI"
+    r"(?: tool)? for Claude(?: Code)?\.?")
+SANITIZE_CLAUDE_CODE_INTRO_REPLACEMENT = "You are a helpful AI assistant."
+SANITIZE_CLAUDE_CODE_LOWER = "you are claude code,"
 SANITIZE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header:[^;\r\n]*;?\s*")
 SANITIZE_BARE_HDR_RE = re.compile(r"(?i)x-anthropic-billing-header")
 SANITIZE_KV_RE = re.compile(r"(?i)\bcc_[a-z0-9_]+=[^;\r\n]*;?\s*")
@@ -12778,6 +12784,10 @@ def has_fingerprint(text, identity=True):
         return True
     if not identity:
         return False
+    # SANITIZE_FEATURES 只登记了首字母大写的 "You are Claude Code"；这里用
+    # 小写字面量补齐大小写混排的 system 文本，命中后才走 sanitize_text 的正则。
+    if SANITIZE_CLAUDE_CODE_LOWER in low:
+        return True
     # 品牌词缩减：`harness` 是廉价前置筛，真命中交给正则。
     if (SANITIZE_BRAND_LOWER in low
             and SANITIZE_BRAND_RE.search(text) is not None):
@@ -12807,6 +12817,9 @@ def sanitize_text(text, identity=True):
     # neutralized.
     text = SANITIZE_OMO_JUNIOR_RE.sub("Sisyphus-Junior - Focused executor", text)
     if identity:
+        # Claude Code 自述首段先整句换掉：它本身就是 SANITIZE_FEATURES 里的指纹。
+        text = SANITIZE_CLAUDE_CODE_INTRO_RE.sub(
+            SANITIZE_CLAUDE_CODE_INTRO_REPLACEMENT, text)
         # Codex 自述首段先整句换掉：它本身就是 SANITIZE_FEATURES 里的指纹。
         text = SANITIZE_CODEX_INTRO_RE.sub(SANITIZE_CODEX_INTRO_REPLACEMENT, text)
         text = SANITIZE_IDENTITY_RE.sub(SANITIZE_IDENTITY_REPLACEMENT, text)

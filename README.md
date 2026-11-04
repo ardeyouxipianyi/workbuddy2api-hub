@@ -211,6 +211,10 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 - 移除已废弃的 `WB_DEEPSEEK_FLASH_FORCE_SG` 文档行与两个恒返回 `False` 的存根函数（#776）。
 - **CodeArts 模型倍率**：`/v1/models?realm=codearts` 的条目新增 `credits`（如 `x0.7`，与 WorkBuddy 目录同一写法），取自上游模型目录的标准档；错峰优惠档不计入，上游没有倍率的模型不带此字段。
+- **改善 Claude Code 兼容性**（#733）：`sanitize` 现在把
+  `You are Claude Code, Anthropic's official CLI tool for Claude.` 整句中性化；
+  旧规则只把 `CLI for Claude` 改写成 `CLI tool for Claude`，反而保留了
+  `You are Claude Code` 指纹。覆盖大小写与弯引号，`user` / `tool` 内容不改写。
 
 完整历史版本与详细变更日志请查阅 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
 
