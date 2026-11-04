@@ -24,8 +24,19 @@ const PANEL_REMEMBER_KEY = 'wb-proxy-panel-remember';
 })();
 /* 新导航使用显式 URL 参数启用，默认保留用户现有布局。 */
 (function(){
-  var next = false;
-  try { next = new URLSearchParams(location.search).get('ui') === 'next'; } catch(e){}
+  var next = true;
+  try {
+    var p = new URLSearchParams(location.search).get('ui');
+    var pref = '';
+    try { pref = localStorage.getItem('wb-ui-mode') || ''; } catch(e){}
+    if(p === 'classic' || p === 'legacy' || p === '0'){
+      next = false;
+    } else if(p === 'next' || p === '1'){
+      next = true;
+    } else if(pref === 'classic' || pref === '0'){
+      next = false;
+    }
+  } catch(e){}
   if(typeof window !== 'undefined') window.__NEXT_UI__ = next;
   if(next && typeof document !== 'undefined' && document.documentElement) document.documentElement.setAttribute('data-ui', 'next');
 })();
@@ -5110,7 +5121,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
           <button type="button" class="theme-option" data-theme-style-option="miuix" onclick="selectStyle('miuix', event)" role="menuitem">MiuiX</button>
         </div>
         <div class="theme-sep" role="separator"></div>
-        <button type="button" class="theme-option" id="nextLayoutOption" onclick="toggleNextLayout()" role="menuitem">新导航布局</button>
+        <button type="button" class="theme-option" id="nextLayoutOption" onclick="toggleNextLayout()" role="menuitem">返回传统布局</button>
         <button type="button" class="theme-option" id="consoleLayoutOption" onclick="toggleConsoleLayout(event)" role="menuitemcheckbox" aria-checked="false">控制台布局</button>
         <div class="theme-sep" role="separator"></div>
         <button type="button" class="theme-option" id="themeOptLight" onclick="selectTheme('light', event)" role="menuitem">
@@ -14301,14 +14312,19 @@ async function saveAccountsSeparateTab(btn){
 // Layout and color theme are independent; use the console layout by default.
 function toggleNextLayout(){
   const url = new URL(window.location.href);
-  if(window.__NEXT_UI__) url.searchParams.delete('ui');
-  else url.searchParams.set('ui', 'next');
+  if(window.__NEXT_UI__){
+    try { localStorage.setItem('wb-ui-mode', 'classic'); } catch(e){}
+    url.searchParams.set('ui', 'classic');
+  } else {
+    try { localStorage.removeItem('wb-ui-mode'); } catch(e){}
+    url.searchParams.delete('ui');
+  }
   url.searchParams.delete('tab');
   window.location.assign(url.toString());
 }
 function initConsoleLayout(){
   const nextOption = document.getElementById('nextLayoutOption');
-  if(nextOption && window.__NEXT_UI__) nextOption.textContent = '返回原布局';
+  if(nextOption) nextOption.textContent = window.__NEXT_UI__ ? '返回传统布局' : '新导航布局';
   const on = document.documentElement.getAttribute('data-console-layout') === 'on';
   const nav = document.querySelector('.main-nav');
   const sidebar = document.getElementById('consoleSidebar');
