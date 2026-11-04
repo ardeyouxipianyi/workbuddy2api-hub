@@ -23144,9 +23144,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_accounts_credits_fetch(self, payload):
         uid = payload.get("uid")
+        uids = payload.get("uids")
         realm = payload.get("realm")
+        if "uids" in payload and not isinstance(uids, list):
+            # 写坏了的 uids（字符串 / 对象 / null）不能落到下面的全池扫。
+            return self._error(400, "uids must be a list", "invalid_request_error")
         if uid:
             targets = [POOL.get(uid)]
+        elif isinstance(uids, list):
+            # 面板自动补快照：只补点名的这几个号（缺积分的），空列表就是什么都不刷，
+            # 绝不退化成全池扫。多于一个号时照样吃下面的单飞与拟人间隔。
+            targets = [POOL.get(u) for u in dict.fromkeys(str(x) for x in uids if x)]
         elif realm and realm != "all":
             targets = [a for a in POOL.accounts if a.realm == realm]
         else:
