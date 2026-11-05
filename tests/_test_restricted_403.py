@@ -185,11 +185,11 @@ class Restricted403DispatchTests(unittest.TestCase):
         self.old_rotate = P.RESTRICTED_403_ROTATE_MAX
         self.old_min = P.RESTRICTION_WAVE_MIN
         self.old_window = P.RESTRICTION_WAVE_WINDOW
-        self.old_hold = P.RESTRICTION_HOLD_SECONDS
         P.RESTRICTED_403_ROTATE_MAX = 0
         P.RESTRICTION_WAVE_MIN = 2
         P.RESTRICTION_WAVE_WINDOW = 900.0
-        P.RESTRICTION_HOLD_SECONDS = 1800.0
+        P.wb_settings.set_restriction_hold_seconds(
+            P.ACCOUNTS_DIR, P.wb_settings.DEFAULT_RESTRICTION_HOLD_SECONDS)
         P.reset_restriction_state()
 
     def tearDown(self):
@@ -197,7 +197,6 @@ class Restricted403DispatchTests(unittest.TestCase):
         P.RESTRICTED_403_ROTATE_MAX = self.old_rotate
         P.RESTRICTION_WAVE_MIN = self.old_min
         P.RESTRICTION_WAVE_WINDOW = self.old_window
-        P.RESTRICTION_HOLD_SECONDS = self.old_hold
         P.reset_restriction_state()
 
     def _run(self, accounts, script):
@@ -285,7 +284,7 @@ class Restricted403DispatchTests(unittest.TestCase):
             wb_accounts.urlopen = real_urlopen
 
     def test_hold_switch_can_disable_the_pause(self):
-        P.RESTRICTION_HOLD_SECONDS = 0.0
+        P.wb_settings.set_restriction_hold_seconds(P.ACCOUNTS_DIR, 0)
         first = make_account("a1")
         second = make_account("b1")
         P.POOL = StubPool([first, second])

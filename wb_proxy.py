@@ -11131,6 +11131,15 @@ def runtime_settings_view():
         "key_before_hidden": wb_settings.key_before_hidden(ACCOUNTS_DIR),
         "hidden_pages": wb_settings.hidden_pages(ACCOUNTS_DIR),
         "update_check_enabled": wb_settings.update_check_enabled(ACCOUNTS_DIR),
+        "update_check_proxy_slot": wb_settings.update_check_proxy_slot(ACCOUNTS_DIR),
+        "update_check_proxy_slots": [
+            {
+                "id": slot.get("id") or "",
+                "label": slot.get("label") or slot.get("name") or slot.get("id") or "",
+                "enabled": slot.get("enabled", True) is not False,
+            }
+            for slot in proxy_slots_view()
+        ],
         "keep_backups": wb_settings.keep_backups(ACCOUNTS_DIR),
         "keep_backups_max": wb_settings.MAX_KEEP_BACKUPS,
         "upstream": wb_settings.upstream_config(ACCOUNTS_DIR),
@@ -11147,7 +11156,7 @@ def runtime_settings_view():
         "accounts_dir": ACCOUNTS_DIR,
         "usage_dir": USAGE_DIR,
         "settings_file": wb_settings.settings_path(ACCOUNTS_DIR),
-        "version": "1.10.10",
+        "version": "1.10.11",
     }
 def current_account():
     """Account used for display purposes (health / usage summaries)."""
@@ -11793,7 +11802,15 @@ def merge_catalog(primary, realm=None, extras=False):
         if meta:
             base = merged.get(mid) or {}
             base_reasoning = base.get("reasoning")
-            base.update(meta)
+            live = dict(meta)
+            # A live/cache catalogue can report x0.00 while the bundled table
+            # knows the model is paid (issue #774). Do not let that placeholder
+            # downgrade a known-paid model to "free"; all other fields update.
+            if (credits_is_free(live.get("credits"))
+                    and base.get("credits")
+                    and not credits_is_free(base.get("credits"))):
+                live.pop("credits", None)
+            base.update(live)
             if isinstance(meta.get("reasoning"), dict):
                 base["reasoning"] = merge_reasoning(base_reasoning, meta["reasoning"])
             merged[mid] = base
@@ -12686,9 +12703,9 @@ SANITIZE_FEATURES = (
     "11128",
 )
 SANITIZE_REWRITES = (
-    ("Default branch (you will usually use this for PRs)",
+    ("Main branch (you will usually use this for PRs)",
      "Default branch (you will usually use this for PRs)"),
-    ("To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+    ("To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
      "To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues"),
     ("11128", "11-128"),
 )
@@ -15629,8 +15646,6 @@ def _env_number(name, default, cast=float):
 RESTRICTED_403_ROTATE_MAX = int(_env_number("WB_RESTRICTED_403_ROTATE_MAX", 0, int))
 RESTRICTION_WAVE_MIN = max(1, int(_env_number("WB_RESTRICTION_WAVE_MIN", 2, int)))
 RESTRICTION_WAVE_WINDOW = _env_number("WB_RESTRICTION_WAVE_WINDOW", 900.0)
-RESTRICTION_HOLD_SECONDS = _env_number("WB_RESTRICTION_HOLD_SECONDS", 1800.0)
-
 _RESTRICTION_LOCK = threading.Lock()
 _RESTRICTION_EVENTS = {}   # realm -> {uid: epoch}（窗口内被限制的账号）
 _RESTRICTION_HOLD = {}     # realm -> 暂停到哪个 epoch
@@ -19919,7 +19934,7 @@ class Handler(BaseHTTPRequestHandler):
             super().finish()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             pass
-    server_version = "wb-proxy/1.10.10"
+    server_version = "wb-proxy/1.10.11"
     def log_message(self, fmt, *args):
         # 静默过滤前端看板高频定时心跳的正常 200 GET 请求（/logs、/usage、/accounts 轮询等）
         # 避免自增死循环刷屏与日志污染。遇 4xx/5xx 异常或所有非 GET 业务操作依然如实记录。
@@ -20063,6 +20078,8 @@ class Handler(BaseHTTPRequestHandler):
         transfer_encoding = (headers.get("Transfer-Encoding") or "").lower()
         try:
             if "chunked" in transfer_encoding:
+                if getattr(self, "_reject_body_after_reply", False):
+                    return
                 self._drain_chunked_body()
                 return
             length = int(headers.get("Content-Length") or 0)
@@ -20070,11 +20087,11 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         if length <= 0:
             return
-        if length > MAX_PAYLOAD_BYTES:
-            # The client announced a body we refuse (413). Reading it would
-            # block until it finishes sending gigabytes, so close instead and
-            # let it see the reply plus the disconnect.
-            self.close_connection = True
+        if (length > MAX_PAYLOAD_BYTES
+                or getattr(self, "_reject_body_after_reply", False)):
+            # The client announced a body we refuse (413). The caller writes the
+            # response first, then uses _drain_rejected_body() to make that
+            # response survive the peer's remaining upload (issue #799).
             return
         remaining = length
         try:
@@ -20112,6 +20129,93 @@ class Handler(BaseHTTPRequestHandler):
                 self.rfile.read(2)  # trailing CRLF after each chunk
         except Exception:
             self.close_connection = True
+
+    def _drain_rejected_body(self, length=0, budget_seconds=2.0):
+        """Drain an oversized body after its 413 has been written.
+
+        Closing a socket while the peer is still sending makes the OS send an
+        RST; that discards the already-buffered 413, so the client sees only a
+        connection reset. Half-close the write side first, then consume what the
+        peer has already put on the wire within a small time budget. This is a
+        bounded drain, not an invitation to wait for gigabytes.
+        """
+        sock = getattr(self, "connection", None)
+        if sock is None:
+            return
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except Exception:
+            pass
+        try:
+            old_timeout = sock.gettimeout()
+        except Exception:
+            old_timeout = None
+        deadline = time.monotonic() + max(0.0, float(budget_seconds))
+        remaining = max(0, int(length or 0))
+        chunked = False
+        headers = getattr(self, "headers", None)
+        if headers is not None:
+            try:
+                chunked = "chunked" in (headers.get("Transfer-Encoding") or "").lower()
+            except Exception:
+                chunked = False
+        try:
+            while time.monotonic() < deadline and not chunked:
+                if remaining > 0:
+                    want = min(remaining, 65536)
+                else:
+                    want = 65536
+                sock.settimeout(max(0.01, deadline - time.monotonic()))
+                chunk = self.rfile.read(want)
+                if not chunk:
+                    break
+                if remaining > 0:
+                    remaining -= len(chunk)
+                    if remaining <= 0:
+                        break
+            if chunked:
+                # The exact byte count is unknown for chunked uploads. Read
+                # framing only until the zero chunk or the same time budget;
+                # never buffer the payload itself.
+                while time.monotonic() < deadline:
+                    sock.settimeout(max(0.01, deadline - time.monotonic()))
+                    line = self.rfile.readline(65536)
+                    if not line:
+                        break
+                    size_field = line.split(b";", 1)[0].strip()
+                    if not size_field:
+                        continue
+                    size = int(size_field, 16)
+                    if size == 0:
+                        while time.monotonic() < deadline:
+                            sock.settimeout(max(0.01, deadline - time.monotonic()))
+                            trailer = self.rfile.readline(65536)
+                            if not trailer or trailer in (b"\r\n", b"\n"):
+                                break
+                        break
+                    left = size
+                    while left > 0 and time.monotonic() < deadline:
+                        sock.settimeout(max(0.01, deadline - time.monotonic()))
+                        data = self.rfile.read(min(left, 65536))
+                        if not data:
+                            break
+                        left -= len(data)
+                    if left > 0:
+                        break
+                    sock.settimeout(max(0.01, deadline - time.monotonic()))
+                    self.rfile.read(2)
+        except Exception:
+            pass
+        finally:
+            try:
+                sock.settimeout(old_timeout)
+            except Exception:
+                pass
+        self._body_consumed = True
     # How much of an over-long request line to read before giving up. The peer
     # is already misbehaving; this only needs to be enough that a normal client
     # (which sent one line and is waiting for an answer) sees the reply.
@@ -21379,14 +21483,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._read_payload(max_bytes=limit, allow_list=allow_list)
         except BodyTooLarge as exc:
-            self.close_connection = True
-            self._body_consumed = True
+            self._reject_body_after_reply = True
             message = ("payload too large (%d bytes > %d limit)"
                        % (exc.length, limit))
             if self._anthropic_route():
                 self._anthropic_error(413, message, "invalid_request_error")
             else:
                 self._error(413, message, "invalid_request_error")
+            self._drain_rejected_body(exc.length)
+            self.close_connection = True
             return None
         except BadJSON:
             if self._anthropic_route():
@@ -21408,10 +21513,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._read_payload(max_bytes=limit, allow_list=False)
         except BodyTooLarge as exc:
-            self.close_connection = True
-            self._body_consumed = True
+            self._reject_body_after_reply = True
             self._error(413, "payload too large (%d bytes > %d limit)" % (exc.length, limit),
                         "invalid_request_error")
+            self._drain_rejected_body(exc.length)
+            self.close_connection = True
             return None
         except BadJSON:
             self._error(400, "invalid JSON body", "invalid_request_error")
@@ -22753,6 +22859,20 @@ class Handler(BaseHTTPRequestHandler):
             if UPDATES and raw:
                 # Turning it on should not wait out the rest of the poll sleep.
                 UPDATES.wake()
+        if "update_check_proxy_slot" in payload:
+            raw = payload.get("update_check_proxy_slot")
+            if not isinstance(raw, str):
+                return self._error(400, "update_check_proxy_slot must be a string",
+                                   "invalid_request_error")
+            slot_id = raw.strip()
+            if slot_id and not wb_settings.find_proxy_slot(ACCOUNTS_DIR, slot_id):
+                return self._error(400, "update_check_proxy_slot does not exist",
+                                   "invalid_request_error")
+            reply["update_check_proxy_slot"] = (
+                wb_settings.set_update_check_proxy_slot(ACCOUNTS_DIR, slot_id))
+            if UPDATES:
+                # Apply the new route on the next check without a restart.
+                UPDATES.wake()
         if "keep_backups" in payload:
             # An integer count, not a boolean-ish string: "2" would otherwise
             # be accepted by int() and "true" would silently become 1.
@@ -23603,6 +23723,7 @@ class Handler(BaseHTTPRequestHandler):
         uid = payload.get("uid")
         uids = payload.get("uids")
         realm = payload.get("realm")
+        group = str(payload.get("group") or "").strip()
         if "uids" in payload and not isinstance(uids, list):
             # 写坏了的 uids（字符串 / 对象 / null）不能落到下面的全池扫。
             return self._error(400, "uids must be a list", "invalid_request_error")
@@ -23616,6 +23737,8 @@ class Handler(BaseHTTPRequestHandler):
             targets = [a for a in POOL.accounts if a.realm == realm]
         else:
             targets = list(POOL.accounts)
+        if group:
+            targets = [a for a in targets if a is not None and a.group == group]
         # 多账号目标才吃单飞与拟人间隔：单账号刷新本来就只发一次请求，不该被别人的
         # 全量刷挡住，也不该为它空等一个间隔。
         multi = len([t for t in targets if t is not None]) > 1
@@ -24151,6 +24274,9 @@ class Handler(BaseHTTPRequestHandler):
     def _route_accounts_refresh(self, payload):
         uid = payload.get("uid")
         targets = [POOL.get(uid)] if uid else list(POOL.accounts)
+        group = str(payload.get("group") or "").strip()
+        if group:
+            targets = [a for a in targets if a is not None and a.group == group]
         results = []
         for account in targets:
             if account is None:
@@ -24234,6 +24360,9 @@ class Handler(BaseHTTPRequestHandler):
         model = payload.get("model") or TEST_MODEL_DEFAULT
         targets = [a for a in (POOL.accounts if POOL else [])
                    if a.realm == realm and a.enabled]
+        group = str(payload.get("group") or "").strip()
+        if group:
+            targets = [a for a in targets if a.group == group]
         started = time.time()
         network = probe_local_network(realm)
         rows = []
@@ -24301,6 +24430,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "no such account")
             log("account %s note set (%d chars)"
                 % (uid[:8], len(updated.get("note") or "")))
+        if "group" in payload:
+            updated = POOL.set_group(uid, payload.get("group"))
+            if updated is None:
+                return self._error(404, "no such account")
+            log("account %s group set to %r"
+                % (uid[:8], updated.get("group") or ""))
         if "disabledModels" in payload:
             # 人工黑名单：这些模型不再派给该账号，其他模型与别的账号都不受影响。
             # 传空数组 = 清空禁用。
@@ -24314,12 +24449,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(
                 400,
                 "nothing to update: pass 'enabled', 'tasksEnabled', 'proxy', "
-                "'proxySlot', 'weight' or 'note'"
+                "'proxySlot', 'weight', 'note' or 'group'"
             )
         return self._json_panel(200, {"account": updated})
 
     def _route_accounts_set_all(self, payload):
-        POOL.set_all_enabled(bool(payload.get("enabled")))
+        group = str(payload.get("group") or "").strip()
+        if group:
+            raw_enabled = payload.get("enabled")
+            if not isinstance(raw_enabled, bool):
+                return self._error(400, "enabled must be true or false",
+                                   "invalid_request_error")
+            changed = POOL.set_group_enabled(group, raw_enabled)
+            log("accounts in group %r: %d %s"
+                % (group, len(changed),
+                   "enabled" if raw_enabled else "disabled"))
+        else:
+            raw_enabled = payload.get("enabled")
+            if not isinstance(raw_enabled, bool):
+                return self._error(400, "enabled must be true or false",
+                                   "invalid_request_error")
+            POOL.set_all_enabled(raw_enabled)
         return self._json_panel(200, {"accounts": account_views()})
 
     def _route_accounts_delete(self, payload):
@@ -24424,8 +24574,14 @@ class Handler(BaseHTTPRequestHandler):
         dry_run = bool(payload.get("dryRun"))
         overwrite = bool(payload.get("overwrite"))
         forced_realm = (payload.get("realm") or "").strip().lower() or None
+        forced_group = str(payload.get("group") or "").strip()[:64]
         if forced_realm and forced_realm not in ("intl", "cn"):
             return self._error(400, "realm must be intl or cn", "invalid_request_error")
+        if forced_group:
+            # An import-level group applies to every row and wins over any stale
+            # label inside the file, just like an explicitly forced realm.
+            rows = [dict(row, group=forced_group)
+                    if isinstance(row, dict) else row for row in rows]
         if dry_run:
             # Validate every row without touching the pool so the caller can
             # see exactly what an import would do before committing to it.

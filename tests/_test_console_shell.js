@@ -103,7 +103,7 @@ check(/onclick="toggleConsoleNav\(\)"/.test(html), '手机端缺少功能菜单�
 
 // ---- 2. 筛选：只改显示，不改批量操作的原始范围 -----------------------
 
-check(/const ACCOUNT_FILTERS = \{query: '', status: ''\}/.test(script),
+check(/const ACCOUNT_FILTERS = \{query: '', status: '', group: ''\}/.test(script),
   '账号筛选状态应当是独立的一份');
 check(/function accountMatchesFilters\(a\)/.test(script), '缺少账号筛选判定');
 check(/function clearAccountFilters\(\)/.test(script), '缺少账号筛选清除');

@@ -22,7 +22,7 @@
 This project is for protocol research and personal use only. Prefer the official client, do not use your primary account, and do not resell or share access.
 
 <p align="center">
-  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.10-2496ED?style=flat-square" alt="Version 1.10.10"></a>
+  <a href="https://github.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img src="https://img.shields.io/badge/Release-v1.10.11-2496ED?style=flat-square" alt="Version 1.10.11"></a>
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square" alt="OpenAI API">
   <img src="https://img.shields.io/badge/Dual_Realm-Intl_&_CN-0DBD8B?style=flat-square" alt="Dual Realm">
@@ -130,6 +130,11 @@ Windows / macOS 的 `start-wb-proxy.*` 启动脚本暂未改动。
 2. 切换至看板顶部「CodeArts」视图，点击「+ 添加账号 (OAuth)」完成华为云授权；
 3. 在「设置 → API Key」中新建 Key 并绑定出口为 `CodeArts`（或全局通用）即可调用。
 
+CodeArts 的模型 ID 按上游目录**精确匹配**：`deepseek-v4.1-flash` 与
+`deepseek-v4.1-flash-1017` 是两个独立模型，不会互相别名或静默回退。
+`/v1/models?realm=codearts` 返回的是账号当前可用的真实目录 ID；调用时请直接使用
+返回的完整 ID。
+
 ---
 
 ## 二、账号接入与 API Key 权限
@@ -214,7 +219,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 271 个套件：204 个 Python + 67 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 272 个套件：205 个 Python + 67 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -224,6 +229,13 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 
 ### Unreleased
 
+- **账号分组**（#707）：账号新增可选分组，支持按组筛选、导入时指定分组、单账号编辑、分组启停，以及刷新凭证 / 测试 / 补积分等批量操作仅作用于当前分组；API Key 账号选择器也支持按组选入与移除。
+- **API Key 配置示例**（#704）：设置页新增可折叠的 Base URL、cURL 与各协议端点示例，并支持一键复制。
+- **检查更新支持代理槽**（#798）：可在设置页指定 GitHub 更新检查使用的代理槽；槽停用或删除后自动回退直连。
+- **会话粘滞修复**（#718）：小账号池的长会话不再按页轮换账号，避免前缀缓存丢失和 Token 消耗翻倍。
+- **请求体超限 413**（#799）：先返回 413，再在有限时间内排空上传，避免连接重置吞掉响应。
+- **CodeArts 参数与模型 ID**（#794 / #797）：输出 token 按模型上限收敛、`stop` 字符串归一化；参数错误返回 400 且不冷却账号。`deepseek-v4.1-flash` 与 `-1017` 为独立模型，精确匹配。
+- **提示词改写与模型倍率**（#796 / #774）：恢复退化为空操作的 `SANITIZE_REWRITES`；live 目录的 `x0.00` 不再覆盖已知付费倍率。
 - **风控连坐暂停保护可配可立即解除**：设置页「稳定性」新增「风控连坐暂停保护」卡片。上游 403 / 11140 异常行为触发全区域暂停派发时，面板展示实时剩余倒计时，提供「立即解除暂停」一键解冻恢复请求；支持自定义暂停时长（默认 1800 秒，设为 0 可彻底关闭连坐熔断保护），且保存更短时间时即时截断现有倒计时。
 - **账号多时面板更顺**：账号表改为客户端分页（每页 50 个，排序与筛选作用在全部账号上再切页；改区域 / 改筛选 / 点表头回第 1 页，账号变少时页码夹回最后一页）；15 秒账号轮询拿回的数据与视图都没变时不再整表重画，且只在显示账号数据的页签（网关、账号、任务，新导航的总览）上跑，切回这些页签时立即拉一次；自动补积分改为只点名缺积分的号（`POST /accounts/credits` 新增 `uids` 列表参数，非列表回 400），每个号每次页面加载最多补一次，不再触发全池逐个刷。手动「一键刷新积分」不变。
 - 移除已废弃的 `WB_DEEPSEEK_FLASH_FORCE_SG` 文档行与两个恒返回 `False` 的存根函数（#776）。

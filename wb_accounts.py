@@ -968,6 +968,11 @@ class Account(object):
         # 写过，超长截断，别让一条长备注把账号行撑爆。
         raw_note = data.get("note")
         self.note = (raw_note if isinstance(raw_note, str) else "").strip()[:200]
+        # Free-form operator label used to filter and batch-act on a subset of
+        # the pool. Unlike API-key whitelists, a group is display/selection
+        # metadata and never changes routing by itself.
+        raw_group = data.get("group")
+        self.group = (raw_group if isinstance(raw_group, str) else "").strip()[:64]
         # 该账号**人工**禁用的模型名单（面板 / 接口配置）。与 weight、note 同款：
         # 随凭证档持久化 —— 这是使用者的明确意图，不该在重启后悄悄回到默认。
         #
@@ -1178,6 +1183,7 @@ class Account(object):
             "tasksEnabled": bool(self.tasks_enabled),
             "weight": self.weight,
             "note": self.note,
+            "group": self.group,
             "disabledModels": list(self.disabled_models),
             "lastError": self.last_error,
             "cooldownUntil": self.cooldown_until,
@@ -1260,6 +1266,7 @@ class Account(object):
             "tasksEnabled": bool(self.tasks_enabled),
             "weight": int(self.weight),
             "note": self.note,
+            "group": self.group,
             "disabledModels": list(self.disabled_models),
             "source": self.source,
             "apiKey": bool(self.is_api_key),
@@ -4501,6 +4508,15 @@ class AccountPool(object):
         account.save(self.dir)
         return account.public()
 
+    def set_group(self, uid, group):
+        """Set the optional operator label used for filtering and batch actions."""
+        account = self.get(uid)
+        if account is None:
+            return None
+        account.group = str(group or "").strip()[:64]
+        account.save(self.dir)
+        return account.public()
+
     def set_disabled_models(self, uid, models):
         """设置该账号**人工**禁用的模型名单，落盘并回公共视图。
 
@@ -4745,6 +4761,25 @@ class AccountPool(object):
                 account.save(self.dir)
         self.apply_proxy_slots()
 
+    def set_group_enabled(self, group, enabled):
+        """Enable/disable exactly the accounts carrying one non-empty group."""
+        group = str(group or "").strip()
+        if not group:
+            return []
+        changed = []
+        with self._lock:
+            for account in self.accounts:
+                if account.group != group:
+                    continue
+                account.enabled = bool(enabled)
+                account.tasks_enabled = bool(enabled)
+                if enabled:
+                    account.clear_error()
+                account.save(self.dir)
+                changed.append(account.uid)
+        self.apply_proxy_slots()
+        return changed
+
     def task_accounts(self, realm=None):
         """Accounts that participate in scheduled / manual tasks.
 
@@ -4790,7 +4825,20 @@ class AccountPool(object):
           every oversized body onto a single account.
         """
         exclude = exclude or set()
-        if session_key and page is None:
+        # A page that covers the whole realm is not a page at all: every
+        # oversized conversation would rotate through the entire pool and lose
+        # its prefix cache every turn (issue #718). Bind it like a normal
+        # conversation instead; real multi-page pools keep rotating.
+        whole_pool_page = False
+        if page is not None:
+            with self._lock:
+                pool_size = sum(1 for a in self.accounts
+                                if not realm or a.realm == realm)
+            try:
+                whole_pool_page = int(page[1]) >= pool_size
+            except (TypeError, ValueError, IndexError):
+                whole_pool_page = False
+        if session_key and (page is None or whole_pool_page):
             for uid in self.affinity.recent(session_key):
                 if uid in exclude:
                     continue
@@ -4803,7 +4851,8 @@ class AccountPool(object):
                 if account and account.realm == realm and account.ready(model=model):
                     self.affinity.bind(session_key, uid)
                     return account
-        account = self.pick(realm=realm, exclude=exclude, model=model, page=page,
+        account = self.pick(realm=realm, exclude=exclude, model=model,
+                            page=None if whole_pool_page else page,
                             allowed=allowed)
         if account is None and page is not None:
             # The page has nobody usable right now. Serving the conversation
@@ -4813,7 +4862,7 @@ class AccountPool(object):
         # A page conversation is not bound on purpose: its rotation is what keeps
         # every account of the page warm, and a binding would pin it back to one
         # (the state it was released from). The page cursor carries its rotation.
-        if account and session_key and page is None:
+        if account and session_key and (page is None or whole_pool_page):
             self.affinity.bind(session_key, account.uid)
         return account
 
@@ -5692,6 +5741,7 @@ def normalise_import_row(row, realm=None):
         "expiresAt": (0 if api_key
                       else normalize_epoch(pick("expiresAt")) or jwt_exp(token)),
         "source": str(pick("source") or (SOURCE_API_KEY if api_key else "import")),
+        "group": str(pick("group") or "").strip()[:64],
         "enabled": True,
         # Imported accounts start with tasks on (they are new to this pool);
         # an export that carries the flag keeps the operator's choice.

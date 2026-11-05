@@ -109,6 +109,7 @@ UI_LANGUAGE_VALUES = ("zh", "zh-Hant", "en")
 # reads as off - the opposite of the switches above - because turning it on
 # makes the gateway send a request on its own schedule.
 UPDATE_CHECK_ENABLED_KEY = "update_check_enabled"
+UPDATE_CHECK_PROXY_SLOT_KEY = "update_check_proxy_slot"
 # The last-check bookkeeping for that daily check. One small object, never a
 # general update-state store: see update_check_state().
 UPDATE_CHECK_STATE_KEY = "update_check"
@@ -2988,6 +2989,25 @@ def set_update_check_enabled(accounts_dir, enabled):
         data[UPDATE_CHECK_ENABLED_KEY] = enabled
         save(accounts_dir, data)
     return enabled
+
+
+def update_check_proxy_slot(accounts_dir):
+    """Proxy slot used only by the release checker; "" means direct."""
+    value = load(accounts_dir).get(UPDATE_CHECK_PROXY_SLOT_KEY)
+    return str(value or "").strip()[:64]
+
+
+def set_update_check_proxy_slot(accounts_dir, slot_id):
+    """Persist the optional update-check proxy slot. Returns the stored id."""
+    slot_id = str(slot_id or "").strip()[:64]
+    with _lock:
+        data = load(accounts_dir)
+        if slot_id:
+            data[UPDATE_CHECK_PROXY_SLOT_KEY] = slot_id
+        else:
+            data.pop(UPDATE_CHECK_PROXY_SLOT_KEY, None)
+        save(accounts_dir, data)
+    return slot_id
 
 
 def window_probe(accounts_dir):

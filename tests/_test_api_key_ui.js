@@ -40,6 +40,17 @@ check(/closeApiKeyModal\(\);[\s\S]{0,400}await loadAccounts\(\);/.test(html),
       '成功后应关闭弹窗并重拉账号列表');
 check(/if\(input\) input\.value = ''/.test(html), '关闭弹窗时应抹掉输入框里的 Key');
 
+// 2b. 配置示例：可折叠、含四种协议端点，Base URL 来自当前 origin
+check(html.includes('id="apiKeyExamples"') && /<details[^>]+id="apiKeyExamples"/.test(html),
+      'API Key 区应有可折叠的配置示例');
+for(const endpoint of ['GET /v1/models', 'POST /v1/chat/completions',
+                       'POST /v1/responses', 'POST /v1/messages']){
+  check(html.includes(endpoint), '配置示例缺少端点：' + endpoint);
+}
+check(/function apiKeyExampleText\(kind\)/.test(html), '缺少 apiKeyExampleText');
+check(/location\.origin[\s\S]{0,80}'\/v1'/.test(html), 'Base URL 应由当前 origin 派生');
+check(/Authorization: Bearer/.test(html), 'cURL 示例应展示 Bearer 鉴权');
+
 // 4. 账号行
 check(html.includes("a.apiKey"), '账号行应读 a.apiKey');
 check(html.includes('a.credentialMask'), '悬停提示应显示脱敏凭证');

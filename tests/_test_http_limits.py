@@ -22,12 +22,14 @@ Run with: python tests/_test_http_limits.py
 No network, no credentials: only loopback sockets on ephemeral ports.
 """
 import os
+import json
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock as mock
 from http.server import ThreadingHTTPServer
@@ -212,6 +214,26 @@ class PayloadCapTests(unittest.TestCase):
         self.assertEqual(handler.rfile.read_calls, 0)
         self.assertTrue(handler.close_connection)
 
+    def test_panel_limit_below_global_cap_still_replies_before_draining(self):
+        """A configured limit below 16MB must not let _error() read first.
+
+        `_error()` normally drains the request body for keep-alive. For a 413
+        that would read the whole oversized upload before the response was
+        written, so the reject flag must make that drain a no-op.
+        """
+        reader = CountingReader(b"x" * 4096)
+        handler = make_handler({"Content-Length": str(2 * 1024 * 1024)},
+                               rfile=reader)
+        calls = []
+        handler._error = lambda code, message, err_type="server_error": (
+            handler._discard_body(), calls.append((code, message, err_type)))
+        handler._drain_rejected_body = lambda length=0, budget_seconds=2.0: None
+        with mock.patch.object(P.wb_settings, "max_payload_mb", return_value=1):
+            self.assertIsNone(handler._payload_or_error())
+        self.assertEqual(calls[0][0], 413)
+        self.assertEqual(reader.bytes_read, 0)
+        self.assertTrue(handler.close_connection)
+
     def test_increased_limit_allows_a_previously_rejected_json_body(self):
         body = b'{"text":"' + b'x' * (1024 * 1024) + b'"}'
         handler = make_handler({"Content-Length": str(len(body))}, CountingReader(body))
@@ -228,6 +250,31 @@ class PayloadCapTests(unittest.TestCase):
         self.assertEqual(calls[0][0], 413)
         self.assertEqual(reader.read_calls, 0)
         self.assertTrue(handler.close_connection)
+
+    def test_chunked_413_drain_uses_framing_and_stays_bounded(self):
+        """Chunked uploads have no Content-Length; drain by chunk framing."""
+        class Socket(object):
+            def __init__(self):
+                self.shutdown_calls = []
+                self.timeout = None
+
+            def shutdown(self, how):
+                self.shutdown_calls.append(how)
+
+            def gettimeout(self):
+                return self.timeout
+
+            def settimeout(self, value):
+                self.timeout = value
+
+        body = b"4\r\nxxxx\r\n0\r\n\r\n"
+        reader = CountingReader(body)
+        handler = make_handler({"Transfer-Encoding": "chunked"}, rfile=reader)
+        handler.connection = Socket()
+        handler.wfile = mock.Mock()
+        handler._drain_rejected_body(0, budget_seconds=1.0)
+        self.assertEqual(handler.connection.shutdown_calls, [socket.SHUT_WR])
+        self.assertEqual(reader.bytes_read, len(body))
 
     def test_panel_limit_rejects_invalid_values(self):
         for value in (0, 257, True, 1.5, '16'):
@@ -272,18 +319,114 @@ class PayloadCapTests(unittest.TestCase):
         self.assertIn(str(P.MAX_PAYLOAD_BYTES), message)
 
     def test_an_over_limit_body_closes_instead_of_draining(self):
-        """断开路径：_error 的 drain 对超限 body 只置 close_connection。
-
-        读它要等到客户端把 50MB 发完，而回包早已发出——旧行为会一直阻塞在
-        drain 上；这里证明超限时走的是断开而不是读。
-        """
+        """The generic drain leaves oversized bodies to the bounded 413 drain."""
         reader = CountingReader()
         handler = make_handler({"Content-Length": str(50 * 1024 * 1024)},
                                rfile=reader)
         handler.close_connection = False
         handler._discard_body()
-        self.assertTrue(handler.close_connection)
+        self.assertFalse(handler.close_connection)
         self.assertEqual(reader.read_calls, 0)
+
+    def test_rejected_body_is_drained_after_the_reply(self):
+        """Issue #799: drain the upload after 413, so close() cannot RST it."""
+        class Socket(object):
+            def __init__(self):
+                self.shutdown_calls = []
+                self.timeout = None
+
+            def shutdown(self, how):
+                self.shutdown_calls.append(how)
+
+            def gettimeout(self):
+                return self.timeout
+
+            def settimeout(self, value):
+                self.timeout = value
+
+        body = b"x" * 70000
+        reader = CountingReader(body)
+        handler = make_handler({"Content-Length": str(len(body))}, rfile=reader)
+        handler.connection = Socket()
+        handler.wfile = mock.Mock()
+        handler._drain_rejected_body(len(body), budget_seconds=1.0)
+        self.assertEqual(handler.connection.shutdown_calls, [socket.SHUT_WR])
+        self.assertEqual(reader.bytes_read, len(body))
+        self.assertTrue(handler._body_consumed)
+
+    def test_real_oversized_upload_gets_413(self):
+        """Behavioral proof: a 17MB upload completes with HTTP 413, not RST."""
+        work = tempfile.mkdtemp(prefix="http-413-")
+        store = os.path.join(work, "accounts")
+        os.makedirs(store)
+        with open(os.path.join(store, "settings.json"), "w", encoding="utf-8") as fh:
+            json.dump({"api_keys": [{"id": "k1", "name": "t",
+                                      "key": "GOODKEY", "enabled": True}]}, fh)
+        port = None
+        server = None
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            env = dict(os.environ)
+            env.update({
+                "ACCOUNTS_DIR": store,
+                "WB_PROXY_USAGE_DIR": os.path.join(work, "usage"),
+                "WB_MAX_PAYLOAD_BYTES": str(1024 * 1024),
+            })
+            server = subprocess.Popen(
+                [sys.executable, os.path.join(ROOT, "wb_proxy.py"),
+                 "--port", str(port), "--host", "127.0.0.1",
+                 "--accounts-dir", store],
+                cwd=ROOT, env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                try:
+                    with socket.create_connection(("127.0.0.1", port),
+                                                  timeout=0.5) as probe:
+                        probe.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\n"
+                                      b"Connection: close\r\n\r\n")
+                        if b"200" in probe.recv(200):
+                            break
+                except OSError:
+                    time.sleep(0.1)
+            else:
+                self.fail("gateway did not start")
+            payload = b'{"padding":"' + b"x" * (2 * 1024 * 1024) + b'"}'
+            with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+                sock.sendall(
+                    b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n"
+                    b"Authorization: Bearer GOODKEY\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: " + str(len(payload)).encode() +
+                    b"\r\n\r\n" + payload)
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                head, _, body = data.partition(b"\r\n\r\n")
+                self.assertIn(b" 413 ", head.split(b"\r\n", 1)[0], head[:200])
+                length = 0
+                for line in head.split(b"\r\n")[1:]:
+                    if line.lower().startswith(b"content-length:"):
+                        length = int(line.split(b":", 1)[1])
+                while len(body) < length:
+                    chunk = sock.recv(length - len(body))
+                    if not chunk:
+                        break
+                    body += chunk
+                self.assertIn(b"payload too large", body)
+        finally:
+            if server is not None:
+                server.terminate()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+            shutil.rmtree(work, ignore_errors=True)
 
     def test_a_body_within_the_cap_still_parses(self):
         """反方向护栏：收紧默认值不能把正常请求一并挡掉。"""

@@ -37,7 +37,8 @@ const element = id => {
       style: {setProperty(){}},
       classList: {add(){}, remove(){}, toggle(){}, contains(){ return false; }},
       addEventListener(){}, removeEventListener(){}, querySelector(){ return null; },
-      querySelectorAll(){ return []; }, appendChild(){}, removeChild(){}, focus(){},
+      querySelectorAll(){ return []; }, appendChild(){}, removeChild(){},
+      insertBefore(){}, focus(){},
       setAttribute(){}, getAttribute(){ return ''; }, removeAttribute(){},
       contains(){ return false; }, closest(){ return null; },
     });
@@ -81,6 +82,7 @@ global.clearTimeout = () => {};
 global.location = global.window.location;
 global.alert = () => {};
 global.confirm = () => true;
+global.getComputedStyle = () => ({display: 'block'});
 global.console.log = () => {};
 
 // ---- capture every request the page makes ---------------------------------

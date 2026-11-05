@@ -248,6 +248,20 @@ class PageRotationTests(unittest.TestCase):
         self.assertIsNone(pool.affinity.get("s"))
         self.assertEqual(pool.affinity.recent("s"), [])
 
+    def test_a_page_covering_the_whole_small_pool_is_bound(self):
+        """With two accounts page rotation would swap every turn (issue #718).
+
+        Every turn would land on a different account, so neither can reuse the
+        prefix cache. A page that covers the entire realm is therefore treated
+        as a normal conversation and keeps one account.
+        """
+        pool = self._pool(("a", "b"))
+        first = pool.pick_for_session(realm="cn", session_key="long", page=(0, 3))
+        self.assertEqual(pool.affinity.get("long"), first.uid)
+        picks = [pool.pick_for_session(
+            realm="cn", session_key="long", page=(0, 3)).uid for _ in range(5)]
+        self.assertEqual(set(picks), {first.uid})
+
     def test_no_page_means_the_whole_pool(self):
         pool = self._pool()
         picks = {pool.pick(realm="cn").uid for _ in range(6)}

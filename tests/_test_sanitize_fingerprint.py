@@ -427,6 +427,33 @@ class CodexIntroFingerprintTests(unittest.TestCase):
         self.assertEqual(P.sanitize_text(once), once)
 
 
+class LegacyRewriteFingerprintTests(unittest.TestCase):
+    """The two rewrites that regressed into no-ops in v1.10.5 (issue #796)."""
+
+    def test_main_branch_fingerprint_is_rewritten(self):
+        source = "Main branch (you will usually use this for PRs): main"
+        out = P.sanitize_text(source)
+        self.assertEqual(
+            out, "Default branch (you will usually use this for PRs): main")
+        self.assertNotIn("Main branch (", out)
+
+    def test_feedback_fingerprint_is_rewritten(self):
+        source = ("To give feedback, users should report the issue at "
+                  "https://github.com/anthropics/claude-code/issues")
+        out = P.sanitize_text(source)
+        self.assertEqual(
+            out,
+            "To provide feedback, users should report the issue at "
+            "https://github.com/anthropics/claude-code/issues")
+        self.assertNotIn("To give feedback,", out)
+
+    def test_rewrites_are_not_noops(self):
+        for old, new in P.SANITIZE_REWRITES:
+            if old == "11-128":
+                continue
+            self.assertNotEqual(old, new, "rewrite is a no-op: %r" % old)
+
+
 class ClaudeCodeIntroFingerprintTests(unittest.TestCase):
     """Claude Code 基础提示词首段（#733）。
 

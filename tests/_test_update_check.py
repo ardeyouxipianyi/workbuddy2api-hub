@@ -123,6 +123,90 @@ class SettingsContractTests(unittest.TestCase):
                 wb_settings.save(d, {"update_check_enabled": value})
                 self.assertFalse(wb_settings.update_check_enabled(d), value)
 
+    def test_update_check_proxy_slot_round_trip_and_empty_clears(self):
+        with tempfile.TemporaryDirectory(prefix="upd-proxy-") as d:
+            wb_settings.set_proxy_slots(d, [
+                {"id": "slot-1", "name": "Tokyo", "url": "http://127.0.0.1:7890"},
+            ])
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "")
+            wb_settings.set_update_check_proxy_slot(d, "slot-1")
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "slot-1")
+            with mock.patch.object(proxy, "ACCOUNTS_DIR", d):
+                view = proxy.runtime_settings_view()
+            self.assertEqual(view["update_check_proxy_slot"], "slot-1")
+            self.assertEqual(view["update_check_proxy_slots"],
+                             [{"id": "slot-1", "label": "Tokyo", "enabled": True}])
+            wb_settings.set_update_check_proxy_slot(d, "")
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "")
+            with open(wb_settings.settings_path(d), encoding="utf-8") as fh:
+                self.assertNotIn("update_check_proxy_slot", json.load(fh))
+
+
+class UpdateProxyTests(unittest.TestCase):
+    def _checker(self, directory):
+        return wb_updates.UpdateChecker(
+            current_version=CURRENT, settings_dir=directory, fetcher=None,
+            first_delay=0, poll_seconds=0.01)
+
+    def test_a_proxy_slot_routes_the_real_fetcher(self):
+        with tempfile.TemporaryDirectory(prefix="upd-proxy-") as d:
+            wb_settings.set_proxy_slots(d, [
+                {"id": "slot-1", "name": "Tokyo", "url": "http://127.0.0.1:7890"},
+            ])
+            wb_settings.set_update_check_proxy_slot(d, "slot-1")
+            seen = []
+
+            class Opener(object):
+                def open(self, request, timeout=None):
+                    seen.append((request.full_url, timeout))
+                    return io.BytesIO(json.dumps([release("v1.6.20")]).encode("utf-8"))
+
+            def opener(proxy_url=""):
+                seen.append(("opener", proxy_url))
+                return Opener()
+
+            with mock.patch.object(wb_updates, "_opener", opener):
+                status = self._checker(d).check(manual=True)
+            self.assertEqual(status["last_error"], "")
+            self.assertEqual(status["latest_version"], "1.6.20")
+            self.assertEqual(seen[0], ("opener", "http://127.0.0.1:7890"))
+
+    def test_a_disabled_or_deleted_slot_falls_back_to_direct(self):
+        for slots, slot_id in (
+            ([{"id": "slot-1", "url": "http://127.0.0.1:7890", "enabled": False}], "slot-1"),
+            ([], "slot-1"),
+        ):
+            with self.subTest(slot_id=slot_id):
+                with tempfile.TemporaryDirectory(prefix="upd-proxy-") as d:
+                    wb_settings.set_proxy_slots(d, slots)
+                    wb_settings.set_update_check_proxy_slot(d, slot_id)
+                    seen = []
+
+                    class Opener(object):
+                        def open(self, request, timeout=None):
+                            return io.BytesIO(json.dumps([release("v1.6.20")]).encode("utf-8"))
+
+                    def opener(proxy_url=""):
+                        seen.append(proxy_url)
+                        return Opener()
+
+                    with mock.patch.object(wb_updates, "_opener", opener):
+                        self._checker(d).check(manual=True)
+                    # Direct mode deliberately uses urlopen, keeping the
+                    # existing socket-level test seam patchable.
+                    self.assertEqual(seen, [])
+
+    def test_proxy_credentials_never_reach_the_settings_view(self):
+        with tempfile.TemporaryDirectory(prefix="upd-proxy-") as d:
+            secret = "user:password"
+            wb_settings.set_proxy_slots(d, [
+                {"id": "slot-1", "name": "Auth", "url": "http://%s@127.0.0.1:7890" % secret},
+            ])
+            wb_settings.set_update_check_proxy_slot(d, "slot-1")
+            with mock.patch.object(proxy, "ACCOUNTS_DIR", d):
+                payload = json.dumps(proxy.runtime_settings_view())
+            self.assertNotIn(secret, payload)
+
 
 class VersionComparisonTests(unittest.TestCase):
     def test_plain_semver_parses_with_or_without_the_v(self):
@@ -650,6 +734,38 @@ class RouteTests(unittest.TestCase):
             worker.start()
             try:
                 self._save(d, {"update_check_enabled": True}, updates=worker)
+                self.assertTrue(worker._wake.is_set())
+            finally:
+                worker.stop()
+                worker.join(timeout=5)
+
+    def test_settings_save_validates_and_persists_the_update_proxy_slot(self):
+        with tempfile.TemporaryDirectory(prefix="upd-route-") as d:
+            wb_settings.set_proxy_slots(d, [
+                {"id": "slot-1", "name": "Tokyo", "url": "http://127.0.0.1:7890"},
+            ])
+            request = self._save(d, {"update_check_proxy_slot": "slot-1"})
+            self.assertEqual(request.status, 200)
+            self.assertEqual(request.reply["update_check_proxy_slot"], "slot-1")
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "slot-1")
+            request = self._save(d, {"update_check_proxy_slot": ""})
+            self.assertEqual(request.status, 200)
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "")
+            for bad in ("missing", None, 1):
+                request = self._save(d, {"update_check_proxy_slot": bad})
+                self.assertEqual(request.status, 400, bad)
+            self.assertEqual(wb_settings.update_check_proxy_slot(d), "")
+
+    def test_changing_the_update_proxy_wakes_a_parked_worker(self):
+        with tempfile.TemporaryDirectory(prefix="upd-route-") as d:
+            wb_settings.set_proxy_slots(d, [
+                {"id": "slot-1", "name": "Tokyo", "url": "http://127.0.0.1:7890"},
+            ])
+            worker = checker(d, FakeFetcher([release("v1.6.18")]),
+                             first_delay=3600, poll_seconds=3600)
+            worker.start()
+            try:
+                self._save(d, {"update_check_proxy_slot": "slot-1"}, updates=worker)
                 self.assertTrue(worker._wake.is_set())
             finally:
                 worker.stop()

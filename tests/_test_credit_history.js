@@ -23,7 +23,8 @@ const element = id => {
       style: {setProperty(){}, getPropertyValue(){ return ''; }},
       classList: {add(){}, remove(){}, toggle(){}, contains(){ return false; }},
       addEventListener(){}, querySelector(){ return null; }, querySelectorAll(){ return []; },
-      appendChild(){}, focus(){}, setAttribute(){}, getAttribute(){ return ''; },
+      appendChild(){}, insertBefore(){}, focus(){},
+      setAttribute(){}, getAttribute(){ return ''; },
     });
   }
   return elements.get(id);
@@ -47,6 +48,7 @@ global.setTimeout = () => 0;
 global.location = {href: '', search: '', hash: ''};
 global.alert = () => {};
 global.confirm = () => false;
+global.getComputedStyle = () => ({display: 'block'});
 global.fetch = () => Promise.resolve({
   status: 200, ok: true,
   json: () => Promise.resolve({}),

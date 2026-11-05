@@ -153,7 +153,24 @@ def describe_failure(exc):
     return type(exc).__name__
 
 
-def fetch_releases(url=RELEASES_URL, timeout=REQUEST_TIMEOUT):
+def _opener(proxy=""):
+    """A direct opener, or one pinned to the configured proxy slot."""
+    proxy = str(proxy or "").strip()
+    if not proxy:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+
+
+def _open(request, timeout, proxy=""):
+    """Keep the no-proxy path patchable by the existing test contract."""
+    proxy = str(proxy or "").strip()
+    if not proxy:
+        return urllib.request.urlopen(request, timeout=timeout)
+    return _opener(proxy).open(request, timeout=timeout)
+
+
+def fetch_releases(url=RELEASES_URL, timeout=REQUEST_TIMEOUT, proxy=""):
     """releases 文档的原始 JSON 文本；任何失败都抛异常给调用方。
 
     API 那一跳走的是**匿名**配额：60 次/小时/出口 IP。国内用户普遍从共享代理
@@ -162,15 +179,15 @@ def fetch_releases(url=RELEASES_URL, timeout=REQUEST_TIMEOUT):
     拿回来；那边也失败才抛异常，抛的是 API 的原因，它才是主路径。
     """
     try:
-        return _fetch_api(url, timeout)
+        return _fetch_api(url, timeout, proxy=proxy)
     except Exception as api_error:
         try:
-            return json.dumps([fetch_latest_release(timeout)])
+            return json.dumps([fetch_latest_release(timeout, proxy=proxy)])
         except Exception:
             raise api_error
 
 
-def _fetch_api(url, timeout):
+def _fetch_api(url, timeout, proxy=""):
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/vnd.github+json",
@@ -179,11 +196,11 @@ def _fetch_api(url, timeout):
     if token:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _open(request, timeout, proxy) as response:
         return response.read(MAX_BODY).decode("utf-8", "replace")
 
 
-def fetch_latest_release(timeout=REQUEST_TIMEOUT):
+def fetch_latest_release(timeout=REQUEST_TIMEOUT, proxy=""):
     """网页端点上的最新稳定版，返回一条 releases 条目。
 
     releases/latest 会 302 到 /releases/tag/<tag>；urlopen 跟完重定向后
@@ -192,7 +209,7 @@ def fetch_latest_release(timeout=REQUEST_TIMEOUT):
     """
     request = urllib.request.Request(LATEST_RELEASE_URL,
                                      headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _open(request, timeout, proxy) as response:
         final = response.geturl()
     match = TAG_RE.search(final or "")
     if not match:
@@ -224,7 +241,7 @@ class UpdateChecker(threading.Thread):
         self.current_version = str(current_version or "").strip()
         self.settings_dir = settings_dir
         # 注入点：测试给一个假的 fetcher，就不必碰网络。
-        self._fetch = fetcher or fetch_releases
+        self._fetch = fetcher
         self._log = log
         self._first_delay = max(0.0, float(first_delay))
         self._poll_seconds = max(1.0, float(poll_seconds))
@@ -373,7 +390,20 @@ class UpdateChecker(threading.Thread):
         self._last_attempt = time.time()
         self._last_error = ""
         try:
-            document = json.loads(self._fetch(RELEASES_URL, REQUEST_TIMEOUT))
+            if self._fetch is not None:
+                document = json.loads(self._fetch(RELEASES_URL, REQUEST_TIMEOUT))
+            else:
+                proxy = ""
+                try:
+                    slot_id = wb_settings.update_check_proxy_slot(self.settings_dir)
+                    if slot_id:
+                        slot = wb_settings.find_proxy_slot(self.settings_dir, slot_id)
+                        if slot and slot.get("enabled", True):
+                            proxy = slot.get("url") or ""
+                except Exception:
+                    proxy = ""
+                document = json.loads(fetch_releases(
+                    RELEASES_URL, REQUEST_TIMEOUT, proxy=proxy))
             if not isinstance(document, list):
                 raise ValueError("releases document is not a list")
             picked = pick_latest(document, self.current_version)

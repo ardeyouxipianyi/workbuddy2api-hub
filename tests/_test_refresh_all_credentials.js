@@ -21,7 +21,7 @@ assert.ok(start > 0 && end > start,
 
 const source = html.slice(start, end);
 
-function makeHarness(response) {
+function makeHarness(response, group) {
   const calls = { posts: [], toasts: [], loads: 0 };
   const postJSON = async (url, body) => {
     calls.posts.push({ url, body });
@@ -30,9 +30,10 @@ function makeHarness(response) {
   };
   const toast = (msg, kind) => calls.toasts.push({ msg, kind });
   const loadAccounts = async () => { calls.loads++; };
-  const factory = new Function('postJSON', 'toast', 'loadAccounts',
+  const accountFilters = { query: '', status: '', group: group || '' };
+  const factory = new Function('postJSON', 'toast', 'loadAccounts', 'ACCOUNT_FILTERS',
     source + '\nreturn refreshAccounts;');
-  return { fn: factory(postJSON, toast, loadAccounts), calls };
+  return { fn: factory(postJSON, toast, loadAccounts, accountFilters), calls };
 }
 
 function makeButton() {
@@ -49,6 +50,15 @@ function makeButton() {
     assert.strictEqual(h.calls.posts[0].url, '/accounts/refresh');
     assert.deepStrictEqual(h.calls.posts[0].body, {},
       '不带 uid 才会刷新所有账号，带上 uid 就退化成单账号刷新了');
+  }
+
+  // 1b) 选中分组时，批量刷新只作用于该分组
+  {
+    const h = makeHarness({ results: [{ uid: 'a', ok: true }] }, 'Team A');
+    await h.fn(makeButton());
+    assert.strictEqual(h.calls.posts.length, 1);
+    assert.deepStrictEqual(h.calls.posts[0].body, { group: 'Team A' },
+      '选中分组后应把 group 一并交给后端');
   }
 
   // 2) 全部成功：报「刷新完成: 2/2」，用 ok 配色

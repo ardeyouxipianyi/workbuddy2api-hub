@@ -1,4 +1,5 @@
 """单进程 CodeArts：配置、账号文件、账号池、模型、续期、签到、OAuth。"""
+import io
 import json
 import os
 import sys
@@ -117,6 +118,22 @@ try:
     check("cooldown after threshold", acct.cool_until > time.time())
     pool.clear_cooldown("u1")
     check("cooldown cleared", acct.cool_until == 0)
+
+    print("== model id identity ==")
+    acct.models = [
+        {"id": "deepseek-v4.1-flash", "max_tokens": 1000},
+        {"id": "deepseek-v4.1-flash-1017", "max_tokens": 2000},
+    ]
+    check("1017 canonical id stays exact",
+          C._canonical_model(acct, "DEEPSEEK-V4.1-FLASH-1017")
+          == "deepseek-v4.1-flash-1017")
+    check("base canonical id stays exact",
+          C._canonical_model(acct, "DEEPSEEK-V4.1-FLASH")
+          == "deepseek-v4.1-flash")
+    check("1017 has its own output limit",
+          C._model_output_limit(acct, "deepseek-v4.1-flash-1017") == 2000)
+    check("base has its own output limit",
+          C._model_output_limit(acct, "deepseek-v4.1-flash") == 1000)
 
     print("== proxy slots ==")
     import urllib.request
@@ -307,7 +324,7 @@ try:
     sampling_body = C.build_chat_body({
         "model": "GLM-5.2",
         "messages": [{"role": "user", "content": "hi"}],
-        "stop": ["END"], "seed": 7, "top_k": 5,
+        "stop": "END", "seed": 7, "top_k": 5,
         "frequency_penalty": 0.2, "presence_penalty": 0.1,
         "response_format": {"type": "json_object"},
     }, "sess-sampling")
@@ -319,6 +336,44 @@ try:
           and sampling_body.get("presence_penalty") == 0.1
           and sampling_body.get("response_format") == {"type": "json_object"},
           sampling_body)
+
+    print("== output token clamp ==")
+    body = C.build_chat_body({
+        "model": "GLM-5.2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_completion_tokens": 384000,
+    }, "sess-clamp")
+    stream, _acct, _model = C.open_chat(C.load_config(ACCOUNTS), body,
+                                        "sess-clamp")
+    b"".join(stream)
+    stream.close()
+    sent = state.last_body or {}
+    check("output tokens clamped to advertised max",
+          sent.get("max_tokens") == 8192, sent)
+    check("completion spelling removed",
+          "max_completion_tokens" not in sent, sent)
+    bad = C.build_chat_body({
+        "model": "GLM-5.2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": "abc",
+    }, "sess-bad-max")
+    try:
+        C.open_chat(C.load_config(ACCOUNTS), bad, "sess-bad-max")
+        check("invalid max_tokens rejected locally", False)
+    except C.CodeArtsBadRequest:
+        check("invalid max_tokens rejected locally", True)
+    check("invalid parameter did not cool the account",
+          acct.cool_until == 0, acct.cool_until)
+
+    embedded = C.CodeArtsStream(
+        io.BytesIO(b'data: {"error_code":"invalid_param","error_msg":'
+                   b'"The request param is invalid, Please check it"}\n\n'),
+        "GLM-5.2", acct, acct.pool)
+    try:
+        embedded.preflight()
+        check("embedded parameter error is a 400", False)
+    except C.CodeArtsBadRequest as exc:
+        check("embedded parameter error is a 400", exc.status == 400, exc.status)
 
     import io
     stream = C.CodeArtsStream(io.BytesIO(b'data: {"text":"hello"}\n\ndata: [DONE]\n\n'),

@@ -125,6 +125,31 @@ class RemoteCatalogTests(unittest.TestCase):
             P.model_entry("hy4-preview", entries["hy4-preview"])["credits"],
             "x0.29")
 
+    def test_live_zero_does_not_overwrite_a_known_paid_price(self):
+        """Issue #774: a remote x0.00 placeholder must not hide real billing."""
+        meta = dict(INTL_META)
+        meta["deepseek-v4.1-flash"] = {"credits": "x0.00"}
+        P.fetch_remote_product_config = (
+            lambda realm: (INTL_IDS + ["deepseek-v4.1-flash"], meta)
+            if realm == "intl" else None)
+        P._models_cache["intl"] = {"at": 0.0, "data": None}
+        entries = dict(P.fetch_models("intl"))
+        self.assertEqual(entries["deepseek-v4.1-flash"]["credits"], "x0.11")
+        self.assertEqual(
+            P.model_entry("deepseek-v4.1-flash",
+                          entries["deepseek-v4.1-flash"])["credits"],
+            "x0.11")
+
+    def test_live_zero_still_updates_a_bundled_free_model(self):
+        """A genuinely free bundled model keeps following the live catalogue."""
+        meta = dict(INTL_META)
+        meta["hy3"] = {"credits": "x0.00"}
+        P.fetch_remote_product_config = (
+            lambda realm: (INTL_IDS, meta) if realm == "intl" else None)
+        P._models_cache["intl"] = {"at": 0.0, "data": None}
+        entries = dict(P.fetch_models("intl"))
+        self.assertEqual(entries["hy3"]["credits"], "x0.00")
+
     def test_parse_keeps_order_and_metadata(self):
         ids, meta = P.parse_remote_catalog(payload(INTL_IDS, INTL_META))
         self.assertEqual(ids, INTL_IDS)

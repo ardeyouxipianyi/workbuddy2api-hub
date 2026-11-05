@@ -5590,9 +5590,12 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
       <select id="accountStatusFilter" aria-label="账号状态" onchange="ACCOUNT_FILTERS.status=this.value;renderAccounts()">
         <option value="">全部状态</option><option value="healthy">可用</option><option value="attention">需关注</option><option value="disabled">本地停用</option>
       </select>
+      <select id="accountGroupFilter" aria-label="账号分组" onchange="ACCOUNT_FILTERS.group=this.value;renderAccounts()">
+        <option value="">全部分组</option>
+      </select>
       <span class="console-filter-count" id="accountFilterCount">全部账号</span>
       <button type="button" class="sec mini" onclick="clearAccountFilters()">清除筛选</button>
-      <span style="font-size:11px;color:var(--dim)">筛选仅影响显示，批量操作仍按原账号范围执行</span>
+      <span style="font-size:11px;color:var(--dim)">选中分组后，刷新、测试、补积分和启停都只作用于该分组</span>
     </div>
     <div class="toolbar">
     <button onclick="openLoginModal()">添加</button>
@@ -5629,6 +5632,8 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" id="btnProductAll" onclick="cycleAllProducts(this)" title="把全部账号（含另一个版本）的出站身份切到下一个：WB → VSC → CLI">一键切换所有出站身份：<span id="productAllLabel">WB</span></button>
     <button class="sec" onclick="setAll(true, this)">全部启用</button>
     <button class="sec" onclick="setAll(false, this)">全部停用</button>
+    <button class="sec" onclick="setCurrentGroup(true, this)">当前分组启用</button>
+    <button class="sec" onclick="setCurrentGroup(false, this)">当前分组停用</button>
     </div>
   </div>
     <div id="accounts"></div>
@@ -6261,6 +6266,27 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <button onclick="addApiKeyRow()">+ 添加 API Key</button>
       </div>
       <div id="keyList"></div>
+      <details id="apiKeyExamples" style="margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:10px 12px">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--fg)">配置示例（Base URL / cURL / 各协议端点）</summary>
+        <div style="font-size:12px;color:var(--dim);margin-top:8px">
+          Base URL 固定为当前面板地址加 <code>/v1</code>；鉴权统一使用 <code>Authorization: Bearer &lt;API_KEY&gt;</code>。
+          <div id="apiKeyExampleBase" class="mono" style="margin:6px 0;color:var(--fg);word-break:break-all"></div>
+          <pre id="apiKeyExampleCurl" class="mono" style="white-space:pre-wrap;word-break:break-all;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg);font-size:11px;line-height:1.55"></pre>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="sec mini" type="button" onclick="copyApiKeyExample('base', this)">复制 Base URL</button>
+            <button class="sec mini" type="button" onclick="copyApiKeyExample('curl', this)">复制 cURL</button>
+          </div>
+          <div style="margin-top:10px;line-height:1.75">
+            <div><code>GET /v1/models</code> · 模型清单</div>
+            <div><code>POST /v1/chat/completions</code> · OpenAI Chat Completions</div>
+            <div><code>POST /v1/responses</code> · OpenAI Responses</div>
+            <div><code>POST /v1/messages</code> · Anthropic Messages（需先在「智能体接入」中开启）</div>
+          </div>
+          <div style="font-size:11px;color:var(--dim);margin-top:8px">
+            LAN 模式下把 Base URL 换成其他设备可访问的网关地址，端口与路径保持不变。
+          </div>
+        </div>
+      </details>
       <!-- 已删除的 Key 只留名字和日期：密钥已抹掉，所以这里没有「复制」。
            历史用量按 id 记账，删掉这一行会让那些请求变成「未知 key」。 -->
       <div id="deletedKeySection"></div>
@@ -7169,6 +7195,19 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         <div style="margin-top:10px">
           <button onclick="saveUpdateCheckEnabled(this)">保存</button>
         </div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:4px">检查更新使用的出口</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="setUpdateProxySlot"
+                    style="min-width:220px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font:inherit">
+              <option value="">直连（不使用代理槽）</option>
+            </select>
+            <button onclick="saveUpdateProxySlot(this)">保存</button>
+          </div>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            仅影响 GitHub 更新检查，不会改变账号请求或媒体请求的出口。代理槽停用或删除后自动回退直连。
+          </div>
+        </div>
         <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
           <div style="font-size:12px;color:var(--dim);margin-bottom:4px">保留历史版本备份</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -7538,6 +7577,11 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
         选择一个账号 JSON 文件。支持本网关导出的文件、账号数组、单个账号对象，
         以及桌面客户端的 <code>{"account":…,"auth":…}</code> 格式。
       </p>
+      <div class="field" style="margin-bottom:12px">
+        <label for="importGroup">导入到分组（可选）</label>
+        <input id="importGroup" type="text" maxlength="64" autocomplete="off"
+               placeholder="例如：Team A；留空则使用文件里的分组" style="width:100%">
+      </div>
       <div id="importBody"><p class="hint">尚未选择文件。</p></div>
     </div>
     <div class="modal-ft">
@@ -10837,6 +10881,9 @@ function accountRow(a){
     +     (a.note
           ? '<span class="note-chip has" title="点击编辑备注" onclick="editAccountNote(&quot;' + uidAttr + '&quot;)">' + esc(a.note) + '</span>'
           : '<span class="note-chip" title="点击添加备注，比如「批量」/「自用」" onclick="editAccountNote(&quot;' + uidAttr + '&quot;)">+ 备注</span>')
+        + (a.group
+          ? '<span class="note-chip has" title="点击编辑账号分组" onclick="editAccountGroup(&quot;' + uidAttr + '&quot;)">' + esc(a.group) + '</span>'
+          : '<span class="note-chip" title="点击设置账号分组" onclick="editAccountGroup(&quot;' + uidAttr + '&quot;)">+ 分组</span>')
     // API Key 账号没有个人成长体系，签到/任务开关对它没有意义：上游一律拒绝，
     // 画出来只会让人以为点了能开。
     +     (a.apiKey ? ''
@@ -10957,10 +11004,11 @@ function accountIsHealthy(a){
     && !a.inCooldown && !a.breakerFor && !a.degradeFor
     && !a.reserveBlocked && !a.dailyLimitBlocked && !a.creditLimitReached;
 }
-const ACCOUNT_FILTERS = {query: '', status: ''};
+const ACCOUNT_FILTERS = {query: '', status: '', group: ''};
 function accountMatchesFilters(a){
   const q = ACCOUNT_FILTERS.query.trim().toLowerCase();
   if(q && ![a.nickname, a.note, a.uid].some(v => String(v || '').toLowerCase().includes(q))) return false;
+  if(ACCOUNT_FILTERS.group && String(a.group || '') !== ACCOUNT_FILTERS.group) return false;
   if(ACCOUNT_FILTERS.status === 'disabled') return !a.enabled;
   const attention = !accountIsHealthy(a);
   if(ACCOUNT_FILTERS.status === 'healthy') return !attention;
@@ -10970,10 +11018,13 @@ function accountMatchesFilters(a){
 function clearAccountFilters(){
   ACCOUNT_FILTERS.query = '';
   ACCOUNT_FILTERS.status = '';
+  ACCOUNT_FILTERS.group = '';
   const q = document.getElementById('accountSearchFilter');
   const s = document.getElementById('accountStatusFilter');
+  const g = document.getElementById('accountGroupFilter');
   if(q) q.value = '';
   if(s) s.value = '';
+  if(g) g.value = '';
   renderAccounts();
 }
 
@@ -11306,7 +11357,17 @@ function renderAccounts(){
   let list = accountsInView();
   const skipIfSame = arguments[0] === true;
   if(ACCT_PAGE_REALM !== currentView){ ACCT_PAGE_REALM = currentView; ACCT_PAGE = 1; }
-  const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status;
+  const filterKey = ACCOUNT_FILTERS.query + '\u0001' + ACCOUNT_FILTERS.status
+    + '\u0001' + ACCOUNT_FILTERS.group;
+  const groupSelect = document.getElementById('accountGroupFilter');
+  if(groupSelect){
+    const groups = Array.from(new Set(list.map(a => String(a.group || '')).filter(Boolean))).sort();
+    const current = ACCOUNT_FILTERS.group;
+    groupSelect.innerHTML = '<option value="">全部分组</option>'
+      + groups.map(g => '<option value="' + esc(g) + '">' + esc(g) + '</option>').join('');
+    groupSelect.value = groups.includes(current) ? current : '';
+    if(groupSelect.value !== current) ACCOUNT_FILTERS.group = '';
+  }
   if(ACCT_PAGE_FILTER !== filterKey){ ACCT_PAGE_FILTER = filterKey; ACCT_PAGE = 1; }
   const unfilteredCount = list.length;
   list = list.filter(accountMatchesFilters);
@@ -11441,9 +11502,12 @@ async function loadAccounts(poll){
 async function fetchCredits(btn){
   if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
   const currentView = (window.VIEW_REALM || "intl");
-  const viewName = currentView === 'cn' ? '国内版' : '国际版';
+  const group = String(ACCOUNT_FILTERS.group || '').trim();
+  const viewName = group ? ('分组「' + group + '」') : (currentView === 'cn' ? '国内版' : '国际版');
   try{
-    const r = await postJSON('/accounts/credits', {realm: currentView});
+    const payload = {realm: currentView};
+    if(group) payload.group = group;
+    const r = await postJSON('/accounts/credits', payload);
     await loadAccounts();
     refresh();
     const count = (r.results || []).length;
@@ -11501,6 +11565,20 @@ async function editAccountNote(uid){
     toast(next.trim() ? '备注已保存' : '备注已清除', 'ok');
   }catch(e){
     toast('备注保存失败: ' + e.message, 'bad');
+  }
+}
+
+async function editAccountGroup(uid){
+  const cur = (window.ACCOUNTS || []).find(a => a.uid === uid);
+  const next = prompt('账号分组（留空取消分组；同组账号可批量启停）:',
+                      (cur && cur.group) || '');
+  if(next === null) return;
+  try{
+    await postJSON('/accounts/set', {uid: uid, group: next});
+    await loadAccounts();
+    toast(next.trim() ? '分组已保存' : '已取消分组', 'ok');
+  }catch(e){
+    toast('分组保存失败: ' + e.message, 'bad');
   }
 }
 
@@ -11718,7 +11796,9 @@ async function testAccounts(btn){
   if(btn){ btn.disabled = true; btn.textContent = '测试中...'; }
   openTestAll();
   try{
-    const r = await postJSON('/accounts/test', {realm: window.VIEW_REALM});
+    const payload = {realm: window.VIEW_REALM};
+    if(ACCOUNT_FILTERS.group) payload.group = ACCOUNT_FILTERS.group;
+    const r = await postJSON('/accounts/test', payload);
     renderTestAll(r);
     const s = r.summary || {};
     if(s.networkDown){
@@ -11791,7 +11871,9 @@ function renderTestAll(r){
 async function refreshAccounts(btn){
   if(btn){ btn.disabled = true; btn.textContent = '刷新中...'; }
   try{
-    const r = await postJSON('/accounts/refresh', {});
+    const payload = {};
+    if(ACCOUNT_FILTERS.group) payload.group = ACCOUNT_FILTERS.group;
+    const r = await postJSON('/accounts/refresh', payload);
     const results = r.results || [];
     const okc = results.filter(x=>x.ok).length;
     const bad = results.filter(x=>!x.ok);
@@ -11814,6 +11896,21 @@ async function setAll(enable, btn){
     toast(enable ? '已全部启用所有账号' : '已全部停用所有账号', 'ok');
   }catch(e){
     toast('批量操作失败: ' + e.message, 'bad');
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+async function setCurrentGroup(enable, btn){
+  const group = String(ACCOUNT_FILTERS.group || '').trim();
+  if(!group){ toast('请先在账号筛选栏选择分组', 'warn'); return; }
+  if(!confirm((enable ? '启用' : '停用') + '分组「' + group + '」中的全部账号？')) return;
+  if(btn) btn.disabled = true;
+  try{
+    await postJSON('/accounts/set-all', {enabled: enable, group: group});
+    await loadAccounts();
+    toast((enable ? '已启用' : '已停用') + '分组「' + group + '」', 'ok');
+  }catch(e){
+    toast('分组操作失败: ' + e.message, 'bad');
   }finally{
     if(btn) btn.disabled = false;
   }
@@ -11895,7 +11992,9 @@ function openImport(){
   const m = document.getElementById('importModal');
   const body = document.getElementById('importBody');
   const ow = document.getElementById('importOverwrite');
+  const group = document.getElementById('importGroup');
   if(ow) ow.checked = false;
+  if(group) group.value = String(ACCOUNT_FILTERS.group || '');
   if(body) body.innerHTML = '<p class="hint">正在打开文件…</p>';
   if(m) m.classList.add('show');
   // The picker is created per call so choosing the same file twice still fires.
@@ -11995,7 +12094,9 @@ async function readImportFile(file){
     importRows = rows;
 
     // Dry-run first so the user sees exactly what will happen.
-    const r = await postJSON('/accounts/import', {data: doc, dryRun: true});
+    const group = String((document.getElementById('importGroup') || {}).value || '').trim();
+    const r = await postJSON('/accounts/import',
+      {data: doc, dryRun: true, group: group});
     renderImportPreview(file.name, r.result || {}, rows.length);
   }catch(e){
     importRows = null;
@@ -12048,11 +12149,13 @@ async function commitImport(btn){
   if(!importRows) return;
   const ow = document.getElementById('importOverwrite');
   const overwrite = !!(ow && ow.checked);
+  const group = String((document.getElementById('importGroup') || {}).value || '').trim();
   if(overwrite && !confirm('将覆盖同 UID 的现有账号（含其凭证），确定继续？')) return;
 
   if(btn){ btn.disabled = true; btn.textContent = '导入中...'; }
   try{
-    const r = await postJSON('/accounts/import', {data: importRows, overwrite: overwrite});
+    const r = await postJSON('/accounts/import',
+      {data: importRows, overwrite: overwrite, group: group});
     const res = r.result || {};
     const n = (res.added || []).length + (res.updated || []).length;
     toast('导入完成：新增 ' + (res.added || []).length
@@ -15014,6 +15117,20 @@ async function loadSettings(showToast){
       keepSelect.value = String((typeof data.keep_backups === 'number') ? data.keep_backups : 1);
     }
     loadUpdateBackups();
+    const updateProxy = document.getElementById('setUpdateProxySlot');
+    if(updateProxy){
+      const choices = Array.isArray(data.update_check_proxy_slots)
+        ? data.update_check_proxy_slots : [];
+      const current = String(data.update_check_proxy_slot || '');
+      updateProxy.innerHTML = '<option value="">直连（不使用代理槽）</option>'
+        + choices.map(slot =>
+            '<option value="' + esc(slot.id) + '">'
+            + esc(slot.label || slot.id)
+            + (slot.enabled === false ? '（已停用）' : '')
+            + '</option>').join('');
+      // A deleted slot must not remain visually selected as if it were active.
+      updateProxy.value = choices.some(slot => slot.id === current) ? current : '';
+    }
       // 用量聚合保留窗口：没改过时后端给的就是内置默认（小时层 48 / 日桶 32），
       // 所以「等于默认」按默认态显示，只有被调过才标出实际值。
       const usageKeep = data.usage || {};
@@ -16465,6 +16582,22 @@ async function saveUpdateCheckEnabled(btn){
   }
 }
 
+async function saveUpdateProxySlot(btn){
+  const el = document.getElementById('setUpdateProxySlot');
+  const value = String((el && el.value) || '');
+  if(btn) btn.disabled = true;
+  try {
+    await postJSON('/settings/save', {update_check_proxy_slot: value});
+    toast(value ? '已保存：更新检查走所选代理槽'
+                : '已保存：更新检查直连', 'ok');
+    await loadSettings();
+  } catch(e) {
+    toast('保存失败: ' + e.message, 'bad');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 /* ---- 版本回退：列出本机保留的备份，回退到其中一版 ---- */
 async function saveKeepBackups(btn){
   const el = document.getElementById('setKeepBackups');
@@ -16823,6 +16956,7 @@ function renderDeletedKeyRows(){
 
 function renderKeyRows(){
   renderDeletedKeyRows();
+  renderApiKeyExamples();
   const box = document.getElementById('keyList');
   if(!box) return;
   if(!API_KEY_ROWS.length){
@@ -16882,6 +17016,9 @@ function renderKeyRows(){
         +     '<div id="editKeyAccountPicker_' + i + '" style="display:none;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:4px">'
         +       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">'
         +         '<input id="editKeyAccountSearch_' + i + '" placeholder="搜索昵称或 UID" oninput="filterKeyAccountPicker(' + i + ')" style="flex:1;min-width:160px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)">'
+        +         '<select id="editKeyAccountGroup_' + i + '" onchange="filterKeyAccountPicker(' + i + ')" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit;color:var(--fg)"><option value="">全部分组</option></select>'
+        +         '<button class="sec mini" onclick="addKeyAccountsFromGroup(' + i + ',true)">按组选入</button>'
+        +         '<button class="sec mini" onclick="addKeyAccountsFromGroup(' + i + ',false)">按组移除</button>'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',true)">全选</button>'
         +         '<button class="sec mini" onclick="setKeyAccountsAll(' + i + ',false)">全不选</button>'
         +       '</div>'
@@ -16953,6 +17090,33 @@ function renderKeyRows(){
       + '</div>';
   }).join('');
   API_KEY_ROWS.forEach((row, i) => { if(row._editing) renderKeyPickers(i); });
+}
+
+function apiKeyExampleText(kind){
+  const base = String(location.origin || '').replace(/\/+$/, '') + '/v1';
+  if(kind === 'base') return base;
+  const enabled = API_KEY_ROWS.find(row => row.enabled !== false && row.key);
+  const key = (enabled && enabled.key) || API_KEY_ROWS[0] && API_KEY_ROWS[0].key || '<API_KEY>';
+  return 'curl ' + base + '/chat/completions \\\n'
+    + '  -H "Authorization: Bearer ' + key + '" \\\n'
+    + '  -H "Content-Type: application/json" \\\n'
+    + '  -d \'{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}\'';
+}
+
+function renderApiKeyExamples(){
+  const base = document.getElementById('apiKeyExampleBase');
+  if(base) base.textContent = apiKeyExampleText('base');
+  const curl = document.getElementById('apiKeyExampleCurl');
+  if(curl) curl.textContent = apiKeyExampleText('curl');
+}
+
+async function copyApiKeyExample(kind, btn){
+  try{
+    await writeClipboard(apiKeyExampleText(kind));
+    toast(kind === 'base' ? 'Base URL 已复制' : 'cURL 示例已复制', 'ok');
+  }catch(e){
+    toast('复制失败: ' + e.message, 'bad');
+  }
 }
 
 function keyModelWildcards(row){
@@ -17043,13 +17207,22 @@ async function renderKeyPickers(i){
       try { await loadAccounts(); } catch(e) { /* keep the empty hint */ }
     }
     const accts = window.ACCOUNTS || [];
+    const groupSelect = document.getElementById('editKeyAccountGroup_' + i);
+    if(groupSelect){
+      const groups = Array.from(new Set(accts.map(a => String((a && a.group) || '').trim()).filter(Boolean))).sort();
+      const current = String(groupSelect.value || '');
+      groupSelect.innerHTML = '<option value="">全部分组</option>' + groups.map(g =>
+        '<option value="' + esc(g) + '">' + esc(g) + '</option>').join('');
+      groupSelect.value = groups.indexOf(current) >= 0 ? current : '';
+    }
     accountList.innerHTML = accts.map(a => {
       const uid = String((a && a.uid) || '');
       if(!uid) return '';
       const note = String(a.note || '').trim();
-      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '');
+      const group = String(a.group || '').trim();
+      const label = (a.nickname || uid.slice(0, 8)) + (note ? ' · ' + note : '') + ' · ' + uid.slice(0, 8) + (a.realm ? ' · ' + a.realm : '') + (group ? ' · ' + group : '');
       const checked = (row.accounts || []).indexOf(uid) >= 0 ? ' checked' : '';
-      return '<label class="key-pick-row" data-search="' + esc((label + ' ' + uid).toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(uid) + '"' + checked + ' onchange="toggleKeyAccount(' + i + ',this)">' + esc(label) + '</label>';
+      return '<label class="key-pick-row" data-group="' + esc(group) + '" data-search="' + esc((label + ' ' + uid).toLowerCase()) + '" style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 4px"><input type="checkbox" value="' + esc(uid) + '"' + checked + ' onchange="toggleKeyAccount(' + i + ',this)">' + esc(label) + '</label>';
     }).join('') || '<div style="font-size:12px;color:var(--warn);padding:4px">账号列表为空或加载失败，<a href="javascript:void(0)" onclick="renderKeyPickers(' + i + ')">重试</a></div>';
     updateKeyAccountSummary(i);
   }
@@ -17091,6 +17264,22 @@ function setKeyAccountsAll(i, on){
     : [];
   updateKeyAccountSummary(i);
 }
+function addKeyAccountsFromGroup(i, on){
+  const row = API_KEY_ROWS[i];
+  const list = document.getElementById('editKeyAccountList_' + i);
+  const picker = document.getElementById('editKeyAccountGroup_' + i);
+  if(!row || !list || !picker || !picker.value) return;
+  const group = picker.value;
+  const set = new Set(row.accounts || []);
+  list.querySelectorAll('input[type=checkbox]').forEach(el => {
+    const item = el.closest('.key-pick-row');
+    if(!item || item.getAttribute('data-group') !== group) return;
+    el.checked = on;
+    if(on) set.add(el.value); else set.delete(el.value);
+  });
+  row.accounts = Array.from(set).sort();
+  updateKeyAccountSummary(i);
+}
 function filterKeyModelPicker(i){
   const input = document.getElementById('editKeyModelSearch_' + i);
   const list = document.getElementById('editKeyModelList_' + i);
@@ -17102,11 +17291,15 @@ function filterKeyModelPicker(i){
 }
 function filterKeyAccountPicker(i){
   const input = document.getElementById('editKeyAccountSearch_' + i);
+  const picker = document.getElementById('editKeyAccountGroup_' + i);
   const list = document.getElementById('editKeyAccountList_' + i);
   if(!list) return;
   const q = String((input && input.value) || '').trim().toLowerCase();
+  const group = String((picker && picker.value) || '');
   list.querySelectorAll('.key-pick-row').forEach(el => {
-    el.style.display = !q || (el.getAttribute('data-search') || '').indexOf(q) >= 0 ? 'flex' : 'none';
+    const searchHit = !q || (el.getAttribute('data-search') || '').indexOf(q) >= 0;
+    const groupHit = !group || el.getAttribute('data-group') === group;
+    el.style.display = searchHit && groupHit ? 'flex' : 'none';
   });
 }
 

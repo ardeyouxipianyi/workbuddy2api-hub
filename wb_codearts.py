@@ -125,6 +125,12 @@ REASONING_EFFORTS = {
     "glm-5.3-flash": ["low", "high", "max"],
 }
 
+#: The upstream rejects an output-token request above the model's advertised
+#: limit with "The request param is invalid" instead of clamping it. When the
+#: catalogue has no limit (discovery failed), 65536 is the conservative cap
+#: verified for the CodeArts chat models.
+DEFAULT_MAX_OUTPUT_TOKENS = 65536
+
 
 def _requested_effort(payload):
     """Resolve the client's reasoning level under every common spelling."""
@@ -1665,6 +1671,9 @@ def build_chat_body(payload, session_key=None):
             body.pop("tool_choice", None)
     if not body.get("tools"):
         body.pop("tool_choice", None)
+    stop = body.get("stop")
+    if isinstance(stop, str):
+        body["stop"] = [stop]
     if body.get("max_completion_tokens") is not None and body.get("max_tokens") is None:
         body["max_tokens"] = body.pop("max_completion_tokens")
     chat_id = payload.get("conversation_id")
@@ -1758,9 +1767,14 @@ class CodeArtsStream(object):
             return
         code = payload.get("error_code") or payload.get("code")
         if code not in (None, "", 0, "0"):
-            raise CodeArtsUpstreamError(
-                str(payload.get("error_msg") or payload.get("message") or text)[:300],
-                code=str(code))
+            message = str(payload.get("error_msg") or payload.get("message")
+                          or text)[:300]
+            lowered = message.lower()
+            if ("request param is invalid" in lowered
+                    or "request model is not multimodal" in lowered
+                    or "tool function cannot empty" in lowered):
+                raise CodeArtsBadRequest(message, status=400, code=str(code))
+            raise CodeArtsUpstreamError(message, code=str(code))
 
     def _chunk(self, delta, finish=None):
         payload = {
@@ -1907,6 +1921,53 @@ def _is_concurrency_message(message):
             in text)
 
 
+def _model_output_limit(acct, model):
+    """Advertised output limit for the canonical CodeArts model."""
+    key = str(model or "").strip().lower()
+    for item in acct.models or ():
+        if str(item.get("id") or "").strip().lower() != key:
+            continue
+        for field in ("max_tokens", "max_output_tokens",
+                      "max_completion_tokens"):
+            try:
+                value = int(item.get(field) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return value
+    try:
+        _ctx, value = _wb_catalog_limits(model)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+    return DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def _clamp_output_tokens(acct, model, body):
+    """Keep an explicit output limit within what CodeArts advertises."""
+    key = "max_tokens" if body.get("max_tokens") is not None else (
+        "max_completion_tokens" if body.get("max_completion_tokens") is not None
+        else "")
+    if not key:
+        return
+    raw = body.get(key)
+    if isinstance(raw, bool):
+        raise CodeArtsBadRequest("%s must be a positive integer" % key,
+                                 status=400)
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        raise CodeArtsBadRequest("%s must be a positive integer" % key,
+                                 status=400)
+    if requested <= 0:
+        raise CodeArtsBadRequest("%s must be a positive integer" % key,
+                                 status=400)
+    limit = _model_output_limit(acct, model)
+    if requested > limit:
+        body[key] = limit
+
+
 def _client_chat(acct, body, session_key):
     model = _canonical_model(acct, body.get("model"))
     chat_id = body.get("chat_id") or _derive_chat_id(session_key, body.get("messages"))
@@ -1920,6 +1981,7 @@ def _client_chat(acct, body, session_key):
     upstream_body["prompt_cache_key"] = chat_id
     upstream_body["stream"] = True
     upstream_body["tool_stream"] = True
+    _clamp_output_tokens(acct, model, upstream_body)
     raw = json.dumps(upstream_body, ensure_ascii=False).encode("utf-8")
     headers = _chat_headers(acct, chat_id, session_id, acct.is_benefit(model))
     headers = _signed_headers(acct, "POST", SNAP_HOST + EP_CHAT, headers, raw)

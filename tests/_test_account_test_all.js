@@ -16,6 +16,7 @@
 */
 'use strict';
 const assert = require('assert');
+const vm = require('node:vm');
 const {dashboardHtml} = require('./_dashboard_source.js');
 const {loadDashboard} = require('./_dashboard_sandbox.js');
 
@@ -93,6 +94,7 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
   const sent = JSON.parse(testPosts[0].body || '{}');
   check('带上当前视图的 realm', sent.realm === 'cn', JSON.stringify(sent));
   check('不传 uid（传了就退化成单账号测试）', sent.uid === undefined, JSON.stringify(sent));
+  check('未选分组时不传 group', sent.group === undefined, JSON.stringify(sent));
   check('弹窗被打开', modalShown() === true);
   const shown = bodyHtml();
   check('渲染本机连通性', shown.includes('本机网络正常') && shown.includes('www.workbuddy.cn'),
@@ -107,6 +109,17 @@ const NET_DOWN = {realm: 'cn', url: 'https://www.workbuddy.cn', host: 'www.workb
   check('按钮复位', btn.disabled === false && btn.textContent === '一键测试', btn.textContent);
   check('toast 报出通过数', toasts.some(t => /一键测试: 1\/2/.test(t.msg)),
     JSON.stringify(toasts));
+
+  // 2a2. 选中分组时，一键测试只作用于该分组
+  // ACCOUNT_FILTERS is a top-level const, so it is intentionally not exposed
+  // as a window property; evaluate inside the page's own VM context.
+  vm.runInContext("ACCOUNT_FILTERS.group = 'Team A'", page);
+  posts.length = 0;
+  await page.testAccounts(null);
+  const grouped = JSON.parse(
+    posts.filter(p => p.url === '/accounts/test')[0].body || '{}');
+  check('选中分组时带上 group', grouped.group === 'Team A', JSON.stringify(grouped));
+  vm.runInContext("ACCOUNT_FILTERS.group = ''", page);
 
   // 2b. 本机断网：网络行变红、失败行标成「本机网络」而不是账号失败
   reply = {

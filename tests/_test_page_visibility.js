@@ -162,7 +162,7 @@ const saves = () => calls.filter(c => c.url === '/settings/save');
 
   // 清单的标签来自页签按钮；带 __wbSrc 的读原文（中文），不能把译文抄进来。
   const labels = Array.from(list().children).map(item => item.children[1].textContent);
-  assert.deepStrictEqual(labels, ['网关与账号', '任务与福利', '数据看板', '智能体配置', '设置', '运行日志'],
+  assert.deepStrictEqual(labels, ['网关', '自动化', '用量', '智能体', '设置', '日志'],
     '清单标签必须与页签文案一一对应，且带 __wbSrc 的取原文: ' + JSON.stringify(labels));
 
   // 2b. 「设置」固定保留：它是这个开关自己的入口。

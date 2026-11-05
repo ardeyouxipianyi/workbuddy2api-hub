@@ -75,7 +75,10 @@ function runFirstPaint(tokenOrThrow, store) {
   const sandbox = {
     sessionStorage,
     localStorage,
-    document: {documentElement: {classList: {add: (name) => added.push(name)}}},
+    document: {documentElement: {
+      classList: {add: (name) => added.push(name)},
+      setAttribute: () => {},
+    }},
   };
   vm.createContext(sandbox);
   vm.runInContext(firstPaintScript, sandbox);
