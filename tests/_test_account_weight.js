@@ -21,8 +21,13 @@ const script = dashboardScript();
 
 /* ---- 1. 结构：账号表有「权重」列，改动走 /accounts/set -------------- */
 
-assert.ok(/<th style="text-align:center;width:64px">权重<\/th>/.test(html),
-  '账号表应有 64px 宽的「权重」表头');
+assert.ok(/<th style="text-align:center;width:78px">权重<\/th>/.test(html),
+  '账号表应有 78px 宽的「权重」表头（够放自绘下拉的值 + 箭头）');
+/* 回归：64px 的列减去 td 内边距只剩 40px，通用触发器的 padding/gap/箭头
+   吃掉 37px，权重数字被挤成 1px（界面上只剩一个箭头）。这里钉住该列的
+   紧凑触发器与放宽后的列宽。 */
+assert.ok(/table\.account-cards td\[data-label="权重"\] \.cs-trigger\{padding:3px 6px;gap:4px\}/
+  .test(html), '权重列的触发器应收紧 padding/gap，给数字留出宽度');
 assert.ok(/const WEIGHT_TIP = /.test(script), '应定义 WEIGHT_TIP 提示语');
 assert.ok(script.includes("title=\"' + esc(WEIGHT_TIP) + '\""),
   '权重下拉应把 WEIGHT_TIP 挂在 title 上（title 才会被 i18n 翻译）');
