@@ -426,6 +426,9 @@ table.account-cards tr.cool-row .cool-pill{display:inline-block;width:auto;max-w
 /* 移动端专用徽章组：桌面表格视图隐藏（版本/状态有自己的两列）。 */
 .acct-mobile-badges{display:none}
 .acct-mobile-badges .badge,.acct-mobile-badges .realm-badge-intl,.acct-mobile-badges .realm-badge-cn,.acct-mobile-badges .realm-badge-codearts{flex-shrink:0}
+/* 任务开关 + 版本/状态/类型这一组：桌面上用 display:contents 拆平，任务开关
+   仍跟在账号名后面，其余徽章各自回到自己的列；只有窄屏才把它当成一整行。 */
+.acct-mobile-meta{display:contents}
 .credit-summary{white-space:nowrap}
 .credit-kind{font-size:11px;font-weight:500;color:var(--dim)}
 .credit-stack{display:flex;flex-direction:column;align-items:flex-start;gap:3px;white-space:nowrap;min-width:0}
@@ -818,6 +821,16 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   table.account-cards td:nth-child(1){display:none}
   table.account-cards td:nth-child(3){display:none}
   .acct-mobile-badges{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+  /* 账号名一行只留昵称 / 备注 / 分组：任务开关与版本 / 状态 / 类型徽章收到
+     第二行单独显示。以前它们都挤在昵称同一行，长昵称 + 多个徽章会把这一行
+     顶出卡片宽度（超屏）。 */
+  /* 账号名那行要允许换行，第二行容器再用 flex-basis:100% 强制独占一行；
+     只给 width:100% 不够——它是 nowrap flex 的子项，仍会与昵称同排。 */
+  table.account-cards td:nth-child(2) .acct-name-row{flex-wrap:wrap}
+  .acct-mobile-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+    flex-basis:100%;width:100%;margin-top:4px}
+  .acct-mobile-meta .badge{margin-left:0!important}
+  .acct-mobile-meta .acct-mobile-badges{margin-left:0}
   table.account-cards td:nth-child(1)::before,
   table.account-cards td:nth-child(2)::before,
   table.account-cards td:nth-child(3)::before{content:none}
@@ -857,14 +870,27 @@ button.page-nav-top:hover{background:var(--panel2);border-color:var(--accent);co
   table.account-cards td:nth-child(8)::before{font-size:10px}
   table.account-cards td.acct-actions{order:7;grid-column:span 6;justify-content:flex-start}
   table.account-cards td.acct-actions::before{content:none}
-  table.account-cards .acct-actions-col{flex-direction:row;flex-wrap:wrap;align-items:flex-start;
+  /* 操作区在手机上是「一条自动换行的按钮流」：两行容器的 .acct-actions-row 用
+     display:contents 拆平，让按钮与出站身份组直接参与外层 flex 排布。以前两层
+     各自 flex-wrap 时，第二行（出站身份）会整块另起一行、且因为外层 gap 在中间
+     空出一段；拆平后按 DOM 顺序自然流动：停用 / 测试 / 刷新凭证 / 同步昵称 /
+     导出 → WB VSC CLI → 删除，摆不下才换行，没有空块。 */
+  table.account-cards .acct-actions-col{flex-direction:row;flex-wrap:wrap;align-items:center;
     justify-content:flex-start;gap:6px}
-  table.account-cards .acct-actions-row{flex-wrap:wrap;gap:6px}
+  table.account-cards .acct-actions-row{display:contents}
+  table.account-cards .acct-actions .id-btn-label{display:none}
   table.account-cards .acct-actions button.mini{min-height:32px;padding:6px 12px}
   table.account-cards .slot-select{max-width:none;width:100%;min-height:40px}
   /* 账号工具栏：打卡按钮（每日活跃/Buddy 加油站）与「添加」同一行并靠右，
      不再单独占一整行。 */
   #accountsBody .toolbar .tb-checkin{margin-left:auto;flex-shrink:0}
+  /* 批量操作那一组 6 个按钮：一行摆不下时每个按钮被压成竖排文字（「一 / 键 /
+     分 / 配 / 代 / 理」）。窄屏改成两列网格，6 个按钮排成 3 行 2 列，按钮
+     文字保持横排可读。只作用于这一个 .tb-bulk 组，其它工具栏按钮不受影响。 */
+  #accountsBody .toolbar .tb-bulk{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:6px;padding:0;background:transparent;border:none;width:100%}
+  #accountsBody .toolbar .tb-bulk button.sec{width:100%;min-height:36px;padding:6px 10px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* Forms stack */
   #pageSettings section > div[style*="display:flex"]{flex-wrap:wrap}
   #pageSettings input:not([type=checkbox]), #pageSettings select{min-height:40px;font-size:13px}
@@ -5627,7 +5653,7 @@ html[data-ui="next"] #nextContent .console-shell > main {padding:24px;max-width:
     <button class="sec" onclick="refreshAccounts(this)" title="逐个刷新所有账号的上游访问凭证（相当于对每个账号点一次「刷新凭证」）">一键刷新凭证</button>
     <button class="sec" onclick="testAccounts(this)" title="逐个真发一条最小请求，并同时检查本机到上游的网络：能分清「账号坏了」和「本机断网了」，测试通过还会清掉该账号的熔断/降权计数">一键测试</button>
     </div>
-    <div class="tb-group">
+    <div class="tb-group tb-bulk">
     <button class="sec" onclick="autoAssignSlots()" title="把尚未绑定出口的已启用账号依次分配到已启用的代理槽；已有绑定的账号不受影响">一键分配代理</button>
     <button class="sec" id="btnProductAll" onclick="cycleAllProducts(this)" title="把全部账号（含另一个版本）的出站身份切到下一个：WB → VSC → CLI">一键切换所有出站身份：<span id="productAllLabel">WB</span></button>
     <button class="sec" onclick="setAll(true, this)">全部启用</button>
@@ -10886,10 +10912,17 @@ function accountRow(a){
           : '<span class="note-chip" title="点击设置账号分组" onclick="editAccountGroup(&quot;' + uidAttr + '&quot;)">+ 分组</span>')
     // API Key 账号没有个人成长体系，签到/任务开关对它没有意义：上游一律拒绝，
     // 画出来只会让人以为点了能开。
+    // 移动端第二行：任务开关 + 版本 / 状态 / 账户类型。桌面用 display:contents
+    // 把它拆平，任务开关仍与账号名同行（见 CSS），不影响宽屏布局；窄屏时整组
+    // 独占一行，账号名那一行只留昵称 / 备注 / 分组，避免信息挤到超屏。
+    +     '<span class="acct-mobile-meta">'
+    // API Key 账号没有个人成长体系，签到/任务开关对它没有意义：上游一律拒绝，
+    // 画出来只会让人以为点了能开。
     +     (a.apiKey ? ''
           : '<span class="badge mini ' + (a.tasksEnabled ? 'ok' : 'off') + '" style="cursor:pointer;margin-left:6px" title="参与签到 / 成长任务 / 连登管家 / 猫猫旅行 / 国际版活跃；与 API 取号无关，点一下切换" onclick="toggleAccountTasks(&quot;' + uidAttr + '&quot;,' + (!a.tasksEnabled) + ')">任务' + (a.tasksEnabled ? '开' : '关') + '</span>')
-    // 移动端专用：版本 + 状态徽章靠右同行（桌面隐藏，用表格自己的两列）。
+    // 移动端专用：版本 + 状态 + 账户类型徽章（桌面隐藏，用表格自己的两列）。
     +     '<span class="acct-mobile-badges">' + realmBadgeMobile + state + tierBadge + '</span>'
+    +     '</span>'
     +   '</div>'
     // 次要信息收成一行：值截断到几个字符，完整值走悬浮气泡（data-tip）。
     +   '<div class="acct-meta mono">'
@@ -10921,6 +10954,7 @@ function accountRow(a){
           ? '<button class="bad mini" onclick="openLoginModal(&quot;' + realmAttr + '&quot;)" title="凭证已失效，点击重新扫码授权并自动更新该账号">重新登录</button>'
           : '<button class="sec mini" onclick="refreshOne(&quot;' + uidAttr + '&quot;, this)">刷新凭证</button>')
     +     '<button class="sec mini" onclick="syncProfile(&quot;' + uidAttr + '&quot;, this)" title="从 Web 控制台同步最新昵称（改名后免重登）">同步昵称</button>'
+    +     '<button class="sec mini" onclick="exportOne(&quot;' + uidAttr + '&quot;)">导出</button>'
     +   '</div>'
     +   '<div class="acct-actions-row">'
     +     '<span class="id-btn-label">出站身份：</span>'
@@ -10929,7 +10963,6 @@ function accountRow(a){
     +       '<button class="id-btn' + (a.product === 'vscode' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;vscode&quot;, this)">VSC</button>'
     +       '<button class="id-btn' + (a.product === 'cli' ? ' active' : '') + '" onclick="setAccountProduct(&quot;' + uidAttr + '&quot;, &quot;cli&quot;, this)">CLI</button>'
     +     '</div>'
-    +     '<button class="sec mini" onclick="exportOne(&quot;' + uidAttr + '&quot;)">导出</button>'
     +     '<button class="danger mini" onclick="deleteAccount(&quot;' + uidAttr + '&quot;,&quot;' + nameAttr + '&quot;, this)">删除</button>'
     +   '</div>'
     + '</div>'
