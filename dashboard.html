@@ -21603,7 +21603,7 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
     automation: {
       title: '自动化',
       desc: '每日活跃、全局提示词、本地网络工具和剩余用量调度。',
-      items: ['国际版每日活跃打卡', '全局提示词', '本地网络工具', '剩余用量优先调度']
+      items: ['国际版每日活跃打卡', '选择网页活跃提示词', '全局提示词', '本地网络工具', '剩余用量优先调度']
     },
     stability: {
       title: '稳定性',
@@ -21619,7 +21619,16 @@ if (typeof SORT_DENY_TABLES !== 'undefined' && SORT_DENY_TABLES && SORT_DENY_TAB
 
   function nextSettingsSectionGroup(sec){
     var h = sec.querySelector('h2');
-    var text = h ? (h.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    var text = '';
+    if(h){
+      // 面板語言切成正體中文 / 英文時，i18n 走訪會把 h2 的文字節點換掉，
+      // 用 textContent 對清單比對就會全部落空、每個 section 都被歸成 system，
+      // 於是點「基础 / 自动化 / 稳定性」時整頁 section 全被 hidden（看起來整頁空白）。
+      // 翻譯前的原文留在文本節點的 __wbSrc 上（見 doText），優先讀它。
+      var first = h.firstChild;
+      var raw = (first && typeof first.__wbSrc === 'string' && first.__wbSrc) ? first.__wbSrc : (h.textContent || '');
+      text = raw.replace(/\s+/g, ' ').trim();
+    }
     var lower = text.toLowerCase();
     for(var i = 0; i < NEXT_SETTINGS_GROUP_ORDER.length; i++){
       var key = NEXT_SETTINGS_GROUP_ORDER[i];
