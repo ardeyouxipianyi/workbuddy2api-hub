@@ -11015,7 +11015,9 @@ function accountMatchesFilters(a){
   if(ACCOUNT_FILTERS.status === 'attention') return !!attention;
   return true;
 }
-function clearAccountFilters(){
+/* 只清筛选状态与控件，不重画。会话丢失时页面正要被闸门盖住，此时重画既没
+   意义也会在还没重新登录时读一遍旧数据。 */
+function resetAccountFilters(){
   ACCOUNT_FILTERS.query = '';
   ACCOUNT_FILTERS.status = '';
   ACCOUNT_FILTERS.group = '';
@@ -11025,6 +11027,9 @@ function clearAccountFilters(){
   if(q) q.value = '';
   if(s) s.value = '';
   if(g) g.value = '';
+}
+function clearAccountFilters(){
+  resetAccountFilters();
   renderAccounts();
 }
 
@@ -13381,6 +13386,11 @@ function panelSessionLost(){
   // 每 2.5 秒刷一次 401（实测 9 秒内又发 3 次，永不停止）。
   if(loginTimer){ clearInterval(loginTimer); loginTimer = null; }
   panelClearToken();
+  // 账号筛选是内存态，重新登录不会刷新页面：网关重启前设的搜索词 / 状态 / 分组
+  // 会原样留着，于是登录后账号列表被旧条件过滤成空（「当前禁用」区用的是未筛选
+  // 名单，反而还显示账号），看起来像账号全丢了，得手动点「清除筛选」才恢复。
+  // 重启后以「显示全部账号」为安全默认，清掉筛选状态与控件。
+  resetAccountFilters();
   const msg = document.getElementById('panelLoginMsg');
   if(msg) msg.textContent = '会话已失效，请重新输入密码';
   panelNeedsLogin();
@@ -13487,6 +13497,10 @@ let visHookInstalled = false;
 async function startDashboard(){
   if(PANEL_READY) return;
   PANEL_READY = true;
+  // 每次进入面板都从「显示全部账号」开始。网关重启后会话丢失、重新登录并不刷新
+  // 页面，内存里的旧筛选会留着把账号列表过滤成空；普通刷新时浏览器还可能把
+  // <select> 的旧值恢复回 DOM。两边都清掉，状态与控件才一致。
+  resetAccountFilters();
   // 前两步决定下面各自查什么（VIEW_REALM / 面板可见性），必须先行；之后就并行，
   // 别让国内版那条约 2 秒的成长任务接口把首屏的用量卡片拖在后面。
   await loadSettings();
