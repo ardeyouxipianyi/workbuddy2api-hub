@@ -30,14 +30,6 @@ This project is for protocol research and personal use only. Prefer the official
   <img src="https://img.shields.io/badge/Maintenance-Low--frequency-c96f3d?style=flat-square" alt="Low-frequency maintenance">
 </p>
 
-## ⭐ Star 趋势
-
-<p align="center">
-  <a href="https://star-history.com/#ardeyouxipianyi/workbuddy2api-hub&Date">
-    <img src="https://api.star-history.com/svg?repos=ardeyouxipianyi/workbuddy2api-hub&type=Date" alt="Star History Chart" width="760">
-  </a>
-</p>
-
 ## 核心特性
 
 - **标准 API 兼容**：将 WorkBuddy（国际版/国内版）与 CodeArts 封装为标准 OpenAI 格式（Chat Completions / Responses），无缝支持 Codex、Claude Code、NextChat 等各类客户端。
@@ -292,3 +284,11 @@ python tests/run_all.py realm      # 只跑名字里含 realm 的
 ## 九、免责声明 (Disclaimer)
 
 本项目仅用于协议学习与个人开发测试，不提供任何商业服务或可用性担保。因使用非官方客户端产生的账号风控、限制或封禁由使用者自行承担，请优先使用官方客户端。
+
+## ⭐ Star 趋势
+
+<p align="center">
+  <a href="https://star-history.com/#ardeyouxipianyi/workbuddy2api-hub&Date">
+    <img src="https://api.star-history.com/svg?repos=ardeyouxipianyi/workbuddy2api-hub&type=Date" alt="Star History Chart" width="760">
+  </a>
+</p>
