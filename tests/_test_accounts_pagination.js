@@ -72,6 +72,8 @@ try {
       pages: () => ACCT_TOTAL_PAGES,
       triedSize: () => CREDITS_AUTO_TRIED.size,
       WB_I18N: window.WB_I18N,
+      resetAccountFilters: resetAccountFilters,
+      panelSessionLost: panelSessionLost,
     };`)();
 } catch(e) {
   console.log = realLog;
@@ -254,6 +256,31 @@ const tick = () => new Promise(r => setImmediate(r));
   api.renderAccounts(true);
   assert.strictEqual(box().innerHTML, 'SENTINEL', '筛选没再变：轮询照常跳过');
   api.filters.status = '';
+
+  /* ---- 7b. 会话丢失（网关重启）后旧筛选不能把账号列表过滤成空 --------- */
+  // 账号筛选是内存态，重新登录不刷新页面。网关重启前设的状态/搜索/分组会留到
+  // 登录后，把账号全部过滤掉；「当前禁用」区用的是未筛选名单，反而还显示账号，
+  // 于是看起来像账号全丢、必须手动点「清除筛选」才恢复。
+  api.resetAccountFilters();
+  window.ACCOUNTS = makeAccounts(3, true);
+  api.renderAccounts();
+  api.filters.status = 'attention';
+  api.filters.query = 'nothing-matches';
+  api.filters.group = 'some-group';
+  api.renderAccounts();
+  assert.ok(/没有符合当前条件的账号/.test(box().innerHTML), '前提：旧筛选确实把列表过滤空了');
+
+  api.panelSessionLost();
+  assert.strictEqual(api.filters.status, '', '会话丢失要清掉状态筛选');
+  assert.strictEqual(api.filters.query, '', '会话丢失要清掉搜索词');
+  assert.strictEqual(api.filters.group, '', '会话丢失要清掉分组筛选');
+
+  // 重新登录后（startDashboard 也调一次），账号应全部显示，不再需要手动清筛选。
+  api.filters.status = 'attention';
+  api.resetAccountFilters();
+  api.renderAccounts();
+  assert.ok(!/没有符合当前条件的账号/.test(box().innerHTML), '登录后不应再显示筛选空态');
+  assert.strictEqual(uidsShown().size, 3, '登录后应显示全部账号');
 
   /* ---- 8. 三语：翻页条文案 ------------------------------------------- */
   window.ACCOUNTS = makeAccounts(1234, true);
