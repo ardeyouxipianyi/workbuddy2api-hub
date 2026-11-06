@@ -14,6 +14,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -196,6 +197,23 @@ class _Sock(object):
         pass
 
 
+class _Body(object):
+    """HTTPError 的 fp：够 read_http_error 读出正文即可。"""
+
+    def __init__(self, data):
+        self._data = data
+        self._sent = False
+
+    def read(self, *args):
+        if self._sent:
+            return b""
+        self._sent = True
+        return self._data
+
+    def close(self):
+        pass
+
+
 class _UpstreamResponse(object):
     def __init__(self):
         self.closed = False
@@ -338,6 +356,48 @@ class TestOpenUpstreamDispatch(unittest.TestCase):
         self.assertTrue(calls)
         self.assertEqual(wb_proxy.account_inflight_snapshot(), {},
                          "失败路径必须归还名额，否则账号会被永久占住")
+
+    def test_http_400_does_not_leak_the_slot(self):
+        """上游 400 原样透传时也必须归还名额。
+
+        现场（2026-11-03）：`/v1/messages` 撞上游 11-128 渠道校验 → 400 分支
+        直接 `raise`，跳过循环后的统一归还。`account_max_concurrent=1` 下这个
+        账号从此永远显示「已在服务 1 个请求」，之后每次挑选都被当成满号跳过，
+        面板看起来「号是好的、测试也绿」，但派发永远轮不到它——只有重启进程
+        才恢复。回归点就是 raise 之前的归还。
+        """
+        wb_settings.set_account_max_concurrent(self.dir, 1)
+
+        def urlopen(req, timeout=30, proxy=""):
+            raise urllib.error.HTTPError(
+                req.full_url, 400, "Bad Request", {},
+                _Body(b'{"code":11-128,"msg":"Illegal API invocation"}'))
+
+        A.urlopen = urlopen
+        with self.assertRaises(urllib.error.HTTPError):
+            wb_proxy.open_upstream(
+                {"model": "deepseek-v4.1-flash",
+                 "messages": [{"role": "user", "content": "hi"}]},
+                target_realm="intl")
+        self.assertEqual(wb_proxy.account_inflight_snapshot(), {},
+                         "400 透传路径必须归还名额")
+
+    def test_other_unhandled_4xx_does_not_leak_the_slot(self):
+        """未单独处理的 4xx（如 404 打错路径）走的是同一个 `raise`，同样要归还。"""
+        wb_settings.set_account_max_concurrent(self.dir, 1)
+
+        def urlopen(req, timeout=30, proxy=""):
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", {}, _Body(b"not found"))
+
+        A.urlopen = urlopen
+        with self.assertRaises(urllib.error.HTTPError):
+            wb_proxy.open_upstream(
+                {"model": "deepseek-v4.1-flash",
+                 "messages": [{"role": "user", "content": "hi"}]},
+                target_realm="intl")
+        self.assertEqual(wb_proxy.account_inflight_snapshot(), {},
+                         "未处理的 4xx 也必须归还名额")
 
     def test_disabled_matches_upstream_behaviour(self):
         # 默认 0：同一个账号可以连续接单，与上游行为一致。
