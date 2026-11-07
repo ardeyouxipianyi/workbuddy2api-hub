@@ -1003,8 +1003,47 @@ BACKGROUND_MODEL_NAMES = tuple(
 )
 
 
+INTL_MODEL_ALIASES = {
+    "deepseek-v4.1-flash": "deepseek-v4.1-flash-sg",
+}
+
+
+def intl_model_alias_enabled():
+    """The intl id remap is on unless WB_INTL_MODEL_ALIAS disables it."""
+    raw = os.environ.get("WB_INTL_MODEL_ALIAS", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def intl_model_alias(name, realm=None):
+    """The intl upstream id for `name`, or `name` unchanged.
+
+    The intl exit renamed deepseek-v4.1-flash to the "-sg" build in 2026-11:
+    the desktop client's own catalogue (and the product config fetched from
+    www.workbuddy.ai) lists only deepseek-v4.1-flash-sg, while a request for
+    the old base id answers code 6004 "usage exceeds frequency limit" on
+    accounts whose base bucket is empty.
+    """
+    text = str(name or "")
+    if (realm or CURRENT_REALM) != "intl" or not intl_model_alias_enabled():
+        return text
+    return INTL_MODEL_ALIASES.get(text.strip().lower(), text)
+
+
+def apply_intl_model_alias(payload, realm=None):
+    """Rewrite a legacy intl model id in a request body; returns the new id."""
+    if not isinstance(payload, dict):
+        return ""
+    name = str(payload.get("model") or "")
+    target = intl_model_alias(name, realm)
+    if target == name:
+        return name
+    payload["model"] = target
+    log("alias: intl model %s -> %s" % (name, target))
+    return target
+
+
 def _apply_deepseek_flash_target(payload, realm=None):
-    return
+    apply_intl_model_alias(payload, realm)
 
 
 def _apply_background_model_alias(payload):
@@ -11991,7 +12030,6 @@ CN_UI_ORDER = [
     "deepseek-v4-pro",
 ]
 INTL_UI_ORDER = [
-    "deepseek-v4.1-flash",
     "deepseek-v4.1-flash-sg",
     "hy4-preview",
     "hy3",
@@ -16288,7 +16326,7 @@ def open_upstream(payload, session_key=None, target_realm=None, prebuilt_body=No
         POOL.apply_remaining_weights(
             remaining_schedule_weights() if remaining_priority_enabled() else None)
     realm = target_realm or detect_model_realm(payload.get("model")) or CURRENT_REALM
-    model = str(payload.get("model") or "")
+    model = apply_intl_model_alias(payload, realm)
     pinned = pin_account if pin_account is not None else pinned_account()
     if pinned is not None:
         if allowed_accounts is not None and pinned.uid not in allowed_accounts:
@@ -17256,7 +17294,7 @@ def probe_account(account, model=None, timeout=30):
     单个「测试」与「一键测试」共用这一份：两边各写一套的话，早晚一边忘了清计数、
     另一边忘了认本机断网——而这两件事正是「明明测了能用，它还熔断」的全部来源。
     """
-    model = model or TEST_MODEL_DEFAULT
+    model = intl_model_alias(model or TEST_MODEL_DEFAULT, account.realm)
     row = {"uid": account.uid, "nickname": account.nickname or account.uid[:8],
            "realm": account.realm, "model": model, "ok": False, "elapsed_ms": 0,
            "status": None, "reply": "", "error": "", "network": False}

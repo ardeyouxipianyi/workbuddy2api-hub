@@ -40,7 +40,7 @@ class DefaultVersionTests(unittest.TestCase):
 
     def test_verified_defaults(self):
         self.assertEqual(wb_identity.desktop_ua("intl"),
-                         "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0")
+                         "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0")
         self.assertEqual(wb_identity.desktop_ua("cn"),
                          "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0")
         self.assertEqual(wb_identity.vscode_ua(),
@@ -55,7 +55,7 @@ class DefaultVersionTests(unittest.TestCase):
         self.assertIn("WorkBuddy/9.9.9 WorkBuddy/9.9.9",
                       wb_identity.desktop_ua("cn"))
         # The other realm keeps its default.
-        self.assertEqual(wb_identity.desktop_version("intl"), "5.8.4")
+        self.assertEqual(wb_identity.desktop_version("intl"), "5.9.4")
 
     def test_vscode_and_cli_overrides(self):
         wb_identity.configure_versions({"vscode_product": "1.2.3",
@@ -73,7 +73,7 @@ class DefaultVersionTests(unittest.TestCase):
     def test_clearing_restores_defaults(self):
         wb_identity.configure_versions({"desktop_intl": "9.9.9"})
         wb_identity.configure_versions({})
-        self.assertEqual(wb_identity.desktop_version("intl"), "5.8.4")
+        self.assertEqual(wb_identity.desktop_version("intl"), "5.9.4")
 
 
 class SettingTests(unittest.TestCase):

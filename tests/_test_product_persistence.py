@@ -7,7 +7,7 @@ default and parked the stored value in a `saved_product` field that nothing in
 the repository ever read, so a switch looked saved on disk and silently
 reverted on every restart.
 
-Sections [5]-[7] also pin the outbound identity against the 5.8.4 capture: the
+Sections [5]-[7] also pin the outbound identity against the 5.9.4 capture: the
 conversation header family every identity must carry (upstream answers 400 /
 code 11-128, `conversation id missing`, without it), the desktop version / UA /
 agent headers, and the id shapes (dashed UUID vs 32hex). Section [6b] pins the
@@ -140,7 +140,7 @@ for want in ("workbuddy", "vscode", "cli"):
         check("%s: message id is independent" % want,
               h.get("X-Conversation-Message-ID") != h.get("X-Request-ID"))
     else:
-        # 桌面端按 5.8.4 抓包、CLI 按 2.168.2 契约：Request-ID = Message-ID。
+        # 桌面端按 5.9.4 抓包、CLI 按 2.168.2 契约：Request-ID = Message-ID。
         check("%s: message id equals request id" % want,
               h.get("X-Conversation-Message-ID") == h.get("X-Request-ID"))
     conv = str(h.get("X-Conversation-ID"))
@@ -225,12 +225,12 @@ check("uuid7 is time-ordered and version 7",
       (a7, b7))
 
 print()
-print("[6] the desktop identity matches the 5.8.4 capture")
+print("[6] the desktop identity matches the 5.9.4 capture")
 d = wb_identity.build_identity_headers("workbuddy", "intl", "u1", "tok")
-check("X-IDE-Version is 5.8.4", d.get("X-IDE-Version") == "5.8.4",
+check("X-IDE-Version is 5.9.4", d.get("X-IDE-Version") == "5.9.4",
       d.get("X-IDE-Version"))
 check("the UA is the captured one",
-      d.get("User-Agent") == "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0",
+      d.get("User-Agent") == "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0",
       d.get("User-Agent"))
 check("X-Product is SaaS", d.get("X-Product") == "SaaS", d.get("X-Product"))
 check("X-Agent-Type / X-Agent-Purpose / X-Agent-Intent",

@@ -434,7 +434,7 @@ try:
             rows = [json.loads(line) for line in fh if line.strip()]
     check("usage.jsonl has rows", len(rows) >= 2, len(rows))
     check("rows carry the model",
-          any(r.get("model") == "deepseek-v4.1-flash" for r in rows), rows[-2:])
+          any(r.get("model") == "deepseek-v4.1-flash-sg" for r in rows), rows[-2:])
     stream_rows = [r for r in rows if r.get("stream") and r.get("outcome") == "completed"]
     check("streamed messages record upstream tokens",
           any((r.get("prompt_tokens") or 0) == 11 and (r.get("completion_tokens") or 0) == 2

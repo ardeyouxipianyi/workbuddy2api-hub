@@ -554,7 +554,8 @@ REALM_MARKERS = {"cn": CN_REALM_MARKERS, "intl": INTL_REALM_MARKERS}
 #: 不在这套 24h 窗口配额里。键与 Account.realm 的取值一致（intl / cn），
 #: 国内版的 deepseek-v4.1-flash 是收费模型（x0.11），不在名单内。
 FREE_CAP_MODELS = {
-    "intl": frozenset({"hy4-preview-f", "hy3", "deepseek-v4.1-flash"}),
+    "intl": frozenset({"hy4-preview-f", "hy3", "deepseek-v4.1-flash",
+                        "deepseek-v4.1-flash-sg"}),
     "cn": frozenset({"hy4-preview-f", "hy3"}),
 }
 
@@ -2791,7 +2792,7 @@ class Account(object):
         """每日活跃对话的实际流程；返回形状见 daily_chat。"""
         import wb_proxy
         url = self.chat_base_url() + wb_proxy.CHAT_PATH
-        model = self.daily_chat_model()
+        model = wb_proxy.intl_model_alias(self.daily_chat_model(), self.realm)
         headers = self.headers("chat", model=model)
         body = {
             "model": model,

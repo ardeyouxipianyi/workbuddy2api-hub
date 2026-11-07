@@ -269,7 +269,7 @@ class ModelCooldownTests(unittest.TestCase):
         try:
             detail = self.cap_body(time.time() + 3600)
             self.drive_one_429(account, detail=detail, stub_parser=False,
-                               model="deepseek-v4.1-flash", target_realm="intl")
+                               model="deepseek-v4.1-flash-sg", target_realm="intl")
         finally:
             proxy.ACCOUNTS_DIR = old_dir
         entry = account.public()["modelCooldowns"][0]
@@ -277,13 +277,13 @@ class ModelCooldownTests(unittest.TestCase):
         self.assertIn("startedAt", entry)
         self.assertLessEqual(abs(entry["startedAt"] - entry["cappedAt"]), 1)
         # keep_caps 只保留 cap 冷却，起始时刻跟着一起留下。
-        account.clear_error(model="deepseek-v4.1-flash", keep_caps=True)
+        account.clear_error(model="deepseek-v4.1-flash-sg", keep_caps=True)
         kept = account.public()["modelCooldowns"][0]
         self.assertEqual(kept["startedAt"], entry["startedAt"])
         # 不带 keep_caps 则两者一起清掉。
-        account.clear_error(model="deepseek-v4.1-flash")
+        account.clear_error(model="deepseek-v4.1-flash-sg")
         self.assertEqual(account.public()["modelCooldowns"], [])
-        self.assertNotIn("deepseek-v4.1-flash", account.model_cooldowns_at)
+        self.assertNotIn("deepseek-v4.1-flash-sg", account.model_cooldowns_at)
 
     def test_the_real_bare_429_parks_only_the_model(self):
         """S1 - 87% of the recorded 429s, no reset information at all.
@@ -566,9 +566,10 @@ class ModelCooldownTests(unittest.TestCase):
     def test_the_free_cap_scope_is_the_confirmed_model_lists(self):
         """范围是用户确认过的口径：intl 三个免费模型，cn 两个（deepseek 收费）。"""
         self.assertEqual(sorted(accounts.FREE_CAP_MODELS["intl"]),
-                         ["deepseek-v4.1-flash", "hy3", "hy4-preview-f"])
+                         ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "hy3", "hy4-preview-f"])
         self.assertEqual(sorted(accounts.FREE_CAP_MODELS["cn"]), ["hy3", "hy4-preview-f"])
         self.assertTrue(accounts.is_free_cap_model("intl", "deepseek-v4.1-flash"))
+        self.assertTrue(accounts.is_free_cap_model("intl", "deepseek-v4.1-flash-sg"))
         self.assertTrue(accounts.is_free_cap_model("cn", "hy4-preview-f"))
         self.assertFalse(accounts.is_free_cap_model("cn", "deepseek-v4.1-flash"),
                          "国内版的 deepseek-v4.1-flash 是收费模型（x0.11）")
@@ -628,15 +629,15 @@ class ModelCooldownTests(unittest.TestCase):
                                         "accessToken": "token"})
             started = time.time()
             self.drive_one_429(account, detail=detail, stub_parser=False,
-                               model="deepseek-v4.1-flash", target_realm="intl")
+                               model="deepseek-v4.1-flash-sg", target_realm="intl")
 
-            cap = account.model_caps["deepseek-v4.1-flash"]
+            cap = account.model_caps["deepseek-v4.1-flash-sg"]
             self.assertLessEqual(abs(cap["reset"] - reset), 2)
             self.assertGreaterEqual(cap["at"], started - 1)
             self.assertLessEqual(cap["at"], time.time())
             # 面板显示的数据源：冷却条目带 cappedAt（撞线时刻）
             entry = next(item for item in account.public()["modelCooldowns"]
-                         if item["model"] == "deepseek-v4.1-flash")
+                         if item["model"] == "deepseek-v4.1-flash-sg")
             self.assertLessEqual(abs(entry["cappedAt"] - cap["at"]), 2)
 
             # 持久化：凭证档里带着 modelCaps（RUNTIME_ONLY_FIELDS 不带它）
@@ -644,22 +645,22 @@ class ModelCooldownTests(unittest.TestCase):
             self.assertTrue(os.path.exists(saved_path))
             with open(saved_path, encoding="utf-8") as fh:
                 saved = json.load(fh)
-            self.assertIn("deepseek-v4.1-flash", saved.get("modelCaps") or {})
+            self.assertIn("deepseek-v4.1-flash-sg", saved.get("modelCaps") or {})
 
             # 重启 = 新建池 + load()：恢复时间内仍在禁用，选择逻辑跳过该模型
             pool = accounts.AccountPool(directory)
             loaded = pool.load()
             self.assertEqual(len(loaded), 1)
             revived = loaded[0]
-            self.assertGreaterEqual(revived.model_cooldowns.get("deepseek-v4.1-flash", 0.0),
+            self.assertGreaterEqual(revived.model_cooldowns.get("deepseek-v4.1-flash-sg", 0.0),
                                     reset - 2)
-            self.assertFalse(revived.ready(model="deepseek-v4.1-flash"))
+            self.assertFalse(revived.ready(model="deepseek-v4.1-flash-sg"))
             self.assertTrue(revived.ready(model="glm-5.3"), "同账号其他模型不受影响")
-            self.assertIsNone(pool.pick(realm="intl", model="deepseek-v4.1-flash"),
+            self.assertIsNone(pool.pick(realm="intl", model="deepseek-v4.1-flash-sg"),
                               "重启后选择逻辑仍跳过被禁用的模型")
             self.assertEqual(pool.pick(realm="intl", model="glm-5.3").uid, "synthetic-intl")
             revived_row = next(item for item in revived.public()["modelCooldowns"]
-                               if item["model"] == "deepseek-v4.1-flash")
+                               if item["model"] == "deepseek-v4.1-flash-sg")
             self.assertIn("cappedAt", revived_row, "重启加载后面板仍能显示撞线时间")
             # 起始时刻是运行时态，重启即清零；撞线时刻另有持久化的 cap 兜底，
             # 面板的「开始时间」列因此仍有值（这是刻意的分工，不是缺失）。
@@ -668,8 +669,8 @@ class ModelCooldownTests(unittest.TestCase):
 
             # 恢复时间过了以后自动解除
             with mock.patch.object(accounts.time, "time", return_value=reset + 1):
-                self.assertTrue(revived.ready(model="deepseek-v4.1-flash"))
-                self.assertEqual(pool.pick(realm="intl", model="deepseek-v4.1-flash").uid,
+                self.assertTrue(revived.ready(model="deepseek-v4.1-flash-sg"))
+                self.assertEqual(pool.pick(realm="intl", model="deepseek-v4.1-flash-sg").uid,
                                  "synthetic-intl")
         finally:
             proxy.ACCOUNTS_DIR = old_dir

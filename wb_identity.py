@@ -7,9 +7,9 @@
      - X-Product: SaaS
      - X-Agent-Intent: craft、X-Agent-Purpose: conversation、X-Agent-Type: main
      - 国际版端点: www.workbuddy.ai
-       实测 5.8.4（2026-10-16 mitmproxy 抓包，账号 uid 已脱敏）:
-         X-IDE-Version: 5.8.4
-         User-Agent: WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0
+       实测 5.9.4（本机桌面客户端 5.9.4 日志 + app.asar 解包，账号 uid 已脱敏）:
+         X-IDE-Version: 5.9.4
+         User-Agent: WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0
      - 国内版端点: copilot.tencent.com（无对应抓包，维持 5.5.6 与原 UA）
 
   2. 官方 VSCode 扩展 (vscode / vsc):
@@ -65,20 +65,24 @@ import threading
 import time
 import uuid
 
-# 5.8.4 实测（国际版桌面客户端抓包）: 对话请求的版本号与 UA。
-# UA 末段 CLI/2.161.0 是客户端内置 CLI 的版本，不是桌面端自己的版本。
-DESKTOP_VERSION_INTL = "5.8.4"
+# 5.9.4 实测（本机国际版桌面客户端 5.9.4 的日志/解包）: 对话请求的版本号与 UA。
+# UA 末段 CLI/2.165.0 是客户端内置 CLI 的版本（cli/package.json），不是桌面端
+# 自己的版本。客户端日志原样记录：
+#   user-agent: WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0
+DESKTOP_VERSION_INTL = "5.9.4"
 # 对话请求由客户端内置 CLI 子进程发出，该进程带 CLIENT_INFO_IDE_TYPE=WorkBuddy
 # （sidecar-manager.js 硬编码），buildUserAgent 里 platform 段取它、application
 # 段取 product.json 的 applicationName（国际版为 workbuddy-ai），所以首段是大写
 # WorkBuddy、次段是小写 workbuddy-ai。
 # 注意 Electron 主进程自己发的旁路请求（msg-center / conversations）UA 是
 # workbuddy-ai/... workbuddy-ai/...，两者不是同一条链路，别照抄错。
-DESKTOP_UA_INTL = "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"
+DESKTOP_UA_INTL = "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"
 # 国内版桌面端：2026-10-18 两区桌面端实跑（Go 版抓包记录）为 5.8.3、
 # 内置 CLI 2.161.0；第二段按国内版是 WorkBuddy（国际版是 workbuddy-ai）。
+# 本机只装了国际版 5.9.4，CN 的 5.9.4 版本号未能本地复核，沿用旧值。
 DESKTOP_VERSION_CN = "5.8.3"
 DESKTOP_UA_CN = "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"
+DESKTOP_CLI_CN = "2.161.0"
 
 #: 官方 CodeBuddy CLI 的版本号：npm 包 @tencent-ai/codebuddy-code 的 package
 #: version。product.json 没有覆盖 platformVersion / productVersion，所以
@@ -189,7 +193,7 @@ DEFAULT_WORKBUDDY_PRODUCT_VERSION = VSCODE_PRODUCT_VERSION
 _VERSION_DEFAULTS = {
     "desktop_intl": DESKTOP_VERSION_INTL,
     "desktop_cn": DESKTOP_VERSION_CN,
-    "desktop_cli": "2.161.0",
+    "desktop_cli": "2.165.0",
     "vscode_product": VSCODE_PRODUCT_VERSION,
     "vscode_ide": VSCODE_IDE_VERSION,
     "cli": DEFAULT_IDE_VERSION,
@@ -228,7 +232,10 @@ def desktop_version(realm):
 
 def desktop_ua(realm):
     app = desktop_version(realm)
-    cli = _version("desktop_cli")
+    if realm == "cn" and "desktop_cli" not in _VERSION_OVERRIDES:
+        cli = DESKTOP_CLI_CN
+    else:
+        cli = _version("desktop_cli")
     product = "WorkBuddy" if realm == "cn" else "workbuddy-ai"
     return "WorkBuddy/%s %s/%s CLI/%s" % (app, product, app, cli)
 
