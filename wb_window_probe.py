@@ -363,6 +363,7 @@ def _probe(account, model):
     """
     import wb_proxy  # 函数内导入：wb_proxy 顶层会拉起调度器，避免循环依赖
     url = account.chat_base_url() + wb_proxy.CHAT_PATH
+    model = wb_proxy.intl_model_alias(model, account.realm)
     headers = account.headers(purpose="chat")
     body = {
         "model": model,
