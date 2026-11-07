@@ -157,7 +157,7 @@ class ScriptedUpstream(object):
         return item
 
 
-PAYLOAD = {"model": "deepseek-v4.1-flash",
+PAYLOAD = {"model": "deepseek-v4.1-flash-sg",
            "messages": [{"role": "user", "content": "hi"}]}
 
 
@@ -455,7 +455,7 @@ class IdentityOnRetryTests(unittest.TestCase):
                             second["x-conversation-request-id"])
         self.assertNotIn("x-b3-parentspanid", first)
         self.assertEqual(first["user-agent"],
-                         "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0")
+                         "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0")
         # 桌面端的请求体与浏览器头都保持原样（不 gzip）。
         self.assertNotIn("content-encoding", first)
         self.assertNotEqual(upstream.calls[0].data[:2], b"\x1f\x8b")
